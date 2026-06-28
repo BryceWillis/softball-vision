@@ -278,8 +278,14 @@ class EventDetectionTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(export_youtube_chapters(events), "0:00 Pregame\n10:00 Top 1")
-        self.assertEqual(export_at_bat_comment(events), "1st Inning\n10:00 #22")
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1",
+        )
+        self.assertEqual(
+            export_at_bat_comment(events, include_credit=False),
+            "1st Inning\n10:00 #22",
+        )
 
     def test_export_at_bat_comment_preserves_event_label(self):
         events = detect_events(
@@ -301,7 +307,10 @@ class EventDetectionTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(export_at_bat_comment(events), "1st Inning\n10:00 Maya R. (#22)")
+        self.assertEqual(
+            export_at_bat_comment(events, include_credit=False),
+            "1st Inning\n10:00 Maya R. (#22)",
+        )
 
     def test_detect_events_ignores_single_noisy_batter_read(self):
         events = detect_events(

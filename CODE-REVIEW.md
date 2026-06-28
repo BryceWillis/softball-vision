@@ -21,23 +21,6 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ### Medium Priority
 
-#### CR-15 — README misstates OCR default for primary commands
-**File:** [README.md](README.md) — OCR section
-**Status:** Open
-**Added:** Pass 3
-
-The README OCR section opens with:
-
-> OCR is optional and off by default.
-
-This is only true for the lower-level `process` command. The two primary commands `run-game` and `run-youtube` both default to `--ocr tesseract`. A user who follows the Quick Start without Tesseract installed will get a confusing `OCRBackendUnavailable` error that the README did not prepare them for.
-
-The statement should be scoped to `process`, and the setup section should make clear that `run-game`/`run-youtube` require Tesseract unless `--ocr none` is passed.
-
-**Acceptance:** README accurately describes which commands require Tesseract and which default to no OCR.
-
----
-
 ### Low Priority
 
 
@@ -99,24 +82,24 @@ This requires probing the video first or threading the duration in from the call
 
 ---
 
+
+## Resolved Items
+
 #### CR-14 — `ruff` not listed as a dev dependency
 **File:** [pyproject.toml](pyproject.toml)
-**Status:** Open
-**Added:** Pass 1
+**Resolved:** Pass 3
 
-`ruff` is configured under `[tool.ruff]` but is not listed in `[project.optional-dependencies] dev`. A new contributor would configure their editor's ruff integration or run `ruff check` without knowing to install it first.
-
-```toml
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.4",
-]
-```
+`ruff>=0.4` added to `[project.optional-dependencies] dev`. README "Development Checks" section added with dev install, test, and lint commands. 98 tests pass.
 
 ---
 
-## Resolved Items
+#### CR-15 — README misstates OCR default for primary commands
+**File:** [README.md](README.md)
+**Resolved:** Pass 3
+
+Setup section and OCR section now correctly state that `run-game`/`run-youtube` default to `--ocr tesseract`, and that `--ocr none` is the explicit debug/no-OCR mode for lower-level `process` use. 98 tests pass.
+
+---
 
 #### CR-01 — No license file
 **File:** repo root

@@ -1,6 +1,11 @@
 import unittest
 
-from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters, format_timestamp
+from sidelinehd_extractor.exports import (
+    PROJECT_CREDIT,
+    export_at_bat_comment,
+    export_youtube_chapters,
+    format_timestamp,
+)
 from sidelinehd_extractor.models import Event, EventType
 
 
@@ -27,7 +32,7 @@ class FormatTimestampTests(unittest.TestCase):
         text = export_youtube_chapters([
             Event(EventType.HALF_INNING_START, 600, "Top 1"),
             Event(EventType.HALF_INNING_START, 1200, "Top 2"),
-        ])
+        ], include_credit=False)
 
         self.assertEqual(text, "0:00 Pregame\n10:00 Top 1\n20:00 Top 2")
 
@@ -35,7 +40,7 @@ class FormatTimestampTests(unittest.TestCase):
         text = export_youtube_chapters([
             Event(EventType.HALF_INNING_START, 0, "Top 1"),
             Event(EventType.HALF_INNING_START, 600, "Top 2"),
-        ])
+        ], include_credit=False)
 
         self.assertEqual(text, "0:00 Top 1\n10:00 Top 2")
 
@@ -43,6 +48,7 @@ class FormatTimestampTests(unittest.TestCase):
         text = export_youtube_chapters(
             [Event(EventType.HALF_INNING_START, 600, "Top 1")],
             intro_label="Warmups",
+            include_credit=False,
         )
 
         self.assertEqual(text, "0:00 Warmups\n10:00 Top 1")
@@ -51,6 +57,7 @@ class FormatTimestampTests(unittest.TestCase):
         text = export_youtube_chapters(
             [Event(EventType.HALF_INNING_START, 600, "Top 1")],
             include_intro=False,
+            include_credit=False,
         )
 
         self.assertEqual(text, "10:00 Top 1")
@@ -62,7 +69,7 @@ class FormatTimestampTests(unittest.TestCase):
             Event(EventType.AT_BAT_START, 675, "Amelia V. (#26)", inning=1),
             Event(EventType.HALF_INNING_START, 1350, "Top 2", inning=2),
             Event(EventType.AT_BAT_START, 1360, "Olivia M. (#3)", inning=2),
-        ])
+        ], include_credit=False)
 
         self.assertEqual(
             text,
@@ -79,7 +86,7 @@ class FormatTimestampTests(unittest.TestCase):
             Event(EventType.HALF_INNING_START, 4900, "Top 6", inning=6),
             Event(EventType.AT_BAT_START, 5065, "Chloe W. (#12)", inning=2),
             Event(EventType.AT_BAT_START, 5145, "Stella H. (#24)", inning=6),
-        ])
+        ], include_credit=False)
 
         self.assertEqual(
             text,
@@ -92,9 +99,19 @@ class FormatTimestampTests(unittest.TestCase):
         text = export_at_bat_comment(
             [Event(EventType.AT_BAT_START, 600, "Maya R. (#22)", inning=1)],
             include_inning_headers=False,
+            include_credit=False,
         )
 
         self.assertEqual(text, "10:00 Maya R. (#22)")
+
+    def test_exports_include_project_credit_by_default(self):
+        chapters = export_youtube_chapters([Event(EventType.HALF_INNING_START, 0, "Top 1")])
+        at_bats = export_at_bat_comment([Event(EventType.AT_BAT_START, 600, "Maya R. (#22)", inning=1)])
+
+        self.assertTrue(chapters.endswith(PROJECT_CREDIT))
+        self.assertTrue(at_bats.endswith(PROJECT_CREDIT))
+        self.assertIn("MIT License", PROJECT_CREDIT)
+        self.assertIn("https://github.com/BryceWillis/softball-vision", PROJECT_CREDIT)
 
 
 if __name__ == "__main__":

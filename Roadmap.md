@@ -20,6 +20,7 @@ not from code review use `Source: Product backlog`.
 ### 1. Add Project License
 
 Source: CR-01
+Status: Done
 
 Pick a license and add a `LICENSE` file before any public release.
 
@@ -176,6 +177,7 @@ Acceptance criteria:
 ### 14. Add Development Tooling Dependencies
 
 Source: CR-14
+Status: Ready for Review
 
 Make linting/static checks reproducible for contributors.
 
@@ -184,9 +186,21 @@ Acceptance criteria:
 - Consider `mypy` or `pyright` after the current type hints are cleaned up.
 - README includes the command for running tests and lint checks.
 
+### 15. Clarify OCR Defaults in README
+
+Source: CR-15
+Status: Ready for Review
+
+Make setup and OCR docs match the current CLI defaults.
+
+Acceptance criteria:
+- README says `run-game` and `run-youtube` default to Tesseract OCR.
+- README says lower-level `process` can run without OCR for crop/template debugging.
+- README mentions `--ocr none` as the explicit non-OCR mode.
+
 ## Discussion / Later Deliverables
 
-### 15. Detection Configuration Object
+### 16. Detection Configuration Object
 
 Source: Architectural note / Product backlog
 
@@ -196,7 +210,7 @@ Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
 
-### 16. Correction Log Format
+### 17. Correction Log Format
 
 Source: Architectural note / Product backlog
 
@@ -206,7 +220,7 @@ Reason to defer:
 - CSV is currently easy to paste, diff, and explain.
 - JSONL would add complexity before multi-reviewer workflows exist.
 
-### 17. Package/Product Naming
+### 18. Package/Product Naming
 
 Source: Architectural note / Product backlog
 
@@ -216,7 +230,7 @@ Reason to defer:
 - The MVP is intentionally SidelineHD-focused.
 - Renaming package/module paths too early creates churn without improving today’s workflow.
 
-### 18. Half-Inning Progression Policy
+### 19. Half-Inning Progression Policy
 
 Source: Architectural note / Product backlog
 

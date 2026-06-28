@@ -24,7 +24,15 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Install the external OCR engine:
+For contributor tooling, install the optional development dependencies:
+
+```sh
+python -m pip install -e ".[dev]"
+```
+
+Install the external OCR engine. The primary `run-game` and `run-youtube`
+commands use Tesseract OCR by default; pass `--ocr none` only when you are
+running a non-OCR/debug workflow:
 
 ```sh
 brew install tesseract
@@ -239,12 +247,17 @@ metadata as `ocr_player_number` for audit.
 
 ## OCR
 
-OCR is optional and off by default. To use deterministic OCR, install the Tesseract
-CLI:
+The primary end-to-end commands, `run-game` and `run-youtube`, default to
+`--ocr tesseract` because OCR is required to extract overlay state and at-bat
+events. Install the Tesseract CLI before using those commands:
 
 ```sh
 brew install tesseract
 ```
+
+The lower-level `process` command can still run without OCR for crop/template
+debugging, but those placeholder samples are not enough to detect real events.
+Use `--ocr none` explicitly when you want that mode.
 
 Test OCR on one crop before running a larger process pass:
 
@@ -376,6 +389,7 @@ The paste kit contains:
 
 - Description chapters to paste into the YouTube description.
 - Pinned-comment at-bats to paste as a YouTube comment.
+- A short project credit with the GitHub repo and MIT license.
 - A short publishing checklist.
 
 ## Project Tracking
@@ -388,6 +402,20 @@ to `Resolved`.
 Use [Roadmap.md](Roadmap.md) for the implementation queue and product backlog.
 Roadmap items from code review include `Source: CR-XX`; feature ideas that are
 not review findings use `Source: Product backlog`.
+
+## Development Checks
+
+Run the local test suite:
+
+```sh
+PYTHONPATH=src python -m unittest discover -s tests
+```
+
+Run lint checks after installing the development dependencies:
+
+```sh
+ruff check .
+```
 
 ## License
 

@@ -7,6 +7,13 @@ from collections.abc import Iterable
 from sidelinehd_extractor.models import Event, EventType
 
 
+PROJECT_URL = "https://github.com/BryceWillis/softball-vision"
+PROJECT_CREDIT = (
+    "Timestamps generated with SidelineHD Chapter and At-Bat Extractor "
+    f"(MIT License): {PROJECT_URL}"
+)
+
+
 def format_timestamp(seconds: float) -> str:
     """Format seconds as a YouTube timestamp.
 
@@ -30,6 +37,7 @@ def export_youtube_chapters(
     events: Iterable[Event],
     include_intro: bool = True,
     intro_label: str = "Pregame",
+    include_credit: bool = True,
 ) -> str:
     """Render inning and half-inning events as YouTube description chapters."""
 
@@ -43,12 +51,13 @@ def export_youtube_chapters(
 
     if include_intro and lines and first_chapter_seconds and first_chapter_seconds > 0:
         lines.insert(0, f"0:00 {intro_label}")
-    return "\n".join(lines)
+    return _render_lines_with_credit(lines, include_credit=include_credit)
 
 
 def export_at_bat_comment(
     events: Iterable[Event],
     include_inning_headers: bool = True,
+    include_credit: bool = True,
 ) -> str:
     """Render our team's at-bats as a pasteable pinned-comment timestamp list."""
 
@@ -66,7 +75,7 @@ def export_at_bat_comment(
                 lines.append(format_inning_header(event_inning))
                 current_inning = event_inning
             lines.append(f"{format_timestamp(event.timestamp_seconds)} {event.label}")
-    return "\n".join(lines)
+    return _render_lines_with_credit(lines, include_credit=include_credit)
 
 
 def format_inning_header(inning: int) -> str:
@@ -83,3 +92,9 @@ def _ordinal(value: int) -> str:
     else:
         suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
     return f"{value}{suffix}"
+
+
+def _render_lines_with_credit(lines: list[str], include_credit: bool = True) -> str:
+    if include_credit and lines:
+        lines = [*lines, "", PROJECT_CREDIT]
+    return "\n".join(lines)

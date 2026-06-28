@@ -10,6 +10,11 @@ from sidelinehd_extractor.state import StateParseResult
 from sidelinehd_extractor.workflow import RunGameResult, export_paths, run_game, run_youtube_game
 from sidelinehd_extractor.youtube import DownloadResult
 
+PROJECT_CREDIT = (
+    "Timestamps generated with SidelineHD Chapter and At-Bat Extractor "
+    "(MIT License): https://github.com/BryceWillis/softball-vision"
+)
+
 
 class WorkflowTests(unittest.TestCase):
     def test_export_paths_uses_prefix(self):
@@ -84,11 +89,11 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(result.event_count, 2)
             self.assertEqual(
                 (root / "scratch" / "full_chapters.txt").read_text(),
-                "0:00 Pregame\n10:00 Top 1\n",
+                f"0:00 Pregame\n10:00 Top 1\n\n{PROJECT_CREDIT}\n",
             )
             self.assertEqual(
                 (root / "scratch" / "full_at_bats.txt").read_text(),
-                "1st Inning\n10:05 Maya R. (#22)\n",
+                f"1st Inning\n10:05 Maya R. (#22)\n\n{PROJECT_CREDIT}\n",
             )
 
     def test_run_youtube_game_downloads_then_runs_pipeline(self):
