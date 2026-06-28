@@ -131,7 +131,7 @@ Acceptance criteria:
 ### 10. Type and Utility Cleanup
 
 Source: CR-10a, CR-10b, CR-10c
-Status: Ready for Review for CR-10a, CR-10b, CR-10c
+Status: Done
 
 Clean up small consistency issues before they spread.
 
@@ -140,11 +140,6 @@ Acceptance criteria:
 - Repeated newline-at-end export behavior is centralized in one helper.
 - Duplicate `PathLike` aliases are consolidated or intentionally left local with a comment.
 - Serialization assumptions around tuples-as-lists are documented or covered by tests if relied on.
-
-Implementation note:
-- CR-10a, CR-10b, and CR-10c are implemented and ready for review.
-- The broader newline/serialization cleanup bullets remain useful future cleanup
-  candidates if the reviewer wants to keep them in this item.
 
 ### 11. Improve Publish Output Defaults
 
@@ -172,7 +167,7 @@ Acceptance criteria:
 ### 13. Improve Frame Read Error Messages
 
 Source: CR-13
-Status: Ready for Review
+Status: Done
 
 Make out-of-range or unreadable frame errors easier to debug.
 
@@ -208,13 +203,58 @@ Acceptance criteria:
 ### 16. Remove Duplicated Project Credit Test Constant
 
 Source: CR-17
-Status: Ready for Review
+Status: Done
 
 Keep export-credit tests tied to the production constant.
 
 Acceptance criteria:
 - `test_workflow.py` imports `PROJECT_CREDIT` from `sidelinehd_extractor.exports`.
 - No duplicate copy of the project-credit string remains in workflow tests.
+
+### 17. Auto-Detect Batting Half
+
+Source: Product backlog
+
+Eliminate `--batting-half top|bottom` as a required user input. The tool should infer which half the rostered team bats in automatically.
+
+**Background — why this is tractable:**
+SidelineHD only shows named batter cards for the team that set up the SidelineHD
+system. The opposing team's batters appear with no name data in the overlay — the
+batter card either shows nothing useful or an anonymous jersey number that won't
+match any roster entry. This means one half of each inning will produce near-100%
+roster-matched at-bat events, and the other will produce near-zero matches. The
+signal is essentially binary and should be reliable even with imperfect OCR.
+
+**Approach:**
+1. Run `detect_events` with `batting_half=both` (unchanged from current behaviour).
+2. After detection, score each half:
+   `match_rate = roster-matched at-bats / total at-bats` for top and bottom.
+3. The half with a meaningful match rate is the rostered team's batting half.
+4. Re-filter events to that half (or pass the inferred half back into the event
+   label/export step — whichever is architecturally cleaner).
+5. Log the inference for auditability:
+   `Inferred batting half: top (7/8 roster matches in top, 0/9 in bottom)`.
+6. If neither half has any roster matches (no roster provided, or OCR too noisy
+   to resolve any player), fall back to `both` with a warning.
+
+**CLI change:**
+- `--batting-half` on `run-game` and `run-youtube` gains an `auto` option and
+  defaults to it.
+- `--batting-half top|bottom` remain as explicit overrides.
+- Lower-level `detect-events` keeps `--batting-half both` as its default so
+  callers retain full control.
+
+**Note for item 12:** Update `NEW_GAME_CHECKLIST.md` to remove the `--batting-half`
+step once this is shipped, since it will no longer be needed in the normal workflow.
+
+Acceptance criteria:
+- `run-game` and `run-youtube` default `--batting-half` to `auto`.
+- Auto-detection logs the inferred half and the match counts used to decide.
+- `--batting-half top|bottom` still overrides the inference.
+- Inference falls back to `both` with a warning when no roster is provided or
+  no roster matches are found in either half.
+- Existing tests pass; new tests cover the inference logic with a mock roster
+  and mock events split across top/bottom halves.
 
 ## Discussion / Later Deliverables
 
