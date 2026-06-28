@@ -122,7 +122,7 @@ dev = [
 **File:** repo root
 **Resolved:** Pass 3
 
-`LICENSE` (MIT, copyright Ryan Moore 2026) created at repo root. `## License` section added to README with a link to the file.
+`LICENSE` (MIT, copyright Ryan Moore 2026) created at repo root. `## License` section added to README with a link to the file — this final fix was applied by the reviewer, not Codex.
 
 ---
 
