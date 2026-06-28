@@ -131,6 +131,7 @@ Acceptance criteria:
 ### 10. Type and Utility Cleanup
 
 Source: CR-10a, CR-10b, CR-10c
+Status: Ready for Review for CR-10a, CR-10b, CR-10c
 
 Clean up small consistency issues before they spread.
 
@@ -139,6 +140,11 @@ Acceptance criteria:
 - Repeated newline-at-end export behavior is centralized in one helper.
 - Duplicate `PathLike` aliases are consolidated or intentionally left local with a comment.
 - Serialization assumptions around tuples-as-lists are documented or covered by tests if relied on.
+
+Implementation note:
+- CR-10a, CR-10b, and CR-10c are implemented and ready for review.
+- The broader newline/serialization cleanup bullets remain useful future cleanup
+  candidates if the reviewer wants to keep them in this item.
 
 ### 11. Improve Publish Output Defaults
 
@@ -166,6 +172,7 @@ Acceptance criteria:
 ### 13. Improve Frame Read Error Messages
 
 Source: CR-13
+Status: Ready for Review
 
 Make out-of-range or unreadable frame errors easier to debug.
 
@@ -177,7 +184,7 @@ Acceptance criteria:
 ### 14. Add Development Tooling Dependencies
 
 Source: CR-14
-Status: Ready for Review
+Status: Done
 
 Make linting/static checks reproducible for contributors.
 
@@ -189,7 +196,7 @@ Acceptance criteria:
 ### 15. Clarify OCR Defaults in README
 
 Source: CR-15
-Status: Ready for Review
+Status: Done
 
 Make setup and OCR docs match the current CLI defaults.
 
@@ -198,9 +205,20 @@ Acceptance criteria:
 - README says lower-level `process` can run without OCR for crop/template debugging.
 - README mentions `--ocr none` as the explicit non-OCR mode.
 
+### 16. Remove Duplicated Project Credit Test Constant
+
+Source: CR-17
+Status: Ready for Review
+
+Keep export-credit tests tied to the production constant.
+
+Acceptance criteria:
+- `test_workflow.py` imports `PROJECT_CREDIT` from `sidelinehd_extractor.exports`.
+- No duplicate copy of the project-credit string remains in workflow tests.
+
 ## Discussion / Later Deliverables
 
-### 16. Detection Configuration Object
+### 17. Detection Configuration Object
 
 Source: Architectural note / Product backlog
 
@@ -210,7 +228,7 @@ Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
 
-### 17. Correction Log Format
+### 18. Correction Log Format
 
 Source: Architectural note / Product backlog
 
@@ -220,7 +238,7 @@ Reason to defer:
 - CSV is currently easy to paste, diff, and explain.
 - JSONL would add complexity before multi-reviewer workflows exist.
 
-### 18. Package/Product Naming
+### 19. Package/Product Naming
 
 Source: Architectural note / Product backlog
 
@@ -230,7 +248,7 @@ Reason to defer:
 - The MVP is intentionally SidelineHD-focused.
 - Renaming package/module paths too early creates churn without improving today’s workflow.
 
-### 19. Half-Inning Progression Policy
+### 20. Half-Inning Progression Policy
 
 Source: Architectural note / Product backlog
 

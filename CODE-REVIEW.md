@@ -19,90 +19,49 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Open Items
 
-### Medium Priority
+*(No open items.)*
 
-### Low Priority
-
+## Resolved Items
 
 #### CR-10a — `export_paths` return type is untyped
-**File:** [workflow.py:202](src/sidelinehd_extractor/workflow.py#L202)
-**Status:** Open
-**Added:** Pass 1
+**File:** [workflow.py](src/sidelinehd_extractor/workflow.py)
+**Resolved:** Pass 3
 
-```python
-def export_paths(run_dir: Path, output_prefix: Optional[Path] = None) -> tuple:
-```
-
-Should be `-> Tuple[Path, Path]` (or `tuple[Path, Path]` on Python 3.10+). All other functions in the codebase use precise return types.
+`export_paths` now returns `tuple[Path, Path]`. 100 tests pass.
 
 ---
 
 #### CR-10b — `PathLike` alias defined in two modules
-**Files:** [video.py:12](src/sidelinehd_extractor/video.py#L12), [crops.py:12](src/sidelinehd_extractor/crops.py#L12)
-**Status:** Open
-**Added:** Pass 1
+**Files:** [models.py](src/sidelinehd_extractor/models.py), [video.py](src/sidelinehd_extractor/video.py), [crops.py](src/sidelinehd_extractor/crops.py)
+**Resolved:** Pass 3
 
-`PathLike = Union[str, Path]` is duplicated. Could live in `models.py` or `video.py` with `crops.py` importing it. Low-churn fix but worth doing before the module count grows.
+`PathLike` consolidated into `models.py`; `video.py` and `crops.py` import the shared alias. 100 tests pass.
 
 ---
 
 #### CR-10c — `format_inning_header` type annotation disagrees with implementation
-**File:** [exports.py:72-76](src/sidelinehd_extractor/exports.py#L72-L76)
-**Status:** Open
-**Added:** Pass 1
+**File:** [exports.py](src/sidelinehd_extractor/exports.py)
+**Resolved:** Pass 3
 
-```python
-def format_inning_header(inning: int) -> str:
-    if inning is None:       # unreachable per the annotation
-        return "Unknown Inning"
-```
-
-Either change the annotation to `Optional[int]` to match the guard, or remove the guard if callers can guarantee non-None. The current state is a latent type error that mypy/pyright would flag.
-
----
-
-#### CR-17 — `PROJECT_CREDIT` duplicated in `test_workflow.py`
-**File:** [tests/test_workflow.py:13-17](tests/test_workflow.py#L13-L17)
-**Status:** Open
-**Added:** Pass 3
-
-`test_workflow.py` re-declares the `PROJECT_CREDIT` string as a local constant instead of importing it from `exports.py`. `test_exports.py` correctly imports it. If the credit text ever changes, `test_workflow.py` will silently stop catching regressions.
-
-```python
-# test_workflow.py — should be: from sidelinehd_extractor.exports import PROJECT_CREDIT
-PROJECT_CREDIT = (
-    "Timestamps generated with SidelineHD Chapter and At-Bat Extractor "
-    "(MIT License): https://github.com/BryceWillis/softball-vision"
-)
-```
-
-**Acceptance:** `test_workflow.py` imports `PROJECT_CREDIT` from `sidelinehd_extractor.exports` rather than re-declaring it.
+`format_inning_header` now accepts `Optional[int]`, matching the existing `None` guard. 100 tests pass.
 
 ---
 
 #### CR-13 — Frame read errors omit video duration
-**File:** [video.py:82, 104](src/sidelinehd_extractor/video.py#L82)
-**Status:** Open
-**Added:** Pass 1
+**File:** [video.py](src/sidelinehd_extractor/video.py)
+**Resolved:** Pass 3
 
-When `read_frame_at` or `read_frames_at` fails because a timestamp is past the end of the video, the error message is:
-
-```
-Could not read frame at X.XXXs from /path/to/video.mp4
-```
-
-Including the video duration in the message would immediately tell the user what went wrong:
-
-```
-Could not read frame at X.XXXs from video.mp4 (duration: Y.Ys)
-```
-
-This requires probing the video first or threading the duration in from the caller. The caller path in `process_video` already has `video.duration_seconds` available.
+`read_frame_at` and `read_frames_at` now include duration in frame-read error messages by probing FPS and frame count from the already-open OpenCV capture. `_capture_duration_seconds` returns `None` if either property is unavailable, so the message degrades gracefully. Fake-capture unit tests added for both functions; 100 tests pass.
 
 ---
 
+#### CR-17 — `PROJECT_CREDIT` duplicated in `test_workflow.py`
+**File:** [tests/test_workflow.py](tests/test_workflow.py)
+**Resolved:** Pass 3
 
-## Resolved Items
+`test_workflow.py` now imports `PROJECT_CREDIT` from `sidelinehd_extractor.exports`; local copy removed. 100 tests pass.
+
+---
 
 #### CR-14 — `ruff` not listed as a dev dependency
 **File:** [pyproject.toml](pyproject.toml)

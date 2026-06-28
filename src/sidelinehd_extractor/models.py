@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 
 ScalarValue = Optional[Union[str, int, float, bool]]
+PathLike = Union[str, Path]
 
 
 class HalfInning(str, Enum):

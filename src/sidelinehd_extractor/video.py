@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Iterable, Iterator, Tuple, Union
+from typing import Iterable, Iterator, Optional, Tuple
 
-from sidelinehd_extractor.models import Video
-
-
-PathLike = Union[str, Path]
+from sidelinehd_extractor.models import PathLike, Video
 
 
 def _cv2():
@@ -79,7 +76,13 @@ def read_frame_at(path: PathLike, timestamp_seconds: float):
         capture.set(cv2.CAP_PROP_POS_MSEC, timestamp_seconds * 1000)
         ok, frame = capture.read()
         if not ok or frame is None:
-            raise ValueError(f"Could not read frame at {timestamp_seconds:.3f}s from {source}")
+            raise ValueError(
+                _frame_read_error(
+                    source,
+                    timestamp_seconds,
+                    _capture_duration_seconds(capture, cv2),
+                )
+            )
         return frame
     finally:
         capture.release()
@@ -101,7 +104,32 @@ def read_frames_at(path: PathLike, timestamps_seconds: Iterable[float]) -> Itera
             capture.set(cv2.CAP_PROP_POS_MSEC, timestamp_seconds * 1000)
             ok, frame = capture.read()
             if not ok or frame is None:
-                raise ValueError(f"Could not read frame at {timestamp_seconds:.3f}s from {source}")
+                raise ValueError(
+                    _frame_read_error(
+                        source,
+                        timestamp_seconds,
+                        _capture_duration_seconds(capture, cv2),
+                    )
+                )
             yield timestamp_seconds, frame
     finally:
         capture.release()
+
+
+def _capture_duration_seconds(capture, cv2) -> Optional[float]:
+    fps = float(capture.get(cv2.CAP_PROP_FPS)) or None
+    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or None
+    if fps and frame_count:
+        return frame_count / fps
+    return None
+
+
+def _frame_read_error(
+    source: Path,
+    timestamp_seconds: float,
+    duration_seconds: Optional[float],
+) -> str:
+    message = f"Could not read frame at {timestamp_seconds:.3f}s from {source}"
+    if duration_seconds is not None:
+        message += f" (duration: {duration_seconds:.3f}s)"
+    return message

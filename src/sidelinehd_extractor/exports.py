@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Optional
 
 from sidelinehd_extractor.models import Event, EventType
 
@@ -78,7 +79,7 @@ def export_at_bat_comment(
     return _render_lines_with_credit(lines, include_credit=include_credit)
 
 
-def format_inning_header(inning: int) -> str:
+def format_inning_header(inning: Optional[int]) -> str:
     """Return a readable pinned-comment inning header."""
 
     if inning is None:

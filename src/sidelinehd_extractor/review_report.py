@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Optional
 from sidelinehd_extractor.events import load_events, load_states
 from sidelinehd_extractor.exports import format_timestamp
 from sidelinehd_extractor.models import Event, EventType, OCRSample, OverlayState
-from sidelinehd_extractor.review import ReviewOptions, ReviewRow, collect_event_review_rows
+from sidelinehd_extractor.review import ReviewOptions, collect_event_review_rows
 from sidelinehd_extractor.state import group_samples_by_timestamp, load_ocr_samples
 
 

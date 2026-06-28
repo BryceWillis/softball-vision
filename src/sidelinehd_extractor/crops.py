@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union
 
-from sidelinehd_extractor.models import RegionFraction
+from sidelinehd_extractor.models import PathLike, RegionFraction
 from sidelinehd_extractor.video import read_frame_at
-
-PathLike = Union[str, Path]
 
 
 @dataclass(frozen=True)

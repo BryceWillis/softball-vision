@@ -4,17 +4,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sidelinehd_extractor.events import EventDetectionResult
+from sidelinehd_extractor.exports import PROJECT_CREDIT
 from sidelinehd_extractor.models import Event, EventType, HalfInning
 from sidelinehd_extractor.processing import ProcessResult
 from sidelinehd_extractor.state import StateParseResult
 from sidelinehd_extractor.workflow import RunGameResult, export_paths, run_game, run_youtube_game
 from sidelinehd_extractor.youtube import DownloadResult
-
-PROJECT_CREDIT = (
-    "Timestamps generated with SidelineHD Chapter and At-Bat Extractor "
-    "(MIT License): https://github.com/BryceWillis/softball-vision"
-)
-
 
 class WorkflowTests(unittest.TestCase):
     def test_export_paths_uses_prefix(self):

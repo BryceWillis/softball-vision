@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Iterable, Optional
 
 from sidelinehd_extractor.corrections import EventCorrection, apply_event_corrections
 from sidelinehd_extractor.events import detect_events_file, load_events
@@ -199,7 +199,7 @@ def run_youtube_game(
     return RunYoutubeGameResult(download=download, run=run)
 
 
-def export_paths(run_dir: Path, output_prefix: Optional[Path] = None) -> tuple:
+def export_paths(run_dir: Path, output_prefix: Optional[Path] = None) -> tuple[Path, Path]:
     """Return chapter and at-bat export paths for an optional output prefix."""
 
     if output_prefix:
