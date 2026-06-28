@@ -1,0 +1,26 @@
+{
+  "name": "sidelinehd_example_1080p",
+  "video_width": 1920,
+  "video_height": 1080,
+  "regions": {
+    "scorebug": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 1.0,
+      "height": 0.25
+    },
+    "inning": {
+      "x": 0.43,
+      "y": 0.02,
+      "width": 0.14,
+      "height": 0.08
+    },
+    "batter": {
+      "x": 0.68,
+      "y": 0.02,
+      "width": 0.16,
+      "height": 0.08
+    }
+  },
+  "notes": "Starter template only. Calibrate these fractions against a real frame."
+}

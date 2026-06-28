@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local generated artifacts
+videos/
+runs/
+scratch/
+calibration_frames/
+
+# Packaging/build artifacts
+dist/
+build/
+*.egg-info/

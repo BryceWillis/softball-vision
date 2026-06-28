@@ -1,0 +1,86 @@
+{
+  "name": "sidelinehd_640x360_active",
+  "video_width": 640,
+  "video_height": 360,
+  "regions": {
+    "scorebug_full": {
+      "x": 0.139,
+      "y": 0.030,
+      "width": 0.722,
+      "height": 0.139
+    },
+    "left_team": {
+      "x": 0.145,
+      "y": 0.033,
+      "width": 0.220,
+      "height": 0.064
+    },
+    "left_score": {
+      "x": 0.375,
+      "y": 0.033,
+      "width": 0.050,
+      "height": 0.064
+    },
+    "inning": {
+      "x": 0.424,
+      "y": 0.036,
+      "width": 0.044,
+      "height": 0.056
+    },
+    "count": {
+      "x": 0.536,
+      "y": 0.033,
+      "width": 0.055,
+      "height": 0.064
+    },
+    "right_score": {
+      "x": 0.612,
+      "y": 0.033,
+      "width": 0.050,
+      "height": 0.064
+    },
+    "right_team": {
+      "x": 0.663,
+      "y": 0.033,
+      "width": 0.195,
+      "height": 0.064
+    },
+    "lineup_strip": {
+      "x": 0.200,
+      "y": 0.106,
+      "width": 0.230,
+      "height": 0.061
+    },
+    "batter_number": {
+      "x": 0.265,
+      "y": 0.111,
+      "width": 0.039,
+      "height": 0.050
+    },
+    "on_deck_number": {
+      "x": 0.306,
+      "y": 0.111,
+      "width": 0.039,
+      "height": 0.050
+    },
+    "batter_card": {
+      "x": 0.006,
+      "y": 0.858,
+      "width": 0.281,
+      "height": 0.136
+    },
+    "batter_card_name": {
+      "x": 0.083,
+      "y": 0.883,
+      "width": 0.145,
+      "height": 0.044
+    },
+    "batter_card_number": {
+      "x": 0.231,
+      "y": 0.883,
+      "width": 0.052,
+      "height": 0.053
+    }
+  },
+  "notes": "Starter calibration from the 10:00 frame of j4At63cNpkc at 640x360. Verify with template-guide before using for OCR."
+}
