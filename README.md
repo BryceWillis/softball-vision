@@ -378,13 +378,6 @@ The paste kit contains:
 - Pinned-comment at-bats to paste as a YouTube comment.
 - A short publishing checklist.
 
-## Current State
-
-The local pipeline can download a game, extract calibration frames, crop configured
-overlay regions, OCR those crops with Tesseract, and parse OCR rows into structured
-overlay states, detect inning and at-bat events, review/correct events, and export
-pasteable YouTube text.
-
 ## Project Tracking
 
 Use [CODE-REVIEW.md](CODE-REVIEW.md) for reviewed engineering findings and their
@@ -395,3 +388,7 @@ to `Resolved`.
 Use [Roadmap.md](Roadmap.md) for the implementation queue and product backlog.
 Roadmap items from code review include `Source: CR-XX`; feature ideas that are
 not review findings use `Source: Product backlog`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

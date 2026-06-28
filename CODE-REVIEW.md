@@ -38,45 +38,8 @@ The statement should be scoped to `process`, and the setup section should make c
 
 ---
 
-### Critical
-
-#### CR-01 — No license file
-**File:** repo root
-**Status:** Ready for Review
-**Added:** Pass 1
-
-No `LICENSE` file exists. This is the only remaining blocker for any public release (open-source or commercial). MIT is recommended — maximally permissive, simplest, and the most adoption-friendly choice for a local CLI tool targeting other videographers.
-
-**Implementation note:** `LICENSE` (MIT, copyright Ryan Moore 2026) created at repo root. README already references the license implicitly via the open-source publication plan; a brief explicit mention in README can be added at reviewer discretion.
-
-**Acceptance:** `LICENSE` file exists at repo root; README references the license.
-
----
-
 ### Low Priority
 
-#### CR-16 — README pre-release cleanup: specific URLs and team names in examples
-**File:** [README.md](README.md)
-**Status:** Ready for Review
-**Added:** Pass 3
-
-Three places in the README will read as confusing or personal to a first-time user who isn't on the author's team:
-
-1. **Quick Start uses a real YouTube URL** (`j4At63cNpkc`) from an actual recorded game. New users won't recognize it as an example. Replace with `'YOUR_YOUTUBE_URL'` or a clearly labeled placeholder.
-
-2. **`run-game` output path example** contains `smash_it_sports_12u_flx_ice` — a specific team slug. Replace with something like `your_team_name/your_team_name_chapters.txt`.
-
-3. **Publishing section example path** contains `smash_it_sports_12u_flx_ice_12u_2026_06_24`. Same fix — use a generic game name.
-
-4. **"Current State" section** at the bottom reads like an in-progress developer status note ("The local pipeline *can* download a game..."). It should either be removed or rewritten as a stable description of what the tool does, without the WIP tone.
-
-None of these affect correctness; they are all pre-release polish but collectively give the README a "personal project" feel that would discourage adoption.
-
-**Implementation note:** Items 1–3 resolved: the real YouTube video ID (`j4At63cNpkc`) has been replaced with `YOUR_VIDEO_ID` (all occurrences), and the team-specific run slug (`smash_it_sports_12u_flx_ice`) has been replaced with `your_team_game_name` throughout README. Item 4 (rewrite "Current State") is deferred to reviewer discretion — the section is still in place.
-
-**Acceptance:** README examples use generic placeholders; "Current State" section is removed or rewritten as a stable feature summary.
-
----
 
 #### CR-10a — `export_paths` return type is untyped
 **File:** [workflow.py:202](src/sidelinehd_extractor/workflow.py#L202)
@@ -154,6 +117,22 @@ dev = [
 ---
 
 ## Resolved Items
+
+#### CR-01 — No license file
+**File:** repo root
+**Resolved:** Pass 3
+
+`LICENSE` (MIT, copyright Ryan Moore 2026) created at repo root. `## License` section added to README with a link to the file.
+
+---
+
+#### CR-16 — README pre-release cleanup: specific URLs and team names in examples
+**File:** [README.md](README.md)
+**Resolved:** Pass 3
+
+Real YouTube video ID (`j4At63cNpkc`) replaced with `YOUR_VIDEO_ID`; team-specific slug (`smash_it_sports_12u_flx_ice`) replaced with `your_team_game_name` throughout. "Current State" section removed (the intro paragraph already covers what the tool does without WIP framing).
+
+---
 
 #### CR-02 — CLI leaked raw tracebacks on common user errors
 **File:** [cli.py:806-822](src/sidelinehd_extractor/cli.py#L806-L822)
