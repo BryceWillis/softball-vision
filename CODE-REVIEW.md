@@ -61,6 +61,25 @@ Either change the annotation to `Optional[int]` to match the guard, or remove th
 
 ---
 
+#### CR-17 — `PROJECT_CREDIT` duplicated in `test_workflow.py`
+**File:** [tests/test_workflow.py:13-17](tests/test_workflow.py#L13-L17)
+**Status:** Open
+**Added:** Pass 3
+
+`test_workflow.py` re-declares the `PROJECT_CREDIT` string as a local constant instead of importing it from `exports.py`. `test_exports.py` correctly imports it. If the credit text ever changes, `test_workflow.py` will silently stop catching regressions.
+
+```python
+# test_workflow.py — should be: from sidelinehd_extractor.exports import PROJECT_CREDIT
+PROJECT_CREDIT = (
+    "Timestamps generated with SidelineHD Chapter and At-Bat Extractor "
+    "(MIT License): https://github.com/BryceWillis/softball-vision"
+)
+```
+
+**Acceptance:** `test_workflow.py` imports `PROJECT_CREDIT` from `sidelinehd_extractor.exports` rather than re-declaring it.
+
+---
+
 #### CR-13 — Frame read errors omit video duration
 **File:** [video.py:82, 104](src/sidelinehd_extractor/video.py#L82)
 **Status:** Open
