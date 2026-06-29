@@ -118,6 +118,16 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_game.video_path, Path("game.mp4"))
         self.assertEqual(run_youtube.url, "https://youtu.be/example")
 
+    def test_run_commands_default_batting_half_to_auto(self):
+        parser = build_parser()
+        run_game = parser.parse_args(["run-game", "game.mp4"])
+        run_youtube = parser.parse_args(["run-youtube", "https://youtu.be/example"])
+        detect_events = parser.parse_args(["detect-events", "runs/game"])
+
+        self.assertEqual(run_game.batting_half, "auto")
+        self.assertEqual(run_youtube.batting_half, "auto")
+        self.assertEqual(detect_events.batting_half, "both")
+
     def test_main_prints_clean_error_for_value_error(self):
         stderr = io.StringIO()
         stdout = io.StringIO()

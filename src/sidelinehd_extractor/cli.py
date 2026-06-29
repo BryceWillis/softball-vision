@@ -119,6 +119,17 @@ def _parse_batting_half(value: str) -> Optional[HalfInning]:
     return None
 
 
+def _is_auto_batting_half(value: str) -> bool:
+    return value == "auto"
+
+
+def _build_batting_half_inference_callback():
+    def progress(inference) -> None:
+        print(inference.message, file=sys.stderr, flush=True)
+
+    return progress
+
+
 def _cmd_probe(args: argparse.Namespace) -> int:
     video = probe_video(args.video_path, compute_hash=args.hash)
     print(_to_json(video))
@@ -273,7 +284,11 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         chapter_intro_label=args.chapter_intro_label,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
         batting_half=_parse_batting_half(args.batting_half),
+        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        batting_half_inference_progress=(
+            None if args.quiet else _build_batting_half_inference_callback()
+        ),
     )
     print(
         _to_json(
@@ -288,6 +303,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
                 "sample_count": result.sample_count,
                 "state_count": result.state_count,
                 "event_count": result.event_count,
+                "batting_half_inference": result.batting_half_inference,
                 "next_commands": [
                     (
                         "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
@@ -330,7 +346,11 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         chapter_intro_label=args.chapter_intro_label,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
         batting_half=_parse_batting_half(args.batting_half),
+        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        batting_half_inference_progress=(
+            None if args.quiet else _build_batting_half_inference_callback()
+        ),
         format_selector=args.format,
         merge_output_format=args.merge_output_format,
         write_info_json=not args.no_info_json,
@@ -352,6 +372,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
                 "sample_count": run.sample_count,
                 "state_count": run.state_count,
                 "event_count": run.event_count,
+                "batting_half_inference": run.batting_half_inference,
                 "next_commands": [
                     (
                         "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
@@ -518,9 +539,12 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--batting-half",
-        choices=("top", "bottom", "both"),
-        default="both",
-        help="Only emit at-bats from this half-inning. Use top for away teams, bottom for home teams.",
+        choices=("auto", "top", "bottom", "both"),
+        default="auto",
+        help=(
+            "Which half contains your rostered team's at-bats. Default auto infers from "
+            "roster-matched batter-card names; top/bottom override inference."
+        ),
     )
     parser.add_argument(
         "--min-at-bat-spacing",

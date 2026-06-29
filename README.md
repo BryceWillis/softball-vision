@@ -70,7 +70,6 @@ sidelinehd-extractor run-youtube \
   'https://www.youtube.com/live/YOUR_VIDEO_ID' \
   --template examples/sidelinehd_640x360_active.example.json \
   --roster roster.csv \
-  --batting-half top \
   --start 10:00 \
   --ocr tesseract
 ```
@@ -179,10 +178,12 @@ By default, processing records video metadata but skips full-file SHA-256 hashin
 so large game videos start faster. Add `--hash-video` when you want audit-grade
 file identity in `manifest.json`.
 
-Use `--batting-half top` when your rostered team is the away team and bats in the
-top half. Use `--batting-half bottom` when your rostered team is the home team.
-Leaving it as `both` is useful while calibrating, but may include defensive
-player-card reads such as pitcher cards during inning transitions.
+`run-game` and `run-youtube` default to `--batting-half auto`. With a roster, the
+tool detects both halves, infers which half contains roster-matched batter-card
+names, logs that decision, and exports only that team's at-bats. Use
+`--batting-half top` or `--batting-half bottom` when you want to override
+inference. Use `--batting-half both` while calibrating or debugging raw detector
+behavior.
 
 At-bat starts closer than 45 seconds apart are ignored by default because they are
 usually scorekeeper-delay or transition-card artifacts. Adjust with

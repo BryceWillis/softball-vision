@@ -39,6 +39,9 @@ sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
   --ocr tesseract
 ```
 
+The command defaults to `--batting-half auto` and prints the inferred half. Use
+`--batting-half top` or `--batting-half bottom` only when you want to override it.
+
 - [ ] Review at-bats:
 
 ```sh
@@ -49,6 +52,12 @@ sidelinehd-extractor review-events runs/YOUR_RUN --kind at-bats
 
 ```sh
 sidelinehd-extractor review-events runs/YOUR_RUN --kind chapters
+```
+
+- [ ] Generate a report for questionable at-bats:
+
+```sh
+sidelinehd-extractor review-report runs/YOUR_RUN --kind at-bats
 ```
 
 - [ ] Generate the paste kit:

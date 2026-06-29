@@ -21,6 +21,33 @@ class EventDetectionResult:
     event_count: int
 
 
+@dataclass(frozen=True)
+class BattingHalfInference:
+    """Audit details for automatic roster batting-half inference."""
+
+    inferred_half: Optional[HalfInning]
+    top_at_bats: int
+    top_roster_matches: int
+    bottom_at_bats: int
+    bottom_roster_matches: int
+    warning: Optional[str] = None
+
+    @property
+    def message(self) -> str:
+        top = f"{self.top_roster_matches}/{self.top_at_bats}"
+        bottom = f"{self.bottom_roster_matches}/{self.bottom_at_bats}"
+        if self.inferred_half is None:
+            reason = self.warning or "keeping both halves"
+            return (
+                "Inferred batting half: both "
+                f"({top} roster-name matches in top, {bottom} in bottom; {reason})"
+            )
+        return (
+            f"Inferred batting half: {self.inferred_half.value} "
+            f"({top} roster-name matches in top, {bottom} in bottom)"
+        )
+
+
 def load_states(path: Path) -> List[OverlayState]:
     """Load overlay states from a JSONL file."""
 
@@ -123,6 +150,7 @@ def detect_events(
 
         player_name = player_name_for_state(state, roster)
         roster_batter_number = player_number_for_state(state, player_name, roster)
+        roster_match_source = roster_match_source_for_state(state, roster)
         effective_batter_number = _effective_batter_number(
             roster_batter_number,
             player_name,
@@ -164,6 +192,7 @@ def detect_events(
                         "strikes": state.strikes,
                         "source": "batter_number_change",
                         "ocr_player_number": state.batter_number,
+                        "roster_match_source": roster_match_source,
                     },
                 )
             )
@@ -195,6 +224,61 @@ def detect_events_file(
     )
     write_jsonl(destination, events)
     return EventDetectionResult(input_path=source, output_path=destination, event_count=len(events))
+
+
+def infer_batting_half(
+    events: Iterable[Event],
+    roster: Optional[Roster],
+) -> BattingHalfInference:
+    """Infer which half contains the rostered team's named batter cards."""
+
+    counts = {
+        HalfInning.TOP: {"total": 0, "matches": 0},
+        HalfInning.BOTTOM: {"total": 0, "matches": 0},
+    }
+
+    for event in events:
+        if event.event_type != EventType.AT_BAT_START or event.half not in counts:
+            continue
+        counts[event.half]["total"] += 1
+        if _event_has_roster_name_match(event, roster):
+            counts[event.half]["matches"] += 1
+
+    top_matches = counts[HalfInning.TOP]["matches"]
+    bottom_matches = counts[HalfInning.BOTTOM]["matches"]
+    if roster is None:
+        warning = "no roster provided"
+        inferred_half = None
+    elif top_matches == 0 and bottom_matches == 0:
+        warning = "no roster-name matches found"
+        inferred_half = None
+    elif top_matches == bottom_matches:
+        warning = "ambiguous roster-name match counts"
+        inferred_half = None
+    else:
+        warning = None
+        inferred_half = HalfInning.TOP if top_matches > bottom_matches else HalfInning.BOTTOM
+
+    return BattingHalfInference(
+        inferred_half=inferred_half,
+        top_at_bats=counts[HalfInning.TOP]["total"],
+        top_roster_matches=top_matches,
+        bottom_at_bats=counts[HalfInning.BOTTOM]["total"],
+        bottom_roster_matches=bottom_matches,
+        warning=warning,
+    )
+
+
+def filter_at_bats_to_half(events: Iterable[Event], half: Optional[HalfInning]) -> List[Event]:
+    """Return all chapter events and only at-bats from ``half`` when provided."""
+
+    if half is None:
+        return list(events)
+    return [
+        event
+        for event in events
+        if event.event_type != EventType.AT_BAT_START or event.half == half
+    ]
 
 
 def format_half_inning_label(inning: int, half: HalfInning) -> str:
@@ -239,6 +323,22 @@ def player_number_for_state(state: OverlayState, player_name: Optional[str], ros
         if roster_number:
             return roster_number
     return state.batter_number
+
+
+def roster_match_source_for_state(
+    state: OverlayState,
+    roster: Optional[Roster],
+) -> Optional[str]:
+    """Return how this state matched the roster, preferring named card OCR."""
+
+    if roster is None:
+        return None
+    batter_name = state.metadata.get("batter_name")
+    if batter_name and roster.number_for_name(str(batter_name)):
+        return "name"
+    if state.batter_number and roster.name_for_number(state.batter_number):
+        return "number"
+    return None
 
 
 def _half_key(state: OverlayState) -> Optional[Tuple[int, HalfInning]]:
@@ -412,3 +512,12 @@ def _confirmed_half_key(
     if len(window_states) < minimum:
         return len(window_states) >= 2 and observations == len(window_states)
     return observations >= minimum
+
+
+def _event_has_roster_name_match(event: Event, roster: Optional[Roster]) -> bool:
+    if event.metadata.get("roster_match_source") == "name":
+        return True
+    if roster is None or not event.player_name:
+        return False
+    roster_number = roster.number_for_name(event.player_name)
+    return bool(roster_number and roster_number == event.player_number)

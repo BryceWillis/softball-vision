@@ -160,8 +160,8 @@ Make `NEW_GAME_CHECKLIST.md` feel like a reusable template for other teams and u
 
 Acceptance criteria:
 - Replace any team-specific examples with placeholders or clearly labeled examples.
-- Include `--batting-half top|bottom` guidance.
-- Include `review-report` in the review workflow.
+- Include `--batting-half auto` behavior note and mention of `top|bottom` override (item 17 is done; checklist already updated).
+- Include `review-report` in the review workflow (done as part of item 17 implementation).
 - Keep the checklist short enough to use during a real game-posting workflow.
 
 ### 13. Improve Frame Read Error Messages
@@ -214,6 +214,7 @@ Acceptance criteria:
 ### 17. Auto-Detect Batting Half
 
 Source: Product backlog
+Status: Done
 
 Eliminate `--batting-half top|bottom` as a required user input. The tool should infer which half the rostered team bats in automatically.
 

@@ -7,12 +7,18 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from sidelinehd_extractor.corrections import EventCorrection, apply_event_corrections
-from sidelinehd_extractor.events import detect_events_file, load_events
+from sidelinehd_extractor.events import (
+    BattingHalfInference,
+    detect_events_file,
+    filter_at_bats_to_half,
+    infer_batting_half,
+    load_events,
+)
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.models import HalfInning, OverlayTemplate, Roster
 from sidelinehd_extractor.naming import game_slug_for_run
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
-from sidelinehd_extractor.processing import process_video
+from sidelinehd_extractor.processing import process_video, write_jsonl
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
@@ -36,6 +42,7 @@ class RunGameResult:
     sample_count: int
     state_count: int
     event_count: int
+    batting_half_inference: Optional[BattingHalfInference] = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +73,9 @@ def run_game(
     chapter_intro_label: str = "Pregame",
     include_at_bat_inning_headers: bool = True,
     batting_half: Optional[HalfInning] = None,
+    auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
+    batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
 ) -> RunGameResult:
     """Process video, detect events, and write both YouTube text exports."""
 
@@ -91,12 +100,20 @@ def run_game(
     event_result = detect_events_file(
         state_result.output_path,
         roster=roster,
-        batting_half=batting_half,
+        batting_half=None if auto_detect_batting_half else batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
     )
 
     _stage(stage_progress, "export")
     events = load_events(event_result.output_path)
+    batting_half_inference = None
+    if auto_detect_batting_half:
+        batting_half_inference = infer_batting_half(events, roster)
+        if batting_half_inference_progress is not None:
+            batting_half_inference_progress(batting_half_inference)
+        events = filter_at_bats_to_half(events, batting_half_inference.inferred_half)
+        write_jsonl(event_result.output_path, events)
+    event_count = len(events)
     if corrections is not None:
         events = apply_event_corrections(events, corrections)
 
@@ -127,7 +144,8 @@ def run_game(
         at_bats_path=at_bats_path,
         sample_count=process_result.sample_count,
         state_count=state_result.state_count,
-        event_count=event_result.event_count,
+        event_count=event_count,
+        batting_half_inference=batting_half_inference,
     )
 
 
@@ -152,7 +170,9 @@ def run_youtube_game(
     chapter_intro_label: str = "Pregame",
     include_at_bat_inning_headers: bool = True,
     batting_half: Optional[HalfInning] = None,
+    auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
+    batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     merge_output_format: str = "mp4",
     write_info_json: bool = True,
@@ -194,7 +214,9 @@ def run_youtube_game(
         chapter_intro_label=chapter_intro_label,
         include_at_bat_inning_headers=include_at_bat_inning_headers,
         batting_half=batting_half,
+        auto_detect_batting_half=auto_detect_batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
+        batting_half_inference_progress=batting_half_inference_progress,
     )
     return RunYoutubeGameResult(download=download, run=run)
 

@@ -2,9 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sidelinehd_extractor.events import detect_events, detect_events_file
+from sidelinehd_extractor.events import (
+    detect_events,
+    detect_events_file,
+    filter_at_bats_to_half,
+    infer_batting_half,
+)
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.models import (
+    Event,
     EventType,
     HalfInning,
     OverlayState,
@@ -499,6 +505,88 @@ class EventDetectionTests(unittest.TestCase):
                 if event.event_type == EventType.AT_BAT_START
             ],
             ["22", "24"],
+        )
+
+    def test_infer_batting_half_uses_roster_name_match_counts(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+        events = [
+            Event(EventType.AT_BAT_START, 600, "#22", half=HalfInning.TOP, player_number="22"),
+            Event(
+                EventType.AT_BAT_START,
+                900,
+                "Maya R. (#22)",
+                half=HalfInning.BOTTOM,
+                player_number="22",
+                player_name="Maya R.",
+                metadata={"roster_match_source": "name"},
+            ),
+            Event(
+                EventType.AT_BAT_START,
+                960,
+                "Amelia V. (#26)",
+                half=HalfInning.BOTTOM,
+                player_number="26",
+                player_name="Amelia V.",
+                metadata={"roster_match_source": "name"},
+            ),
+        ]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertEqual(inference.inferred_half, HalfInning.BOTTOM)
+        self.assertEqual(inference.top_at_bats, 1)
+        self.assertEqual(inference.top_roster_matches, 0)
+        self.assertEqual(inference.bottom_at_bats, 2)
+        self.assertEqual(inference.bottom_roster_matches, 2)
+        self.assertIn("Inferred batting half: bottom", inference.message)
+
+    def test_infer_batting_half_falls_back_to_both_without_roster_matches(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R.")],
+        )
+        events = [
+            Event(EventType.AT_BAT_START, 600, "#22", half=HalfInning.TOP, player_number="22"),
+            Event(EventType.AT_BAT_START, 900, "#8", half=HalfInning.BOTTOM, player_number="8"),
+        ]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertIsNone(inference.inferred_half)
+        self.assertEqual(inference.warning, "no roster-name matches found")
+        self.assertIn("Inferred batting half: both", inference.message)
+
+    def test_infer_batting_half_falls_back_to_both_without_roster(self):
+        events = [
+            Event(EventType.AT_BAT_START, 600, "#22", half=HalfInning.TOP, player_number="22"),
+            Event(EventType.AT_BAT_START, 900, "#8", half=HalfInning.BOTTOM, player_number="8"),
+        ]
+
+        inference = infer_batting_half(events, None)
+
+        self.assertIsNone(inference.inferred_half)
+        self.assertEqual(inference.warning, "no roster provided")
+        self.assertIn("Inferred batting half: both", inference.message)
+
+    def test_filter_at_bats_to_half_keeps_chapters_and_selected_at_bats(self):
+        events = [
+            Event(EventType.HALF_INNING_START, 590, "Top 1", inning=1, half=HalfInning.TOP),
+            Event(EventType.AT_BAT_START, 600, "#22", half=HalfInning.TOP, player_number="22"),
+            Event(EventType.HALF_INNING_START, 890, "Bottom 1", inning=1, half=HalfInning.BOTTOM),
+            Event(EventType.AT_BAT_START, 900, "#26", half=HalfInning.BOTTOM, player_number="26"),
+        ]
+
+        filtered = filter_at_bats_to_half(events, HalfInning.BOTTOM)
+
+        self.assertEqual(
+            [event.label for event in filtered],
+            ["Top 1", "Bottom 1", "#26"],
         )
 
     def test_detect_events_ignores_too_close_batter_flip_without_swallowing_later_batter(self):
