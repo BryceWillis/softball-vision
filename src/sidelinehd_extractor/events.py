@@ -115,6 +115,7 @@ def detect_events(
 
     ordered_states = sorted(states, key=lambda item: item.timestamp_seconds)
     events = []
+    starts_at_zero = bool(ordered_states) and ordered_states[0].timestamp_seconds <= 0
     last_half_key: Optional[Tuple[int, HalfInning]] = None
     last_batter_number = None
     last_batter_name = None
@@ -133,6 +134,7 @@ def detect_events(
                 half_key,
                 half_inning_confirmation_window,
                 min_half_inning_observations,
+                require_activity_signal=last_half_key is None and starts_at_zero,
             )
         ):
             inning, half = half_key
@@ -503,7 +505,11 @@ def _confirmed_half_key(
     half_key: Tuple[int, HalfInning],
     window: int,
     minimum: int,
+    require_activity_signal: bool = False,
 ) -> bool:
+    if require_activity_signal and not _has_half_inning_activity_signal(states[start_index]):
+        return False
+
     observations = 0
     window_states = states[start_index : start_index + window]
     for state in window_states:
@@ -512,6 +518,17 @@ def _confirmed_half_key(
     if len(window_states) < minimum:
         return len(window_states) >= 2 and observations == len(window_states)
     return observations >= minimum
+
+
+def _has_half_inning_activity_signal(state: OverlayState) -> bool:
+    """Return true once the scorebug looks game-active, not merely present.
+
+    SidelineHD pregame overlays can OCR as a stable ``Top 1`` before the game
+    has actually started. A plausible batter card is the strongest local signal
+    that the inning state is no longer just pregame scorebug noise.
+    """
+
+    return _is_plausible_batter_state(state)
 
 
 def _event_has_roster_name_match(event: Event, roster: Optional[Roster]) -> bool:

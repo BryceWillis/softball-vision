@@ -360,6 +360,63 @@ class EventDetectionTests(unittest.TestCase):
             ["Top 1", "Top 2"],
         )
 
+    def test_detect_events_does_not_start_top_first_at_zero_without_game_activity(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"batter_name": ">", "fields": {"count": "1", "inning": ""}},
+            ),
+            OverlayState(
+                timestamp_seconds=5,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"batter_name": "~~", "fields": {"count": "1", "inning": ""}},
+            ),
+            OverlayState(
+                timestamp_seconds=10,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"batter_name": "Se", "fields": {"count": "1", "inning": ""}},
+            ),
+            OverlayState(
+                timestamp_seconds=535,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="4",
+            ),
+            OverlayState(
+                timestamp_seconds=540,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="4",
+            ),
+            OverlayState(
+                timestamp_seconds=545,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="4",
+            ),
+        ]
+
+        events = detect_events(states)
+
+        chapters = [
+            event for event in events if event.event_type == EventType.HALF_INNING_START
+        ]
+        self.assertEqual([(event.timestamp_seconds, event.label) for event in chapters], [(535, "Top 1")])
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n8:55 Top 1",
+        )
+
     def test_detect_events_allows_short_confirmed_half_inning_inputs(self):
         events = detect_events(
             [
