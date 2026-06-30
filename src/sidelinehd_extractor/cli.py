@@ -289,10 +289,11 @@ def _cmd_setup_roster(args: argparse.Namespace) -> int:
         return 1
 
     output_path = args.output or default_roster_path(team_name)
+    display_output_path = output_path.expanduser().resolve()
     if is_tty:
         _print_roster_preview(roster)
         response = input(
-            f"\nWrite {len(roster.players)} players to {output_path}? [Y/n] "
+            f"\nWrite {len(roster.players)} players to {display_output_path}? [Y/n] "
         ).strip().lower()
         if response and response not in {"y", "yes"}:
             print("Cancelled.", file=sys.stderr)
@@ -355,7 +356,7 @@ def _format_roster_next_command(roster_path: Path) -> str:
     return (
         "sidelinehd-extractor run-youtube 'YOUTUBE_URL' "
         f"--roster {roster_path} "
-        "--template examples/sidelinehd_640x360_active.example.json"
+        "--template YOUR_TEMPLATE"
     )
 
 

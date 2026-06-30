@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-06-30
-**Review passes:** 5 (Pass 5: setup-roster command and CR-19 cleanup)
+**Review passes:** 5 (Pass 5: setup-roster command and CR-19 cleanup; CR-20/21/22 resolved in re-review)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -21,23 +21,60 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 #### CR-20 — `_format_roster_next_command` hardcodes the default template path
 **File:** [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 5 re-review
 
-`_format_roster_next_command` always prints `--template examples/sidelinehd_640x360_active.example.json` in its hint. After item 26 ships nine additional layout templates, users on any non-default layout will copy a hint that points them at the wrong template and get silently wrong OCR results. Replace the template portion of the hint with `--template YOUR_TEMPLATE` (a placeholder) or omit the flag entirely from the printed command.
+Hint now uses `--template YOUR_TEMPLATE`. Unit test updated to match. Clean fix.
 
 #### CR-21 — `_read_roster_lines_interactive` has zero test coverage
 **File:** [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 5 re-review
 
-All `setup-roster` tests patch `sys.stdin` with `io.StringIO`, which has `isatty()` returning `False`, so every test takes the non-TTY `sys.stdin.read()` branch. `_read_roster_lines_interactive` — including its double-blank-line termination logic — is never exercised. A regression in the interactive loop would be invisible until a user runs the command in a real terminal. Add at least one test that patches `builtins.input` to inject a sequence of lines ending with two blanks and confirm the correct roster is returned.
+Direct test added using patched `builtins.input` with a double-blank terminator sequence. Test correctly asserts the returned list includes the trailing single blank (appended before the break) and stops before the second blank. 133 tests pass.
 
 #### CR-22 — `default_roster_path` returns a cwd-relative path with no guard or documentation
 **File:** [roster.py](src/sidelinehd_extractor/roster.py)
+**Resolved:** Pass 5 re-review
 
-`default_roster_path(team_name)` returns `Path("rosters") / f"{slug}.csv"`, which is relative to the process working directory at the moment `write_roster_csv` resolves it. If `setup-roster` is run from any directory other than the project root (e.g. `~/videos/`), the roster lands in an unexpected location and the `.gitignore` entry for `rosters/` in the project root does not protect it. Mitigate by printing the resolved absolute path in the confirmation prompt (`output_path.resolve()`) so the user can see exactly where the file is going.
+TTY confirmation prompt now shows `output_path.expanduser().resolve()` (absolute path). Test added that patches `builtins.input` with a `FakeTTY` stdin and confirms the resolved path appears in the prompt string. 133 tests pass.
 
 #### CR-23 — `infer_batting_half` accumulates match counts before the `roster is None` guard
+**Status:** Open
 **File:** [events.py](src/sidelinehd_extractor/events.py)
 
 The match-counting loop at line 245 runs unconditionally; the `if roster is None` early return at line 254 fires only after it completes. If the function is ever called with `roster=None` on events that already carry `roster_match_source: "name"` metadata (e.g. events loaded from a prior enriched `events.jsonl`), the returned `BattingHalfInference` will have `inferred_half=None, warning="no roster provided"` alongside non-zero `top_roster_matches` or `bottom_roster_matches` — a contradictory state. Not reachable via the current CLI (run_game always generates fresh events), but the guard should move to before the loop so the invariant is structurally enforced rather than relying on the call graph.
+
+**Reviewer note (Pass 5 re-review):** The submitted early return sets
+`top_at_bats=0` and `bottom_at_bats=0`. This regresses the diagnostic
+`message` property, which formats as `"{matches}/{at_bats} in top"`. Previously
+the message read `"0/15 in top, 0/12 in bottom; no roster provided"` (real
+at-bat counts, zero matches); now it always reads `"0/0 in top, 0/0 in bottom"`
+— the at-bat totals are lost.
+
+The correct fix keeps the loop but guards the match-counting step, then returns
+early with real totals and zeroed match counts:
+
+```python
+counts = {HalfInning.TOP: {"total": 0}, HalfInning.BOTTOM: {"total": 0}}
+for event in events:
+    if event.event_type != EventType.AT_BAT_START or event.half not in counts:
+        continue
+    counts[event.half]["total"] += 1
+
+if roster is None:
+    return BattingHalfInference(
+        inferred_half=None,
+        top_at_bats=counts[HalfInning.TOP]["total"],
+        top_roster_matches=0,
+        bottom_at_bats=counts[HalfInning.BOTTOM]["total"],
+        bottom_roster_matches=0,
+        warning="no roster provided",
+    )
+
+# ... rest of the match-counting loop and inference ...
+```
+
+Update the regression test to assert `top_at_bats` equals the number of events
+passed in (not 0).
 
 ## Resolved Items
 

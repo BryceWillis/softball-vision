@@ -763,6 +763,26 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(inference.warning, "no roster provided")
         self.assertIn("Inferred batting half: both", inference.message)
 
+    def test_infer_batting_half_ignores_enriched_match_metadata_without_roster(self):
+        events = [
+            Event(
+                EventType.AT_BAT_START,
+                600,
+                "Maya R. (#22)",
+                half=HalfInning.TOP,
+                player_number="22",
+                player_name="Maya R.",
+                metadata={"roster_match_source": "name"},
+            ),
+        ]
+
+        inference = infer_batting_half(events, None)
+
+        self.assertIsNone(inference.inferred_half)
+        self.assertEqual(inference.warning, "no roster provided")
+        self.assertEqual(inference.top_at_bats, 0)
+        self.assertEqual(inference.top_roster_matches, 0)
+
     def test_filter_at_bats_to_half_keeps_chapters_and_selected_at_bats(self):
         events = [
             Event(EventType.HALF_INNING_START, 590, "Top 1", inning=1, half=HalfInning.TOP),

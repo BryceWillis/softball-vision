@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 from pathlib import Path
 
-from sidelinehd_extractor.cli import _default_run_fields, _format_roster_next_command, build_parser, main
+from sidelinehd_extractor.cli import (
+    _default_run_fields,
+    _format_roster_next_command,
+    _read_roster_lines_interactive,
+    build_parser,
+    main,
+)
 from sidelinehd_extractor.config import load_roster
 
 
@@ -269,11 +275,56 @@ class CLITests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("no roster lines entered", stderr.getvalue())
 
+    def test_setup_roster_tty_confirmation_uses_resolved_output_path(self):
+        class FakeTTY:
+            def isatty(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stars.csv"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            input_values = ["#22 Maya R.", "", "#26 Amelia V.", "", "", "y"]
+
+            with (
+                patch("sys.stdin", FakeTTY()),
+                patch("builtins.input", side_effect=input_values) as input_mock,
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                exit_code = main(
+                    [
+                        "setup-roster",
+                        "--team-name",
+                        "Stars",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            prompts = [
+                call.args[0]
+                for call in input_mock.call_args_list
+                if call.args
+            ]
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(any(str(output_path.resolve()) in prompt for prompt in prompts))
+
     def test_format_roster_next_command_mentions_roster_and_template(self):
         command = _format_roster_next_command(Path("rosters/stars.csv"))
 
         self.assertIn("--roster rosters/stars.csv", command)
-        self.assertIn("--template examples/sidelinehd_640x360_active.example.json", command)
+        self.assertIn("--template YOUR_TEMPLATE", command)
+
+    def test_read_roster_lines_interactive_stops_after_two_blank_lines(self):
+        values = iter(["#22 Maya R.", "", "#26 Amelia V.", "", ""])
+
+        with patch("builtins.input", side_effect=lambda: next(values)):
+            lines = _read_roster_lines_interactive()
+
+        self.assertEqual(lines, ["#22 Maya R.", "", "#26 Amelia V.", ""])
 
     def test_main_prints_clean_error_for_value_error(self):
         stderr = io.StringIO()
