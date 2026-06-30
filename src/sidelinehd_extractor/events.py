@@ -237,16 +237,6 @@ def infer_batting_half(
 ) -> BattingHalfInference:
     """Infer which half contains the rostered team's named batter cards."""
 
-    if roster is None:
-        return BattingHalfInference(
-            inferred_half=None,
-            top_at_bats=0,
-            top_roster_matches=0,
-            bottom_at_bats=0,
-            bottom_roster_matches=0,
-            warning="no roster provided",
-        )
-
     counts = {
         HalfInning.TOP: {"total": 0, "matches": 0},
         HalfInning.BOTTOM: {"total": 0, "matches": 0},
@@ -256,12 +246,15 @@ def infer_batting_half(
         if event.event_type != EventType.AT_BAT_START or event.half not in counts:
             continue
         counts[event.half]["total"] += 1
-        if _event_has_roster_name_match(event):
+        if roster is not None and _event_has_roster_name_match(event):
             counts[event.half]["matches"] += 1
 
     top_matches = counts[HalfInning.TOP]["matches"]
     bottom_matches = counts[HalfInning.BOTTOM]["matches"]
-    if top_matches == 0 and bottom_matches == 0:
+    if roster is None:
+        warning = "no roster provided"
+        inferred_half = None
+    elif top_matches == 0 and bottom_matches == 0:
         warning = "no roster-name matches found"
         inferred_half = None
     elif top_matches == bottom_matches:

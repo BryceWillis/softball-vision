@@ -38,43 +38,10 @@ Direct test added using patched `builtins.input` with a double-blank terminator 
 TTY confirmation prompt now shows `output_path.expanduser().resolve()` (absolute path). Test added that patches `builtins.input` with a `FakeTTY` stdin and confirms the resolved path appears in the prompt string. 133 tests pass.
 
 #### CR-23 — `infer_batting_half` accumulates match counts before the `roster is None` guard
-**Status:** Open
 **File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 5 re-review
 
-The match-counting loop at line 245 runs unconditionally; the `if roster is None` early return at line 254 fires only after it completes. If the function is ever called with `roster=None` on events that already carry `roster_match_source: "name"` metadata (e.g. events loaded from a prior enriched `events.jsonl`), the returned `BattingHalfInference` will have `inferred_half=None, warning="no roster provided"` alongside non-zero `top_roster_matches` or `bottom_roster_matches` — a contradictory state. Not reachable via the current CLI (run_game always generates fresh events), but the guard should move to before the loop so the invariant is structurally enforced rather than relying on the call graph.
-
-**Reviewer note (Pass 5 re-review):** The submitted early return sets
-`top_at_bats=0` and `bottom_at_bats=0`. This regresses the diagnostic
-`message` property, which formats as `"{matches}/{at_bats} in top"`. Previously
-the message read `"0/15 in top, 0/12 in bottom; no roster provided"` (real
-at-bat counts, zero matches); now it always reads `"0/0 in top, 0/0 in bottom"`
-— the at-bat totals are lost.
-
-The correct fix keeps the loop but guards the match-counting step, then returns
-early with real totals and zeroed match counts:
-
-```python
-counts = {HalfInning.TOP: {"total": 0}, HalfInning.BOTTOM: {"total": 0}}
-for event in events:
-    if event.event_type != EventType.AT_BAT_START or event.half not in counts:
-        continue
-    counts[event.half]["total"] += 1
-
-if roster is None:
-    return BattingHalfInference(
-        inferred_half=None,
-        top_at_bats=counts[HalfInning.TOP]["total"],
-        top_roster_matches=0,
-        bottom_at_bats=counts[HalfInning.BOTTOM]["total"],
-        bottom_roster_matches=0,
-        warning="no roster provided",
-    )
-
-# ... rest of the match-counting loop and inference ...
-```
-
-Update the regression test to assert `top_at_bats` equals the number of events
-passed in (not 0).
+Loop now always counts at-bat totals; match step guarded with `if roster is not None`. The `roster is None` branch is checked after the loop and returns real `top_at_bats`/`bottom_at_bats` with zeroed match counts. Regression test updated to assert `top_at_bats == 1`. 133 tests pass.
 
 ## Resolved Items
 

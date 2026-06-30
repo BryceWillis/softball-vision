@@ -780,7 +780,7 @@ class EventDetectionTests(unittest.TestCase):
 
         self.assertIsNone(inference.inferred_half)
         self.assertEqual(inference.warning, "no roster provided")
-        self.assertEqual(inference.top_at_bats, 0)
+        self.assertEqual(inference.top_at_bats, 1)
         self.assertEqual(inference.top_roster_matches, 0)
 
     def test_filter_at_bats_to_half_keeps_chapters_and_selected_at_bats(self):
