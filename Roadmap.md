@@ -279,6 +279,7 @@ Acceptance criteria:
 ### 19. Full Windows Support
 
 Source: Product backlog
+Status: Needs Design Review
 
 Make the tool fully usable on Windows with accurate documentation and a CI
 matrix that catches regressions on both platforms.
@@ -311,6 +312,59 @@ test suite on `macos-latest` and `windows-latest` would surface any platform
 divergence early. The test suite is already fast (~0.2 s) and dependency-free
 for external binaries, so this should be low-friction to maintain.
 
+**Codex design review feedback:**
+
+I agree with the overall direction, but I do not consider this implementation-ready
+until the following details are resolved:
+
+1. **CI should include Linux, not treat it as a bonus.** The docs and runtime
+   Tesseract hint already mention Linux, and `ubuntu-latest` is cheap to add.
+   A practical first matrix is `ubuntu-latest`, `macos-latest`, and
+   `windows-latest` on one supported Python version.
+
+2. **Decide the Python support policy before writing CI.** `pyproject.toml`
+   currently says `requires-python = ">=3.9"`, while the README recommends 3.10+
+   because recent `yt-dlp` warns on 3.9. CI should either test the declared
+   minimum or the project should raise the minimum to 3.10 before release.
+   My preference: raise to Python 3.10+ for the Windows-support release and test
+   3.10 plus one current Python version if the matrix stays fast.
+
+3. **CI should install the package, not rely on `PYTHONPATH`.** The proposed
+   workflow correctly notes this. Use `python -m pip install -e ".[dev]"`, then
+   run `python -m unittest discover -s tests` and `ruff check .`. This tests the
+   console entry point packaging path more realistically than local
+   `PYTHONPATH=src` commands.
+
+4. **Generated `next_commands` need a Windows-safe plan.** `run-game` and
+   `run-youtube` currently print follow-up commands such as
+   `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...`. Those are Unix shell
+   syntax. If Windows support is a release goal, either emit installed-CLI
+   commands (`sidelinehd-extractor ...`) or generate platform-specific fallback
+   commands. Prefer installed-CLI commands because the README setup already
+   installs the package.
+
+5. **Document Windows activation for both PowerShell and cmd.exe.** The roadmap
+   currently mentions `.venv\Scripts\activate`, but the most common PowerShell
+   command is `.venv\Scripts\Activate.ps1`; cmd.exe uses
+   `.venv\Scripts\activate.bat`. The README can avoid some shell variance by
+   recommending `python -m pip ...` after activation and noting the `py -3`
+   launcher as a fallback.
+
+6. **Clarify whether ffmpeg is required or recommended.** The current downloader
+   often works without ffmpeg because it requests `best[ext=mp4]/best`, but
+   `yt-dlp` can need ffmpeg for merging or remuxing. The docs should call it
+   "recommended for reliable/best-quality YouTube downloads" unless the code adds
+   a hard preflight check. Do not make CI depend on ffmpeg unless tests actually
+   exercise download/merge behavior.
+
+7. **Keep shell examples short and avoid platform-specific line continuations.**
+   Backslashes, carets, and PowerShell backticks all create copy/paste friction.
+   For Windows docs, prefer short single-line examples or separate labeled blocks
+   for PowerShell and cmd.exe.
+
+8. **Add an acceptance criterion for command-output portability.** Windows docs
+   are not enough if the tool itself prints Unix-only follow-up commands.
+
 **Sub-tasks for Codex:**
 
 1. **README — Setup section**: add a tabbed or clearly-marked set of
@@ -338,15 +392,23 @@ for external binaries, so this should be low-friction to maintain.
    via `pip install -e .`) on `macos-latest` and `windows-latest`, triggered on
    push and pull request.
 
+7. **CLI follow-up commands**: update generated `next_commands` to be
+   cross-platform. Preferred output is installed-console-script commands such as
+   `sidelinehd-extractor review-events ...`, with docs retaining `python -m ...`
+   only as a fallback.
+
 Acceptance criteria:
 - README Setup section documents venv creation, activation, Tesseract, and
-  ffmpeg for both macOS and Windows (Linux a bonus).
+  ffmpeg for macOS, Linux, and Windows.
 - `brew install tesseract` does not appear without a Windows/Linux alternative
   nearby.
-- ffmpeg is documented as a recommended system dependency.
-- A GitHub Actions workflow exists and passes on both `macos-latest` and
-  `windows-latest`.
-- All existing tests continue to pass on both platforms.
+- ffmpeg is documented as a recommended system dependency, or the code adds a
+  deliberate preflight check if the project wants to make it required.
+- Generated `next_commands` are copy/pasteable on Windows after the package is
+  installed.
+- A GitHub Actions workflow exists and passes on `ubuntu-latest`,
+  `macos-latest`, and `windows-latest`.
+- All existing tests and Ruff continue to pass on all CI platforms.
 
 ## Discussion / Later Deliverables
 
