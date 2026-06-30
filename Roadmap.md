@@ -1491,8 +1491,8 @@ Reviewing 14 chapter transitions. Enter to confirm, e to edit, d to delete.
 ...
 ```
 
-Prompt keys (single keypress, no Enter required except for edit values):
-- `Enter` — accept as-is, move to next
+Prompt responses (type and press Enter):
+- Empty / `y` — accept as-is, move to next
 - `e` — enter edit mode for this event (shows current values, accepts new ones
   field by field; empty input keeps the current value)
 - `d` — mark for deletion, move to next
@@ -1552,9 +1552,8 @@ def interactive_chapter_review(
 Returns the modified event list and a parallel list of correction rows so the
 caller can optionally persist them.
 
-Use `sys.stdin` with `tty` module's `setcbreak` (or `msvcrt.getwch` on Windows)
-for single-keypress input. Fall back to `input()` if raw mode is unavailable
-(some terminal emulators).
+Use `input()` throughout. No raw terminal mode or platform-specific input
+libraries needed.
 
 **Acceptance criteria:**
 
@@ -1574,8 +1573,8 @@ for single-keypress input. Fall back to `input()` if raw mode is unavailable
 - `run-youtube` and `run-game` support `--interactive` and pass it through to
   the chapter export step only (at-bat export is not affected).
 - Tests cover: all-confirm (no changes), edit timestamp, edit score, delete
-  event, skip-remaining, non-TTY no-op. Use a fake readline/input injection;
-  do not require an actual terminal in tests.
+  event, skip-remaining, non-TTY no-op. Patch `builtins.input` to inject
+  responses; no terminal required.
 
 ## Discussion / Later Deliverables
 
