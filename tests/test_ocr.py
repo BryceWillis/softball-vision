@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
+    OCRBackendResult,
     OCRFieldConfig,
     _extract_highlighted_lineup_crop,
     _tesseract_install_hint,
@@ -11,6 +12,7 @@ from sidelinehd_extractor.ocr import (
     create_ocr_backend,
     normalize_ocr_text,
     preprocess_for_ocr,
+    tesseract_ocr_image,
 )
 
 
@@ -31,6 +33,7 @@ class OCRTests(unittest.TestCase):
 
         self.assertEqual(result.text, "")
         self.assertEqual(result.backend, "none")
+        self.assertIsNone(result.source_detail)
 
     def test_create_tesseract_backend_requires_binary(self):
         with patch("sidelinehd_extractor.ocr.shutil.which", return_value=None):
@@ -66,6 +69,44 @@ class OCRTests(unittest.TestCase):
         self.assertIsNotNone(crop)
         self.assertGreaterEqual(crop.shape[0], 18)
         self.assertGreaterEqual(crop.shape[1], 18)
+
+    def test_tesseract_lineup_strip_marks_highlight_source_detail(self):
+        with patch("sidelinehd_extractor.ocr.ensure_tesseract_available"):
+            with patch(
+                "sidelinehd_extractor.ocr._extract_highlighted_lineup_crop",
+                return_value=object(),
+            ):
+                with patch("sidelinehd_extractor.ocr.preprocess_for_ocr", return_value=object()):
+                    with patch(
+                        "sidelinehd_extractor.ocr._tesseract_ocr_preprocessed_image",
+                        return_value=OCRBackendResult(
+                            text="26\n",
+                            normalized_text="26",
+                            backend="tesseract",
+                        ),
+                    ):
+                        result = tesseract_ocr_image(object(), "lineup_strip")
+
+        self.assertEqual(result.source_detail, "lineup_highlight")
+
+    def test_tesseract_lineup_strip_marks_full_strip_source_detail(self):
+        with patch("sidelinehd_extractor.ocr.ensure_tesseract_available"):
+            with patch(
+                "sidelinehd_extractor.ocr._extract_highlighted_lineup_crop",
+                return_value=None,
+            ):
+                with patch("sidelinehd_extractor.ocr.preprocess_for_ocr", return_value=object()):
+                    with patch(
+                        "sidelinehd_extractor.ocr._tesseract_ocr_preprocessed_image",
+                        return_value=OCRBackendResult(
+                            text="15\n",
+                            normalized_text="15",
+                            backend="tesseract",
+                        ),
+                    ):
+                        result = tesseract_ocr_image(object(), "lineup_strip")
+
+        self.assertEqual(result.source_detail, "lineup_full_strip")
 
     def test_tesseract_command_includes_psm_and_whitelist(self):
         command = _tesseract_command(

@@ -174,6 +174,7 @@ def process_video(
                     normalized_text=ocr_result.normalized_text,
                     confidence=ocr_result.confidence,
                     crop_path=crop_path,
+                    source_detail=ocr_result.source_detail,
                 )
             )
         if progress is not None:

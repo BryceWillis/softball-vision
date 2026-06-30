@@ -1812,6 +1812,8 @@ Status: Ready to design
 
 The Victor Vipers game exposed an assumption around pregame setup: the scoring app initially had Smash It Sports configured as away and Victor Vipers as home, but after the coin toss the teams were swapped before the real game state began. The exported chapters currently start `Top 1` at `0:00`, even though the visible in-game overlay does not show the real first-inning game state until about `6:34`.
 
+Confirmed still present after item 36 rerun: `0:00 Top 1` still appears in the export for `9AaT4645z6s`. The correct chapter start is around `6:34`.
+
 This is distinct from adding a `0:00 Pregame` intro. The detector should avoid treating pregame or stale setup overlay state as a real half-inning start when the stream begins before the scoring app reaches active game state.
 
 Design direction:
@@ -1853,7 +1855,15 @@ Acceptance criteria:
 ### 36. Active Lineup-Strip Confidence and Order Recovery
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready to implement
+Status: Done (Pass 7, confirmed on `9AaT4645z6s`)
+
+`OCRBackendResult` and `OCRSample` carry `source_detail`. `lineup_strip` OCR marks reads as
+`lineup_highlight` when the HSV active chip was isolated, or `lineup_full_strip` when falling
+back to whole-strip OCR. Processing persists that value; state parsing stores it as
+`lineup_strip_confidence`; event detection blocks lineup-strip at-bat starts and lineup-number
+overrides unless highlight-confirmed; review flags unconfirmed lineup events. The Victor Vipers
+`19:20` false positive (a non-highlighted `#15` visible in the strip) was eliminated on the real
+run. 169 tests pass.
 
 The lineup-strip improvements in item 33 recovered missing batters in the FLX game, but the Victor Vipers run exposes a false-positive side effect:
 

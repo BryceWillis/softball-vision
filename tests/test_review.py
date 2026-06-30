@@ -57,6 +57,7 @@ class ReviewTests(unittest.TestCase):
                     "ocr_player_number": "28",
                     "roster_match_source": "lineup_number",
                     "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
                 },
             ),
         ]
@@ -65,6 +66,46 @@ class ReviewTests(unittest.TestCase):
 
         self.assertIn("lineup-recovered", text)
         self.assertNotIn("ocr-number=28", text)
+        self.assertNotIn("lineup-unconfirmed", text)
+
+    def test_render_event_review_flags_unconfirmed_lineup_strip(self):
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="Riley S. (#15)",
+                player_number="15",
+                player_name="Riley S.",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_full_strip",
+                },
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats")
+
+        self.assertIn("lineup-recovered", text)
+        self.assertIn("lineup-unconfirmed=lineup_full_strip", text)
+
+    def test_render_event_review_does_not_flag_unconfirmed_for_batter_card(self):
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="Riley S. (#15)",
+                player_number="15",
+                player_name="Riley S.",
+                metadata={
+                    "batter_number_source": "batter_card",
+                    "lineup_strip_confidence": "lineup_full_strip",
+                },
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats")
+
+        self.assertNotIn("lineup-unconfirmed", text)
 
     def test_render_event_review_flags_card_and_lineup_disagreement(self):
         events = [

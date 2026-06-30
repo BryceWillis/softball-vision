@@ -6,6 +6,7 @@ from pathlib import Path
 from sidelinehd_extractor.models import HalfInning, OCRSample, OverlayState
 from sidelinehd_extractor.processing import write_jsonl
 from sidelinehd_extractor.state import (
+    load_ocr_samples,
     parse_count,
     parse_inning,
     parse_jersey_number,
@@ -112,7 +113,13 @@ class StateParsingTests(unittest.TestCase):
         state = state_from_samples(
             600.0,
             {
-                "lineup_strip": OCRSample(600.0, "lineup_strip", "5", normalized_text="5"),
+                "lineup_strip": OCRSample(
+                    600.0,
+                    "lineup_strip",
+                    "5",
+                    normalized_text="5",
+                    source_detail="lineup_highlight",
+                ),
                 "batter_number": OCRSample(600.0, "batter_number", "213", normalized_text="213"),
             },
         )
@@ -121,6 +128,23 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(state.metadata["batter_number_source"], "lineup_strip")
         self.assertEqual(state.metadata["lineup_strip_number"], "5")
         self.assertEqual(state.metadata["lineup_batter_number"], "213")
+        self.assertEqual(state.metadata["lineup_strip_confidence"], "lineup_highlight")
+
+    def test_state_from_samples_stores_lineup_strip_confidence_in_metadata(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "lineup_strip": OCRSample(
+                    600.0,
+                    "lineup_strip",
+                    "15",
+                    normalized_text="15",
+                    source_detail="lineup_full_strip",
+                ),
+            },
+        )
+
+        self.assertEqual(state.metadata["lineup_strip_confidence"], "lineup_full_strip")
 
     def test_state_from_samples_prefers_batter_card_over_lineup_number(self):
         state = state_from_samples(
@@ -277,6 +301,54 @@ class StateParsingTests(unittest.TestCase):
 
             self.assertEqual(result.state_count, 1)
             self.assertTrue(result.output_path.exists())
+
+    def test_ocr_sample_serializes_source_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            samples_path = Path(directory) / "samples.jsonl"
+
+            write_jsonl(
+                samples_path,
+                [
+                    OCRSample(
+                        600.0,
+                        "lineup_strip",
+                        "26\n",
+                        normalized_text="26",
+                        source_detail="lineup_highlight",
+                    )
+                ],
+            )
+
+            text = samples_path.read_text(encoding="utf-8")
+
+        self.assertIn('"source_detail": "lineup_highlight"', text)
+
+    def test_load_ocr_samples_reads_source_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            samples_path = Path(directory) / "samples.jsonl"
+            samples_path.write_text(
+                '{"timestamp_seconds": 600, "field_name": "lineup_strip", '
+                '"raw_text": "26", "normalized_text": "26", '
+                '"source_detail": "lineup_highlight"}\n',
+                encoding="utf-8",
+            )
+
+            samples = load_ocr_samples(samples_path)
+
+        self.assertEqual(samples[0].source_detail, "lineup_highlight")
+
+    def test_load_ocr_samples_defaults_source_detail_to_none_for_old_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            samples_path = Path(directory) / "samples.jsonl"
+            samples_path.write_text(
+                '{"timestamp_seconds": 600, "field_name": "lineup_strip", '
+                '"raw_text": "26", "normalized_text": "26"}\n',
+                encoding="utf-8",
+            )
+
+            samples = load_ocr_samples(samples_path)
+
+        self.assertIsNone(samples[0].source_detail)
 
 
 if __name__ == "__main__":

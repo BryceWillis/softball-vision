@@ -40,6 +40,7 @@ def load_ocr_samples(path: Path) -> List[OCRSample]:
                     normalized_text=row.get("normalized_text"),
                     confidence=row.get("confidence"),
                     crop_path=Path(row["crop_path"]) if row.get("crop_path") else None,
+                    source_detail=row.get("source_detail"),
                 )
             )
     return samples
@@ -126,6 +127,10 @@ def state_from_samples(
     balls, strikes = parse_count(count_text)
     inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
     batter_card_text = _sample_text(samples_by_field, "batter_card_number")
+    lineup_strip_sample = samples_by_field.get("lineup_strip")
+    lineup_strip_confidence = (
+        lineup_strip_sample.source_detail if lineup_strip_sample else None
+    )
     lineup_strip_text = _sample_text(samples_by_field, "lineup_strip")
     lineup_text = _sample_text(samples_by_field, "batter_number")
     batter_card_number = parse_jersey_number(batter_card_text)
@@ -162,6 +167,7 @@ def state_from_samples(
             "batter_number_disagreement": batter_number_disagreement,
             "lineup_strip_number": lineup_strip_number,
             "lineup_batter_number": lineup_number,
+            "lineup_strip_confidence": lineup_strip_confidence,
             "fields": {
                 field_name: sample.normalized_text or sample.raw_text
                 for field_name, sample in sorted(samples_by_field.items())

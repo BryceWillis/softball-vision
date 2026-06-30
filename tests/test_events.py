@@ -5,6 +5,7 @@ from pathlib import Path
 from sidelinehd_extractor.events import (
     _at_bat_spacing_for_roster_match,
     _enrich_states_digit_runs,
+    _lineup_is_highlight_confirmed,
     _resolve_lineup_digit_run,
     detect_events,
     detect_events_file,
@@ -110,14 +111,20 @@ class EventDetectionTests(unittest.TestCase):
                     inning=1,
                     half=HalfInning.TOP,
                     batter_number="26",
-                    metadata={"batter_number_source": "lineup_strip"},
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
+                    },
                 ),
                 OverlayState(
                     timestamp_seconds=605,
                     inning=1,
                     half=HalfInning.TOP,
                     batter_number="26",
-                    metadata={"batter_number_source": "lineup_strip"},
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
+                    },
                 ),
             ],
             roster=roster,
@@ -128,6 +135,123 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(at_bat.player_number, "26")
         self.assertEqual(at_bat.metadata["roster_match_source"], "lineup_number")
         self.assertEqual(at_bat.metadata["batter_number_source"], "lineup_strip")
+        self.assertEqual(at_bat.metadata["lineup_strip_confidence"], "lineup_highlight")
+
+    def test_lineup_is_highlight_confirmed_returns_true_for_lineup_highlight(self):
+        state = OverlayState(
+            600,
+            metadata={"lineup_strip_confidence": "lineup_highlight"},
+        )
+
+        self.assertTrue(_lineup_is_highlight_confirmed(state))
+
+    def test_lineup_is_highlight_confirmed_returns_false_for_full_strip(self):
+        state = OverlayState(
+            600,
+            metadata={"lineup_strip_confidence": "lineup_full_strip"},
+        )
+
+        self.assertFalse(_lineup_is_highlight_confirmed(state))
+
+    def test_lineup_is_highlight_confirmed_returns_false_for_none(self):
+        self.assertFalse(_lineup_is_highlight_confirmed(OverlayState(600)))
+
+    def test_detect_events_suppresses_full_strip_lineup_event_even_when_rostered(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="15", full_name="Riley S.", display_name="Riley S.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_full_strip",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_full_strip",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [EventType.HALF_INNING_START],
+        )
+
+    def test_detect_events_emits_at_bat_from_lineup_highlight_without_roster(self):
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
+                    },
+                ),
+            ]
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_number, "26")
+
+    def test_detect_events_suppresses_full_strip_event_without_roster(self):
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_full_strip",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_full_strip",
+                    },
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [EventType.HALF_INNING_START],
+        )
 
     def test_detect_events_ignores_unrostered_lineup_number_when_roster_is_available(self):
         roster = Roster(
@@ -296,6 +420,7 @@ class EventDetectionTests(unittest.TestCase):
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=2 lineup=15",
                         "lineup_strip_number": "15",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
                 OverlayState(
@@ -308,6 +433,7 @@ class EventDetectionTests(unittest.TestCase):
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=2 lineup=15",
                         "lineup_strip_number": "15",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
             ],
@@ -485,6 +611,7 @@ class EventDetectionTests(unittest.TestCase):
                     metadata={
                         "batter_name": "Ava T.",
                         "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
                 OverlayState(
@@ -495,6 +622,7 @@ class EventDetectionTests(unittest.TestCase):
                     metadata={
                         "batter_name": "Ava T.",
                         "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
             ],
@@ -521,6 +649,7 @@ class EventDetectionTests(unittest.TestCase):
                     metadata={
                         "batter_name": "#4",
                         "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
                 OverlayState(
@@ -531,6 +660,7 @@ class EventDetectionTests(unittest.TestCase):
                     metadata={
                         "batter_name": "#4",
                         "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
                     },
                 ),
             ],
@@ -706,13 +836,37 @@ class EventDetectionTests(unittest.TestCase):
             inning=1,
             half=HalfInning.TOP,
             batter_number="265",
-            metadata={"batter_number_source": "lineup_strip"},
+            metadata={
+                "batter_number_source": "lineup_strip",
+                "lineup_strip_confidence": "lineup_highlight",
+            },
         )
 
         enriched = _enrich_states_digit_runs([state], roster)
 
         self.assertEqual(enriched[0].batter_number, "26")
         self.assertEqual(enriched[0].metadata["batter_number_digit_run_original"], "265")
+
+    def test_enrich_states_digit_runs_skips_full_strip_states(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+        state = OverlayState(
+            timestamp_seconds=600,
+            inning=1,
+            half=HalfInning.TOP,
+            batter_number="265",
+            metadata={
+                "batter_number_source": "lineup_strip",
+                "lineup_strip_confidence": "lineup_full_strip",
+            },
+        )
+
+        enriched = _enrich_states_digit_runs([state], roster)
+
+        self.assertEqual(enriched[0].batter_number, "265")
+        self.assertNotIn("batter_number_digit_run_original", enriched[0].metadata)
 
     def test_detect_events_file_writes_events_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:

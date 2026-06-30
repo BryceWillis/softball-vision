@@ -207,6 +207,9 @@ def detect_events(
                         "batter_card_name": state.metadata.get("batter_name"),
                         "roster_match_source": roster_match_source,
                         "batter_number_source": state.metadata.get("batter_number_source"),
+                        "lineup_strip_confidence": state.metadata.get(
+                            "lineup_strip_confidence"
+                        ),
                         "batter_number_disagreement": state.metadata.get(
                             "batter_number_disagreement"
                         ),
@@ -447,6 +450,8 @@ def _is_plausible_batter_source(
 
     source = state.metadata.get("batter_number_source")
     if source == "lineup_strip":
+        if not _lineup_is_highlight_confirmed(state):
+            return False
         if roster is None:
             return True
         return _has_roster_match_for_state(state, roster)
@@ -478,6 +483,12 @@ def _has_roster_match_for_state(state: OverlayState, roster: Roster) -> bool:
     )
 
 
+def _lineup_is_highlight_confirmed(state: OverlayState) -> bool:
+    """Return true when lineup-strip OCR came from the highlighted chip."""
+
+    return state.metadata.get("lineup_strip_confidence") == "lineup_highlight"
+
+
 def _preferred_lineup_number_for_state(
     state: OverlayState,
     roster: Roster,
@@ -485,7 +496,7 @@ def _preferred_lineup_number_for_state(
     """Return active lineup number when it should override a weak card number."""
 
     source = state.metadata.get("batter_number_source")
-    lineup_number = _active_lineup_number_for_state(state, roster)
+    lineup_number = _highlight_lineup_number_for_state(state, roster)
     if not lineup_number:
         return None
     if source == "lineup_strip":
@@ -498,6 +509,17 @@ def _preferred_lineup_number_for_state(
     if batter_name and _jersey_number_from_text(str(batter_name)):
         return None
     return lineup_number
+
+
+def _highlight_lineup_number_for_state(
+    state: OverlayState,
+    roster: Roster,
+) -> Optional[str]:
+    """Return a rostered lineup number only from highlight-confirmed OCR."""
+
+    if not _lineup_is_highlight_confirmed(state):
+        return None
+    return _active_lineup_number_for_state(state, roster)
 
 
 def _active_lineup_number_for_state(
@@ -548,6 +570,7 @@ def _enrich_states_digit_runs(
     for state in states:
         if (
             state.metadata.get("batter_number_source") == "lineup_strip"
+            and _lineup_is_highlight_confirmed(state)
             and state.batter_number
             and len(state.batter_number) > 2
         ):

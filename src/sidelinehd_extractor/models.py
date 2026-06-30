@@ -122,6 +122,7 @@ class OCRSample:
     normalized_text: Optional[str] = None
     confidence: Optional[float] = None
     crop_path: Optional[Path] = None
+    source_detail: Optional[str] = None
     created_at: datetime = field(default_factory=_utc_now)
 
     def __post_init__(self) -> None:

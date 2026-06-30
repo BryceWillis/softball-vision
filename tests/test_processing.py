@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sidelinehd_extractor.models import OverlayTemplate, RegionFraction, Video
+from sidelinehd_extractor.ocr import OCRBackendResult
 from sidelinehd_extractor.processing import process_video, sample_timestamps, select_template_regions
 
 
@@ -108,6 +109,40 @@ class ProcessingTests(unittest.TestCase):
             probe.assert_called_once_with(Path("game.mp4"), compute_hash=True)
             self.assertIn('"sha256": "abc123"', result.manifest_path.read_text())
             self.assertIn('"compute_video_hash": true', result.manifest_path.read_text())
+
+    def test_process_video_persists_ocr_source_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={"lineup_strip": RegionFraction(0, 0, 0.1, 0.1)},
+            )
+
+            def ocr(_image, _field_name):
+                return OCRBackendResult(
+                    text="26\n",
+                    normalized_text="26",
+                    backend="test",
+                    source_detail="lineup_highlight",
+                )
+
+            with patch(
+                "sidelinehd_extractor.processing.probe_video",
+                return_value=Video(Path("game.mp4"), duration_seconds=0.0, width=10, height=10, fps=30),
+            ):
+                with patch("sidelinehd_extractor.processing.read_frames_at", return_value=[(0.0, object())]):
+                    with patch("sidelinehd_extractor.processing.crop_frame", return_value=object()):
+                        result = process_video(
+                            video_path=Path("game.mp4"),
+                            output_dir=Path(directory),
+                            template=template,
+                            save_crops=False,
+                            ocr=ocr,
+                        )
+
+            self.assertIn(
+                '"source_detail": "lineup_highlight"',
+                result.samples_path.read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":

@@ -98,6 +98,9 @@ def _review_flags(
                 flags_by_index[index].append("missing-player")
             if event.metadata.get("batter_number_source") == "lineup_strip":
                 flags_by_index[index].append("lineup-recovered")
+                if event.metadata.get("lineup_strip_confidence") != "lineup_highlight":
+                    confidence = event.metadata.get("lineup_strip_confidence") or "unknown"
+                    flags_by_index[index].append(f"lineup-unconfirmed={confidence}")
             disagreement = event.metadata.get("batter_number_disagreement")
             if disagreement:
                 flags_by_index[index].append(f"card-vs-lineup={disagreement}")
