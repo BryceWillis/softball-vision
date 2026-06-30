@@ -108,6 +108,20 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(state.batter_number, "26")
         self.assertEqual(state.metadata["batter_number_source"], "lineup_strip")
 
+    def test_state_from_samples_prefers_active_lineup_strip_over_static_batter_number(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "lineup_strip": OCRSample(600.0, "lineup_strip", "5", normalized_text="5"),
+                "batter_number": OCRSample(600.0, "batter_number", "213", normalized_text="213"),
+            },
+        )
+
+        self.assertEqual(state.batter_number, "5")
+        self.assertEqual(state.metadata["batter_number_source"], "lineup_strip")
+        self.assertEqual(state.metadata["lineup_strip_number"], "5")
+        self.assertEqual(state.metadata["lineup_batter_number"], "213")
+
     def test_state_from_samples_prefers_batter_card_over_lineup_number(self):
         state = state_from_samples(
             600.0,
@@ -127,6 +141,26 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(
             state.metadata["batter_number_disagreement"],
             "batter_card=15 lineup=18",
+        )
+
+    def test_state_from_samples_uses_active_lineup_number_for_disagreement(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "batter_card_number": OCRSample(
+                    600.0,
+                    "batter_card_number",
+                    "#13",
+                    normalized_text="#13",
+                ),
+                "lineup_strip": OCRSample(600.0, "lineup_strip", "2", normalized_text="2"),
+                "batter_number": OCRSample(600.0, "batter_number", "213", normalized_text="213"),
+            },
+        )
+
+        self.assertEqual(
+            state.metadata["batter_number_disagreement"],
+            "batter_card=13 lineup=2",
         )
 
     def test_parse_states_smooths_missing_inning_from_neighbors(self):

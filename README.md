@@ -193,6 +193,10 @@ At-bat starts closer than 45 seconds apart are ignored by default because they a
 usually scorekeeper-delay or transition-card artifacts. Adjust with
 `--min-at-bat-spacing 30` if a specific workflow needs a different threshold.
 
+When a roster is provided, roster-confirmed at-bats use a lower 20-second minimum
+spacing so fast innings with short plate appearances are not missed. Override with
+`--min-at-bat-spacing-roster-confirmed 15` if needed.
+
 Create an auditable processing run:
 
 ```sh
@@ -323,12 +327,16 @@ sidelinehd-extractor detect-events runs/YOUR_RUN \
 Review detected events before posting:
 
 ```sh
-sidelinehd-extractor review-events runs/YOUR_RUN
-sidelinehd-extractor review-events runs/YOUR_RUN --kind at-bats
+sidelinehd-extractor review-events runs/YOUR_RUN --kind at-bats \
+  --roster rosters/your_team.csv
 ```
 
 The review table includes lightweight flags such as close at-bats, missing player
-data, and OCR jersey-number mismatches.
+data, and OCR jersey-number mismatches. Pass `--roster` to enable additional
+roster-aware flags: `unrostered-card-number` (card read a number not in the roster),
+`garbled-card-name` (OCR produced noise with no recognizable name), and
+`lineup-had-rostered-candidate` (the lineup strip contained a rostered number while
+the card read a different one).
 
 Export pasteable text:
 
@@ -355,10 +363,12 @@ For a Markdown report of only questionable events, including raw OCR and copyabl
 correction examples:
 
 ```sh
-sidelinehd-extractor review-report runs/YOUR_RUN --kind at-bats
+sidelinehd-extractor review-report runs/YOUR_RUN --kind at-bats \
+  --roster rosters/your_team.csv
 ```
 
-By default, this writes `runs/YOUR_RUN/review_report.md`.
+By default, this writes `runs/YOUR_RUN/review_report.md`. Adding `--roster` enables
+the same roster-aware flags described under `review-events` above.
 
 ```csv
 event_type,timestamp,field,value,match_window_seconds,reason

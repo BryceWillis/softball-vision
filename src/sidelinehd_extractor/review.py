@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
 from sidelinehd_extractor.exports import format_timestamp
-from sidelinehd_extractor.models import Event, EventType
+from sidelinehd_extractor.models import Event, EventType, Roster
 
 
 @dataclass(frozen=True)
@@ -31,12 +32,13 @@ def collect_event_review_rows(
     events: Iterable[Event],
     kind: str = "all",
     options: Optional[ReviewOptions] = None,
+    roster: Optional[Roster] = None,
 ) -> List[ReviewRow]:
     """Return review rows for events, including lightweight suspicious flags."""
 
     options = options or ReviewOptions()
     selected_events = _filter_events(events, kind)
-    flags_by_index = _review_flags(selected_events, options)
+    flags_by_index = _review_flags(selected_events, options, roster=roster)
     return [
         ReviewRow(index=index, event=event, flags=flags_by_index[index - 1])
         for index, event in enumerate(selected_events, start=1)
@@ -47,10 +49,11 @@ def render_event_review(
     events: Iterable[Event],
     kind: str = "all",
     options: Optional[ReviewOptions] = None,
+    roster: Optional[Roster] = None,
 ) -> str:
     """Render detected events with lightweight suspicious flags."""
 
-    rows = collect_event_review_rows(events, kind=kind, options=options)
+    rows = collect_event_review_rows(events, kind=kind, options=options, roster=roster)
 
     lines = [f"{'#':>3}  {'time':<8} {'type':<19} {'label':<28} flags"]
     for row in rows:
@@ -80,7 +83,11 @@ def _filter_events(events: Iterable[Event], kind: str) -> List[Event]:
     raise ValueError(f"unsupported review kind: {kind}")
 
 
-def _review_flags(events: List[Event], options: ReviewOptions) -> List[List[str]]:
+def _review_flags(
+    events: List[Event],
+    options: ReviewOptions,
+    roster: Optional[Roster] = None,
+) -> List[List[str]]:
     flags_by_index: List[List[str]] = [[] for _ in events]
     previous_at_bat = None
     previous_chapter = None
@@ -94,7 +101,24 @@ def _review_flags(events: List[Event], options: ReviewOptions) -> List[List[str]
             disagreement = event.metadata.get("batter_number_disagreement")
             if disagreement:
                 flags_by_index[index].append(f"card-vs-lineup={disagreement}")
+                lineup_value = _lineup_value_from_disagreement(str(disagreement))
+                if lineup_value and _lineup_has_rostered_candidate(lineup_value, roster):
+                    flags_by_index[index].append(f"lineup-had-rostered-candidate={lineup_value}")
             ocr_player_number = event.metadata.get("ocr_player_number")
+            if (
+                roster is not None
+                and event.metadata.get("batter_number_source") == "batter_card"
+                and ocr_player_number
+                and not roster.name_for_number(str(ocr_player_number))
+            ):
+                flags_by_index[index].append(f"unrostered-card-number={ocr_player_number}")
+            batter_card_name = str(event.metadata.get("batter_card_name") or "")
+            if (
+                batter_card_name
+                and event.metadata.get("roster_match_source") != "name"
+                and _is_garbled_card_name(batter_card_name)
+            ):
+                flags_by_index[index].append("garbled-card-name")
             if (
                 ocr_player_number
                 and event.player_number
@@ -126,3 +150,35 @@ def _review_flags(events: List[Event], options: ReviewOptions) -> List[List[str]
 
 def _has_roster_number_match(event: Event) -> bool:
     return event.metadata.get("roster_match_source") in {"name", "lineup_number"}
+
+
+def _is_garbled_card_name(value: str) -> bool:
+    """Return true when OCR text has no player-like alphabetic token."""
+
+    return not any(_alphabetic_length(token) >= 3 for token in value.split())
+
+
+def _alphabetic_length(value: str) -> int:
+    return sum(1 for character in value if character.isalpha())
+
+
+def _lineup_value_from_disagreement(value: str) -> Optional[str]:
+    match = re.search(r"(?:^|\s)lineup=([0-9]+)", value)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _lineup_has_rostered_candidate(value: str, roster: Optional[Roster]) -> bool:
+    """Return true when a lineup digit run contains a rostered jersey number."""
+
+    if roster is None:
+        return False
+    digits = re.sub(r"\D+", "", value)
+    if not digits:
+        return False
+    for width in (1, 2):
+        for index in range(0, len(digits) - width + 1):
+            if roster.name_for_number(digits[index : index + width]):
+                return True
+    return False

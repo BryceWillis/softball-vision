@@ -70,6 +70,7 @@ def normalize_ocr_text(text: str, field_name: Optional[str] = None) -> str:
     if field_name in {
         "left_score",
         "right_score",
+        "lineup_strip",
         "batter_number",
         "on_deck_number",
         "batter_card_number",
@@ -143,15 +144,36 @@ def preprocess_for_ocr(image: object, field_name: str):
 def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
     """Run Tesseract OCR on an OpenCV image array."""
 
-    import cv2
-
     ensure_tesseract_available()
+    if field_name == "lineup_strip":
+        highlighted = _extract_highlighted_lineup_crop(image)
+        if highlighted is not None:
+            processed_highlighted = preprocess_for_ocr(highlighted, "batter_number")
+            highlighted_result = _tesseract_ocr_preprocessed_image(
+                processed_highlighted,
+                OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
+                field_name,
+            )
+            if highlighted_result.normalized_text:
+                return highlighted_result
+
     processed = preprocess_for_ocr(image, field_name)
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+    return _tesseract_ocr_preprocessed_image(processed, config, field_name)
+
+
+def _tesseract_ocr_preprocessed_image(
+    processed_image: object,
+    config: OCRFieldConfig,
+    field_name: str,
+) -> OCRBackendResult:
+    """Run Tesseract on an already prepared image."""
+
+    import cv2
 
     with tempfile.TemporaryDirectory() as directory:
         input_path = Path(directory) / "crop.png"
-        ok = cv2.imwrite(str(input_path), processed)
+        ok = cv2.imwrite(str(input_path), processed_image)
         if not ok:
             raise OCRError(f"Could not write temporary OCR image: {input_path}")
 
@@ -167,6 +189,44 @@ def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
         normalized_text=normalize_ocr_text(text, field_name),
         backend="tesseract",
     )
+
+
+def _extract_highlighted_lineup_crop(image: object):
+    """Return a tight crop around SidelineHD's highlighted lineup number."""
+
+    import cv2
+    import numpy as np
+
+    if image is None or not hasattr(image, "shape") or len(image.shape) != 3:
+        return None
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower = np.array([25, 60, 120], dtype=np.uint8)
+    upper = np.array([95, 255, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower, upper)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    height, width = image.shape[:2]
+    candidates = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = w * h
+        if area < 12 or h < max(4, height * 0.25):
+            continue
+        candidates.append((area, x, y, w, h))
+    if not candidates:
+        return None
+
+    _, x, y, w, h = max(candidates)
+    pad_x = 1
+    pad_y = 1
+    left = max(0, x - pad_x)
+    right = min(width, x + w + pad_x)
+    top = max(0, y - pad_y)
+    bottom = min(height, y + h + pad_y)
+    return image[top:bottom, left:right]
 
 
 def ocr_image_file(path: Path, field_name: str, backend: str = "tesseract") -> OCRBackendResult:

@@ -1,7 +1,7 @@
 import unittest
 
-from sidelinehd_extractor.models import Event, EventType
-from sidelinehd_extractor.review import render_event_review
+from sidelinehd_extractor.models import Event, EventType, Roster, RosterPlayer
+from sidelinehd_extractor.review import _lineup_has_rostered_candidate, render_event_review
 
 
 class ReviewTests(unittest.TestCase):
@@ -71,9 +71,9 @@ class ReviewTests(unittest.TestCase):
             Event(
                 event_type=EventType.AT_BAT_START,
                 timestamp_seconds=600,
-                label="Caroline M. (#15)",
+                label="Riley S. (#15)",
                 player_number="15",
-                player_name="Caroline M.",
+                player_name="Riley S.",
                 metadata={"batter_number_disagreement": "batter_card=15 lineup=18"},
             ),
         ]
@@ -81,6 +81,70 @@ class ReviewTests(unittest.TestCase):
         text = render_event_review(events, kind="at-bats")
 
         self.assertIn("card-vs-lineup=batter_card=15 lineup=18", text)
+
+    def test_render_event_review_flags_unrostered_card_number_and_lineup_candidate(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+                RosterPlayer(number="5", full_name="Ava T.", display_name="Ava T."),
+            ],
+        )
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="#7",
+                player_number="7",
+                metadata={
+                    "ocr_player_number": "7",
+                    "batter_number_source": "batter_card",
+                    "batter_number_disagreement": "batter_card=7 lineup=265",
+                },
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats", roster=roster)
+
+        self.assertIn("unrostered-card-number=7", text)
+        self.assertIn("lineup-had-rostered-candidate=265", text)
+
+    def test_render_event_review_flags_garbled_card_name(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="#7",
+                player_number="7",
+                metadata={
+                    "batter_card_name": ">>",
+                    "batter_number_source": "batter_card",
+                    "roster_match_source": None,
+                },
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats", roster=roster)
+
+        self.assertIn("garbled-card-name", text)
+
+    def test_lineup_has_rostered_candidate_matches_exact_and_substrings(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+                RosterPlayer(number="5", full_name="Ava T.", display_name="Ava T."),
+            ],
+        )
+
+        self.assertTrue(_lineup_has_rostered_candidate("26", roster))
+        self.assertTrue(_lineup_has_rostered_candidate("265", roster))
+        self.assertFalse(_lineup_has_rostered_candidate("78", roster))
+        self.assertFalse(_lineup_has_rostered_candidate("265", None))
 
     def test_render_event_review_filters_chapters(self):
         events = [

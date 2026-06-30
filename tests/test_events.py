@@ -3,6 +3,9 @@ import unittest
 from pathlib import Path
 
 from sidelinehd_extractor.events import (
+    _at_bat_spacing_for_roster_match,
+    _enrich_states_digit_runs,
+    _resolve_lineup_digit_run,
     detect_events,
     detect_events_file,
     filter_at_bats_to_half,
@@ -54,10 +57,13 @@ class EventDetectionTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual([event.event_type for event in events], [
-            EventType.HALF_INNING_START,
-            EventType.AT_BAT_START,
-        ])
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                EventType.HALF_INNING_START,
+                EventType.AT_BAT_START,
+            ],
+        )
         self.assertEqual(events[0].label, "Top 1")
         self.assertEqual(events[1].label, "Maya R. (#22)")
 
@@ -154,11 +160,79 @@ class EventDetectionTests(unittest.TestCase):
             [EventType.HALF_INNING_START],
         )
 
+    def test_detect_events_ignores_unrostered_batter_card_number_when_roster_is_available(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={"batter_number_source": "batter_card"},
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={"batter_number_source": "batter_card"},
+                ),
+            ],
+            roster=roster,
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [EventType.HALF_INNING_START],
+        )
+
+    def test_detect_events_ignores_unrostered_batter_card_with_unmatched_ocr_name(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={
+                        "batter_name": "Noisy Text",
+                        "batter_number_source": "batter_card",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={
+                        "batter_name": "Noisy Text",
+                        "batter_number_source": "batter_card",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [EventType.HALF_INNING_START],
+        )
+
     def test_detect_events_named_card_match_is_not_overridden_by_lineup_disagreement(self):
         roster = Roster(
             team_name="Stars",
             players=[
-                RosterPlayer(number="15", full_name="Caroline M.", display_name="Caroline M."),
+                RosterPlayer(number="15", full_name="Riley S.", display_name="Riley S."),
                 RosterPlayer(number="18", full_name="Other Player", display_name="Other Player"),
             ],
         )
@@ -171,7 +245,7 @@ class EventDetectionTests(unittest.TestCase):
                     half=HalfInning.TOP,
                     batter_number="15",
                     metadata={
-                        "batter_name": "Caroline M.",
+                        "batter_name": "Riley S.",
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=15 lineup=18",
                     },
@@ -182,7 +256,7 @@ class EventDetectionTests(unittest.TestCase):
                     half=HalfInning.TOP,
                     batter_number="15",
                     metadata={
-                        "batter_name": "Caroline M.",
+                        "batter_name": "Riley S.",
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=15 lineup=18",
                     },
@@ -192,13 +266,58 @@ class EventDetectionTests(unittest.TestCase):
         )
 
         at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
-        self.assertEqual(at_bat.player_name, "Caroline M.")
+        self.assertEqual(at_bat.player_name, "Riley S.")
         self.assertEqual(at_bat.player_number, "15")
         self.assertEqual(at_bat.metadata["roster_match_source"], "name")
         self.assertEqual(
             at_bat.metadata["batter_number_disagreement"],
             "batter_card=15 lineup=18",
         )
+        self.assertEqual(at_bat.metadata["batter_card_name"], "Riley S.")
+
+    def test_detect_events_prefers_active_lineup_over_nameless_card_disagreement(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="2", full_name="Emma B.", display_name="Emma B."),
+                RosterPlayer(number="15", full_name="Riley S.", display_name="Riley S."),
+            ],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="2",
+                    metadata={
+                        "batter_name": "",
+                        "batter_number_source": "batter_card",
+                        "batter_number_disagreement": "batter_card=2 lineup=15",
+                        "lineup_strip_number": "15",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="2",
+                    metadata={
+                        "batter_name": "",
+                        "batter_number_source": "batter_card",
+                        "batter_number_disagreement": "batter_card=2 lineup=15",
+                        "lineup_strip_number": "15",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Riley S.")
+        self.assertEqual(at_bat.player_number, "15")
+        self.assertEqual(at_bat.metadata["roster_match_source"], "lineup_number")
 
     def test_detect_events_uses_roster_number_from_ocr_name(self):
         roster = Roster(
@@ -301,11 +420,7 @@ class EventDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [
-                event.label
-                for event in events
-                if event.event_type == EventType.AT_BAT_START
-            ],
+            [event.label for event in events if event.event_type == EventType.AT_BAT_START],
             ["Chloe W. (#12)"],
         )
 
@@ -354,6 +469,78 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(at_bat.player_number, "5")
         self.assertEqual(at_bat.label, "Ava T. (#5)")
 
+    def test_detect_events_uses_roster_name_when_lineup_digit_run_is_invalid(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="5", full_name="Ava T.", display_name="Ava T.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="213",
+                    metadata={
+                        "batter_name": "Ava T.",
+                        "batter_number_source": "lineup_strip",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="213",
+                    metadata={
+                        "batter_name": "Ava T.",
+                        "batter_number_source": "lineup_strip",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Ava T.")
+        self.assertEqual(at_bat.player_number, "5")
+
+    def test_detect_events_uses_jersey_number_from_card_name_text(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="4", full_name="Sofia L.", display_name="Sofia L.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="213",
+                    metadata={
+                        "batter_name": "#4",
+                        "batter_number_source": "lineup_strip",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="213",
+                    metadata={
+                        "batter_name": "#4",
+                        "batter_number_source": "lineup_strip",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Sofia L.")
+        self.assertEqual(at_bat.player_number, "4")
+
     def test_detect_events_emits_batter_changes(self):
         events = detect_events(
             [
@@ -368,6 +555,164 @@ class EventDetectionTests(unittest.TestCase):
             [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
             ["22", "7"],
         )
+
+    def test_detect_events_allows_short_spacing_for_name_confirmed_batters(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="22",
+                    metadata={"batter_name": "Maya R."},
+                ),
+                OverlayState(
+                    605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="22",
+                    metadata={"batter_name": "Maya R."},
+                ),
+                OverlayState(
+                    622,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_name": "Amelia V."},
+                ),
+                OverlayState(
+                    627,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_name": "Amelia V."},
+                ),
+            ],
+            roster=roster,
+        )
+
+        self.assertEqual(
+            [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
+            ["22", "26"],
+        )
+
+    def test_detect_events_keeps_long_spacing_for_unconfirmed_batters(self):
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP, batter_number="22"),
+                OverlayState(605, inning=1, half=HalfInning.TOP, batter_number="22"),
+                OverlayState(622, inning=1, half=HalfInning.TOP, batter_number="26"),
+                OverlayState(627, inning=1, half=HalfInning.TOP, batter_number="26"),
+            ]
+        )
+
+        self.assertEqual(
+            [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
+            ["22"],
+        )
+
+    def test_detect_events_honors_custom_roster_confirmed_spacing(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="22",
+                    metadata={"batter_name": "Maya R."},
+                ),
+                OverlayState(
+                    605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="22",
+                    metadata={"batter_name": "Maya R."},
+                ),
+                OverlayState(
+                    622,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_name": "Amelia V."},
+                ),
+                OverlayState(
+                    627,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_name": "Amelia V."},
+                ),
+            ],
+            roster=roster,
+            min_at_bat_spacing_roster_confirmed_seconds=30,
+        )
+
+        self.assertEqual(
+            [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
+            ["22"],
+        )
+
+    def test_at_bat_spacing_for_roster_match_uses_roster_confirmed_floor(self):
+        self.assertEqual(_at_bat_spacing_for_roster_match("name", 45, 20), 20)
+        self.assertEqual(_at_bat_spacing_for_roster_match("number", 45, 20), 20)
+        self.assertEqual(_at_bat_spacing_for_roster_match("lineup_number", 45, 20), 20)
+        self.assertEqual(_at_bat_spacing_for_roster_match(None, 45, 20), 45)
+        self.assertEqual(_at_bat_spacing_for_roster_match("other", 45, 20), 45)
+
+    def test_resolve_lineup_digit_run_returns_single_roster_match(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        self.assertEqual(_resolve_lineup_digit_run("265", roster), "26")
+        self.assertIsNone(_resolve_lineup_digit_run("26", roster))
+        self.assertIsNone(_resolve_lineup_digit_run("789", roster))
+
+    def test_resolve_lineup_digit_run_rejects_ambiguous_matches(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="2", full_name="Emma B.", display_name="Emma B."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+
+        self.assertIsNone(_resolve_lineup_digit_run("265", roster))
+
+    def test_enrich_states_digit_runs_resolves_unambiguous_lineup_numbers(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+        state = OverlayState(
+            timestamp_seconds=600,
+            inning=1,
+            half=HalfInning.TOP,
+            batter_number="265",
+            metadata={"batter_number_source": "lineup_strip"},
+        )
+
+        enriched = _enrich_states_digit_runs([state], roster)
+
+        self.assertEqual(enriched[0].batter_number, "26")
+        self.assertEqual(enriched[0].metadata["batter_number_digit_run_original"], "265")
 
     def test_detect_events_file_writes_events_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -461,11 +806,7 @@ class EventDetectionTests(unittest.TestCase):
         events = detect_events(states)
 
         self.assertEqual(
-            [
-                event.label
-                for event in events
-                if event.event_type == EventType.HALF_INNING_START
-            ],
+            [event.label for event in events if event.event_type == EventType.HALF_INNING_START],
             ["Top 1", "Top 2"],
         )
 
@@ -517,10 +858,10 @@ class EventDetectionTests(unittest.TestCase):
 
         events = detect_events(states)
 
-        chapters = [
-            event for event in events if event.event_type == EventType.HALF_INNING_START
-        ]
-        self.assertEqual([(event.timestamp_seconds, event.label) for event in chapters], [(535, "Top 1")])
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual(
+            [(event.timestamp_seconds, event.label) for event in chapters], [(535, "Top 1")]
+        )
         self.assertEqual(
             export_youtube_chapters(events, include_credit=False),
             "0:00 Pregame\n8:55 Top 1",
@@ -657,19 +998,11 @@ class EventDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [
-                event.label
-                for event in events
-                if event.event_type == EventType.HALF_INNING_START
-            ],
+            [event.label for event in events if event.event_type == EventType.HALF_INNING_START],
             ["Top 1", "Bottom 1", "Top 2"],
         )
         self.assertEqual(
-            [
-                event.player_number
-                for event in events
-                if event.event_type == EventType.AT_BAT_START
-            ],
+            [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
             ["22", "24"],
         )
 
@@ -811,11 +1144,7 @@ class EventDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [
-                event.player_number
-                for event in events
-                if event.event_type == EventType.AT_BAT_START
-            ],
+            [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
             ["5", "3"],
         )
         self.assertEqual(

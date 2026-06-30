@@ -5,6 +5,7 @@ from unittest.mock import patch
 from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
     OCRFieldConfig,
+    _extract_highlighted_lineup_crop,
     _tesseract_install_hint,
     _tesseract_command,
     create_ocr_backend,
@@ -51,6 +52,20 @@ class OCRTests(unittest.TestCase):
     def test_preprocess_for_ocr_rejects_non_image_object(self):
         with self.assertRaisesRegex(ValueError, "OpenCV image array"):
             preprocess_for_ocr(object(), "count")
+
+    def test_extract_highlighted_lineup_crop_finds_green_chip(self):
+        import cv2
+        import numpy as np
+
+        image = np.zeros((30, 120, 3), dtype=np.uint8)
+        image[:] = (35, 55, 65)
+        cv2.rectangle(image, (45, 7), (62, 24), (40, 220, 185), thickness=-1)
+
+        crop = _extract_highlighted_lineup_crop(image)
+
+        self.assertIsNotNone(crop)
+        self.assertGreaterEqual(crop.shape[0], 18)
+        self.assertGreaterEqual(crop.shape[1], 18)
 
     def test_tesseract_command_includes_psm_and_whitelist(self):
         command = _tesseract_command(

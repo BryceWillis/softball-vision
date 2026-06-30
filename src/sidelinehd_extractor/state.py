@@ -117,30 +117,37 @@ def parse_inning(value: Optional[str]) -> tuple:
     return inning, half
 
 
-def state_from_samples(timestamp_seconds: float, samples_by_field: Dict[str, OCRSample]) -> OverlayState:
+def state_from_samples(
+    timestamp_seconds: float, samples_by_field: Dict[str, OCRSample]
+) -> OverlayState:
     """Build one OverlayState from OCR samples at a single timestamp."""
 
     count_text = _sample_text(samples_by_field, "count")
     balls, strikes = parse_count(count_text)
     inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
     batter_card_text = _sample_text(samples_by_field, "batter_card_number")
+    lineup_strip_text = _sample_text(samples_by_field, "lineup_strip")
     lineup_text = _sample_text(samples_by_field, "batter_number")
     batter_card_number = parse_jersey_number(batter_card_text)
+    lineup_strip_number = parse_jersey_number(lineup_strip_text)
     lineup_number = parse_jersey_number(lineup_text)
+    active_lineup_number = lineup_strip_number or lineup_number
 
     if batter_card_number:
         batter_number = batter_card_number
         batter_number_source = "batter_card"
-    elif lineup_number:
-        batter_number = lineup_number
+    elif active_lineup_number:
+        batter_number = active_lineup_number
         batter_number_source = "lineup_strip"
     else:
         batter_number = None
         batter_number_source = None
 
     batter_number_disagreement = None
-    if batter_card_number and lineup_number and batter_card_number != lineup_number:
-        batter_number_disagreement = f"batter_card={batter_card_number} lineup={lineup_number}"
+    if batter_card_number and active_lineup_number and batter_card_number != active_lineup_number:
+        batter_number_disagreement = (
+            f"batter_card={batter_card_number} lineup={active_lineup_number}"
+        )
 
     return OverlayState(
         timestamp_seconds=timestamp_seconds,
@@ -153,6 +160,8 @@ def state_from_samples(timestamp_seconds: float, samples_by_field: Dict[str, OCR
             "batter_name": _sample_text(samples_by_field, "batter_card_name"),
             "batter_number_source": batter_number_source,
             "batter_number_disagreement": batter_number_disagreement,
+            "lineup_strip_number": lineup_strip_number,
+            "lineup_batter_number": lineup_number,
             "fields": {
                 field_name: sample.normalized_text or sample.raw_text
                 for field_name, sample in sorted(samples_by_field.items())
@@ -186,11 +195,7 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
         if inning is None:
             inning = previous_inning if previous_inning is not None else next_innings[index]
         if half is None:
-            if (
-                inning is not None
-                and previous_inning is not None
-                and inning > previous_inning
-            ):
+            if inning is not None and previous_inning is not None and inning > previous_inning:
                 half = HalfInning.TOP
             else:
                 half = previous_half if previous_half is not None else next_halves[index]

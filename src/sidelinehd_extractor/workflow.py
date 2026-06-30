@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -75,6 +76,7 @@ def run_game(
     batting_half: Optional[HalfInning] = None,
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
 ) -> RunGameResult:
     """Process video, detect events, and write both YouTube text exports."""
@@ -102,6 +104,17 @@ def run_game(
         roster=roster,
         batting_half=None if auto_detect_batting_half else batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
+        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+    )
+    _update_manifest_detection_config(
+        process_result.manifest_path,
+        {
+            "min_at_bat_spacing_seconds": min_at_bat_spacing_seconds,
+            "min_at_bat_spacing_roster_confirmed_seconds": (
+                min_at_bat_spacing_roster_confirmed_seconds
+            ),
+            "batting_half": "auto" if auto_detect_batting_half else _half_value(batting_half),
+        },
     )
 
     _stage(stage_progress, "export")
@@ -172,6 +185,7 @@ def run_youtube_game(
     batting_half: Optional[HalfInning] = None,
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     merge_output_format: str = "mp4",
@@ -216,6 +230,7 @@ def run_youtube_game(
         batting_half=batting_half,
         auto_detect_batting_half=auto_detect_batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
+        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
         batting_half_inference_progress=batting_half_inference_progress,
     )
     return RunYoutubeGameResult(download=download, run=run)
@@ -243,3 +258,19 @@ def _write_text_export(path: Path, text: str) -> None:
 def _stage(callback: Optional[Callable[[str], None]], name: str) -> None:
     if callback is not None:
         callback(name)
+
+
+def _update_manifest_detection_config(manifest_path: Path, values: dict) -> None:
+    if not manifest_path.exists():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    detection = manifest.get("detection")
+    if not isinstance(detection, dict):
+        detection = {}
+    detection.update(values)
+    manifest["detection"] = detection
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def _half_value(half: Optional[HalfInning]) -> str:
+    return half.value if half is not None else "both"

@@ -106,6 +106,7 @@ def _default_run_fields(args: argparse.Namespace) -> List[str]:
     return _parse_field_list(args.field) or [
         "inning",
         "count",
+        "lineup_strip",
         "batter_card_name",
         "batter_card_number",
         "batter_number",
@@ -164,7 +165,9 @@ def _cmd_download(args: argparse.Namespace) -> int:
 
 def _cmd_calibration_frames(args: argparse.Namespace) -> int:
     timestamps = parse_timestamp_list(args.timestamp) if args.timestamp else None
-    output_dir = args.output_dir or _calibration_output_dir(Path("calibration_frames"), args.video_path)
+    output_dir = args.output_dir or _calibration_output_dir(
+        Path("calibration_frames"), args.video_path
+    )
     result = extract_calibration_frames(
         video_path=args.video_path,
         output_dir=output_dir,
@@ -292,9 +295,11 @@ def _cmd_setup_roster(args: argparse.Namespace) -> int:
     display_output_path = output_path.expanduser().resolve()
     if is_tty:
         _print_roster_preview(roster)
-        response = input(
-            f"\nWrite {len(roster.players)} players to {display_output_path}? [Y/n] "
-        ).strip().lower()
+        response = (
+            input(f"\nWrite {len(roster.players)} players to {display_output_path}? [Y/n] ")
+            .strip()
+            .lower()
+        )
         if response and response not in {"y", "yes"}:
             print("Cancelled.", file=sys.stderr)
             return 1
@@ -387,6 +392,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         batting_half=_parse_batting_half(args.batting_half),
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -449,6 +455,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         batting_half=_parse_batting_half(args.batting_half),
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -510,6 +517,7 @@ def _cmd_detect_events(args: argparse.Namespace) -> int:
         roster=roster,
         batting_half=_parse_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
     )
     print(_to_json(result))
     return 0
@@ -530,7 +538,8 @@ def _load_events_for_cli(run_path: Path, corrections_path: Optional[Path] = None
 
 def _cmd_review_events(args: argparse.Namespace) -> int:
     events = _load_events_for_cli(args.run_path, corrections_path=args.corrections)
-    print(render_event_review(events, kind=args.kind))
+    roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
+    print(render_event_review(events, kind=args.kind, roster=roster))
     return 0
 
 
@@ -539,6 +548,7 @@ def _cmd_review_report(args: argparse.Namespace) -> int:
         run_path=args.run_path,
         output_path=args.output,
         kind=args.kind,
+        roster=load_roster(args.roster, team_name=args.team_name) if args.roster else None,
     )
     print(_to_json(result))
     return 0
@@ -593,7 +603,9 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         default=5.0,
         help="Seconds between sampled frames.",
     )
-    parser.add_argument("--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS.")
+    parser.add_argument(
+        "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
+    )
     parser.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
     parser.add_argument("--ocr", choices=("none", "tesseract"), default="tesseract")
     parser.add_argument(
@@ -609,7 +621,7 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         help=(
             "Template field to process. Repeatable or comma-separated. Defaults to "
-            "inning,count,batter_card_name,batter_card_number."
+            "inning,count,lineup_strip,batter_card_name,batter_card_number,batter_number."
         ),
     )
     parser.add_argument("--no-crops", action="store_true", help="Do not write crop image files.")
@@ -623,7 +635,9 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         help="Output prefix for text exports, such as scratch/full.",
     )
-    parser.add_argument("--corrections", type=Path, help="Optional corrections CSV to apply to exports.")
+    parser.add_argument(
+        "--corrections", type=Path, help="Optional corrections CSV to apply to exports."
+    )
     parser.add_argument(
         "--chapter-intro-label",
         default="Pregame",
@@ -654,6 +668,14 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         default=45.0,
         help="Minimum seconds between emitted at-bat starts.",
     )
+    parser.add_argument(
+        "--min-at-bat-spacing-roster-confirmed",
+        type=float,
+        default=20.0,
+        dest="min_at_bat_spacing_roster_confirmed",
+        metavar="SECONDS",
+        help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -666,7 +688,9 @@ def build_parser() -> argparse.ArgumentParser:
     download = subparsers.add_parser("download", help="Download a YouTube video with yt-dlp.")
     download.add_argument("url")
     download.add_argument("--output-dir", "-o", type=Path, default=Path("videos"))
-    download.add_argument("--format", default=DEFAULT_FORMAT_SELECTOR, help="yt-dlp format selector.")
+    download.add_argument(
+        "--format", default=DEFAULT_FORMAT_SELECTOR, help="yt-dlp format selector."
+    )
     download.add_argument("--merge-output-format", default="mp4")
     download.add_argument(
         "--youtube-client",
@@ -697,7 +721,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
     )
     prepare_youtube.add_argument("--no-info-json", action="store_true")
-    prepare_youtube.add_argument("--playlist", action="store_true", help="Allow playlist downloads.")
+    prepare_youtube.add_argument(
+        "--playlist", action="store_true", help="Allow playlist downloads."
+    )
     prepare_youtube.set_defaults(func=_cmd_prepare_youtube)
 
     probe = subparsers.add_parser("probe", help="Print basic metadata for a video file.")
@@ -772,7 +798,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Seconds between sampled frames.",
     )
-    process.add_argument("--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS.")
+    process.add_argument(
+        "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
+    )
     process.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
     process.add_argument("--ocr", choices=("none", "tesseract"), default="none")
     process.add_argument(
@@ -806,7 +834,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text file with lines like '#26 Amelia V.', or '-' for stdin.",
     )
     make_roster.add_argument("--output", "-o", type=Path, default=Path("roster.csv"))
-    make_roster.add_argument("--team-name", help="Team name for JSON summaries and future metadata.")
+    make_roster.add_argument(
+        "--team-name", help="Team name for JSON summaries and future metadata."
+    )
     make_roster.set_defaults(func=_cmd_make_roster)
 
     setup_roster = subparsers.add_parser(
@@ -878,6 +908,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=45.0,
         help="Minimum seconds between emitted at-bat starts.",
     )
+    detect_events.add_argument(
+        "--min-at-bat-spacing-roster-confirmed",
+        type=float,
+        default=20.0,
+        dest="min_at_bat_spacing_roster_confirmed",
+        metavar="SECONDS",
+        help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
+    )
     detect_events.set_defaults(func=_cmd_detect_events)
 
     review_events = subparsers.add_parser(
@@ -885,8 +923,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print detected events with suspicious-review flags.",
     )
     review_events.add_argument("run_path", type=Path, help="Run directory or events.jsonl file.")
-    review_events.add_argument("--kind", "-k", choices=("all", "chapters", "at-bats"), default="all")
-    review_events.add_argument("--corrections", type=Path, help="Optional corrections CSV to preview.")
+    review_events.add_argument(
+        "--kind", "-k", choices=("all", "chapters", "at-bats"), default="all"
+    )
+    review_events.add_argument(
+        "--corrections", type=Path, help="Optional corrections CSV to preview."
+    )
+    review_events.add_argument(
+        "--roster", type=Path, help="Roster CSV or JSON file for roster-aware flags."
+    )
+    review_events.add_argument("--team-name", help="Team name override for roster CSV/JSON.")
     review_events.set_defaults(func=_cmd_review_events)
 
     review_report = subparsers.add_parser(
@@ -894,15 +940,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write a Markdown report for questionable events with raw OCR and correction examples.",
     )
     review_report.add_argument("run_path", type=Path, help="Run directory or events.jsonl file.")
-    review_report.add_argument("--kind", "-k", choices=("all", "chapters", "at-bats"), default="all")
+    review_report.add_argument(
+        "--kind", "-k", choices=("all", "chapters", "at-bats"), default="all"
+    )
     review_report.add_argument("--output", "-o", type=Path, help="Output Markdown path.")
+    review_report.add_argument(
+        "--roster", type=Path, help="Roster CSV or JSON file for roster-aware flags."
+    )
+    review_report.add_argument("--team-name", help="Team name override for roster CSV/JSON.")
     review_report.set_defaults(func=_cmd_review_report)
 
     export = subparsers.add_parser("export", help="Export detected events as pasteable text.")
     export.add_argument("run_path", type=Path)
     export.add_argument("--kind", "-k", choices=("chapters", "at-bats"), default="chapters")
     export.add_argument("--output", "-o", type=Path, help="Optional text output file.")
-    export.add_argument("--corrections", type=Path, help="Optional corrections CSV to apply before export.")
+    export.add_argument(
+        "--corrections", type=Path, help="Optional corrections CSV to apply before export."
+    )
     export.add_argument(
         "--chapter-intro-label",
         default="Pregame",
@@ -938,7 +992,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only write the Markdown paste kit; skip the HTML copy helper.",
     )
-    publish_helper.add_argument("--game-name", help="Override game name used in the kit title and folder.")
+    publish_helper.add_argument(
+        "--game-name", help="Override game name used in the kit title and folder."
+    )
     publish_helper.set_defaults(func=_cmd_publish_helper)
 
     return parser

@@ -56,6 +56,8 @@ class CLITests(unittest.TestCase):
                 "top",
                 "--min-at-bat-spacing",
                 "60",
+                "--min-at-bat-spacing-roster-confirmed",
+                "25",
             ]
         )
         run_youtube = parser.parse_args(
@@ -95,6 +97,8 @@ class CLITests(unittest.TestCase):
                 "top",
                 "--min-at-bat-spacing",
                 "60",
+                "--min-at-bat-spacing-roster-confirmed",
+                "25",
             ]
         )
 
@@ -119,6 +123,7 @@ class CLITests(unittest.TestCase):
             "no_at_bat_inning_headers",
             "batting_half",
             "min_at_bat_spacing",
+            "min_at_bat_spacing_roster_confirmed",
         ]
         for attribute in shared_attributes:
             with self.subTest(attribute=attribute):
@@ -146,6 +151,7 @@ class CLITests(unittest.TestCase):
             [
                 "inning",
                 "count",
+                "lineup_strip",
                 "batter_card_name",
                 "batter_card_number",
                 "batter_number",
@@ -302,11 +308,7 @@ class CLITests(unittest.TestCase):
                     ]
                 )
 
-            prompts = [
-                call.args[0]
-                for call in input_mock.call_args_list
-                if call.args
-            ]
+            prompts = [call.args[0] for call in input_mock.call_args_list if call.args]
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr.getvalue(), "")

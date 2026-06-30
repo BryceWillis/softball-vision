@@ -10,7 +10,7 @@ from typing import Dict, Iterable, List, Optional
 
 from sidelinehd_extractor.events import load_events, load_states
 from sidelinehd_extractor.exports import format_timestamp
-from sidelinehd_extractor.models import Event, EventType, OCRSample, OverlayState
+from sidelinehd_extractor.models import Event, EventType, OCRSample, OverlayState, Roster
 from sidelinehd_extractor.review import ReviewOptions, collect_event_review_rows
 from sidelinehd_extractor.state import group_samples_by_timestamp, load_ocr_samples
 
@@ -28,6 +28,7 @@ def write_review_report(
     output_path: Optional[Path] = None,
     kind: str = "all",
     options: Optional[ReviewOptions] = None,
+    roster: Optional[Roster] = None,
 ) -> ReviewReportResult:
     """Write a Markdown report for events with review flags."""
 
@@ -48,11 +49,16 @@ def write_review_report(
         run_path=run_dir,
         kind=kind,
         options=options,
+        roster=roster,
     )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(text + ("\n" if text else ""), encoding="utf-8")
-    flagged_count = sum(1 for row in collect_event_review_rows(events, kind=kind, options=options) if row.flags)
+    flagged_count = sum(
+        1
+        for row in collect_event_review_rows(events, kind=kind, options=options, roster=roster)
+        if row.flags
+    )
     return ReviewReportResult(output_path=destination, flagged_count=flagged_count)
 
 
@@ -63,10 +69,15 @@ def render_review_report(
     run_path: Optional[Path] = None,
     kind: str = "all",
     options: Optional[ReviewOptions] = None,
+    roster: Optional[Roster] = None,
 ) -> str:
     """Render a Markdown report for flagged events."""
 
-    rows = [row for row in collect_event_review_rows(events, kind=kind, options=options) if row.flags]
+    rows = [
+        row
+        for row in collect_event_review_rows(events, kind=kind, options=options, roster=roster)
+        if row.flags
+    ]
     state_list = sorted(states, key=lambda item: item.timestamp_seconds)
     sample_groups = group_samples_by_timestamp(samples)
 
@@ -113,7 +124,9 @@ def render_review_report(
         if exact_samples:
             lines.extend(_render_ocr_samples(exact_samples))
         else:
-            lines.extend(["### Raw OCR", "", "No exact OCR samples found for this event timestamp.", ""])
+            lines.extend(
+                ["### Raw OCR", "", "No exact OCR samples found for this event timestamp.", ""]
+            )
 
         lines.extend(_render_correction_examples(event))
 

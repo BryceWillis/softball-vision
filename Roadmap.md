@@ -1540,7 +1540,9 @@ Notes:
 ### 31. Tiered At-Bat Spacing Gate by Signal Confidence
 
 Source: CR-24 follow-up
-Status: Ready to implement
+Status: Done (Pass 6)
+
+`min_at_bat_spacing_roster_confirmed_seconds` parameter added to `detect_events()`, `run_game()`, `run_youtube_game()`, and both CLI detection commands (`run-game`, `run-youtube`, `detect-events`). Roster-confirmed signals use the lower 20-second floor; unconfirmed signals keep the original 45-second floor. Detection spacing settings written to `manifest.json`. 153 tests pass.
 
 The current 45-second minimum spacing is calibrated for unconfirmed detections and can suppress legitimate short at-bats in fast innings. On a real 2nd inning, four rostered at-bats were missed at 30–50 second spacing.
 
@@ -1721,7 +1723,9 @@ Acceptance criteria:
 ### 33. Full Lineup-Strip Digit-Run Parsing
 
 Source: Product backlog (CR-24 observation)
-Status: Ready to implement
+Status: Done (Pass 6)
+
+`lineup_strip` added to default run fields. `_extract_highlighted_lineup_crop()` in `ocr.py` uses HSV color detection to isolate the active batter chip before OCR (falls back to full-strip OCR if no highlight found). `_resolve_lineup_digit_run()` extracts the single unambiguous rostered number from fused digit strings (e.g. `"265"` → `"26"` when `#26` is rostered and `#5` is not, or returns `None` when ambiguous). State parsing now stores both `lineup_strip_number` (from full strip) and `lineup_batter_number` (from fixed crop) in metadata. `_preferred_lineup_number_for_state()` prefers active lineup over nameless batter-card reads. `_jersey_number_from_text()` handles `#N` OCR artifacts in the batter-name field. 153 tests pass.
 
 When the batter card is absent and the lineup-strip crop OCRs as a fused digit run like `265` or `426`, `_is_plausible_batter_state()` rejects it (jersey numbers longer than 2 digits are invalid). Those fused runs are often two adjacent roster numbers smeared by OCR. With a roster, the correct number can be extracted.
 

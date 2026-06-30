@@ -2,7 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sidelinehd_extractor.models import Event, EventType, HalfInning, OCRSample, OverlayState
+from sidelinehd_extractor.models import (
+    Event,
+    EventType,
+    HalfInning,
+    OCRSample,
+    OverlayState,
+    Roster,
+    RosterPlayer,
+)
 from sidelinehd_extractor.processing import write_jsonl
 from sidelinehd_extractor.review_report import render_review_report, write_review_report
 
@@ -57,7 +65,9 @@ class ReviewReportTests(unittest.TestCase):
             )
         ]
 
-        text = render_review_report(events=events, states=states, samples=samples, run_path=Path("runs/game"))
+        text = render_review_report(
+            events=events, states=states, samples=samples, run_path=Path("runs/game")
+        )
 
         self.assertIn("# Review Report", text)
         self.assertIn("Flagged events: 1", text)
@@ -83,10 +93,42 @@ class ReviewReportTests(unittest.TestCase):
             ),
         ]
 
-        text = render_review_report(events=events, states=[], samples=[], run_path=Path("runs/game"))
+        text = render_review_report(
+            events=events, states=[], samples=[], run_path=Path("runs/game")
+        )
 
         self.assertIn("Flagged events: 0", text)
         self.assertNotIn("## 10:00 Amelia V. (#26)", text)
+
+    def test_render_review_report_uses_roster_aware_flags(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="#7",
+                player_number="7",
+                metadata={
+                    "ocr_player_number": "7",
+                    "batter_number_source": "batter_card",
+                    "batter_number_disagreement": "batter_card=7 lineup=26",
+                },
+            ),
+        ]
+
+        text = render_review_report(
+            events=events,
+            states=[],
+            samples=[],
+            run_path=Path("runs/game"),
+            roster=roster,
+        )
+
+        self.assertIn("unrostered-card-number=7", text)
+        self.assertIn("lineup-had-rostered-candidate=26", text)
 
     def test_write_review_report_uses_run_files(self):
         with tempfile.TemporaryDirectory() as directory:

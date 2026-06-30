@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -106,6 +107,7 @@ def detect_events(
     roster: Optional[Roster] = None,
     batting_half: Optional[HalfInning] = None,
     min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
     batter_confirmation_window: int = 4,
     min_batter_observations: int = 2,
     half_inning_confirmation_window: int = 12,
@@ -114,6 +116,8 @@ def detect_events(
     """Detect half-inning and at-bat starts from parsed overlay states."""
 
     ordered_states = sorted(states, key=lambda item: item.timestamp_seconds)
+    if roster is not None:
+        ordered_states = _enrich_states_digit_runs(ordered_states, roster)
     events = []
     starts_at_zero = bool(ordered_states) and ordered_states[0].timestamp_seconds <= 0
     last_half_key: Optional[Tuple[int, HalfInning]] = None
@@ -158,6 +162,11 @@ def detect_events(
             player_name,
             name_to_number,
         )
+        at_bat_spacing_seconds = _at_bat_spacing_for_roster_match(
+            roster_match_source,
+            min_at_bat_spacing_seconds,
+            min_at_bat_spacing_roster_confirmed_seconds,
+        )
 
         if (
             _is_plausible_batter_identity(state, effective_batter_number, player_name)
@@ -166,7 +175,7 @@ def detect_events(
             and _has_minimum_at_bat_spacing(
                 state.timestamp_seconds,
                 last_at_bat_timestamp,
-                min_at_bat_spacing_seconds,
+                at_bat_spacing_seconds,
             )
             and effective_batter_number != last_batter_number
             and not _same_batter_name(player_name, last_batter_name)
@@ -195,9 +204,12 @@ def detect_events(
                         "strikes": state.strikes,
                         "source": "batter_number_change",
                         "ocr_player_number": state.batter_number,
+                        "batter_card_name": state.metadata.get("batter_name"),
                         "roster_match_source": roster_match_source,
                         "batter_number_source": state.metadata.get("batter_number_source"),
-                        "batter_number_disagreement": state.metadata.get("batter_number_disagreement"),
+                        "batter_number_disagreement": state.metadata.get(
+                            "batter_number_disagreement"
+                        ),
                     },
                 )
             )
@@ -216,6 +228,7 @@ def detect_events_file(
     roster: Optional[Roster] = None,
     batting_half: Optional[HalfInning] = None,
     min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
 ) -> EventDetectionResult:
     """Detect events from a states JSONL file and write events JSONL."""
 
@@ -226,6 +239,7 @@ def detect_events_file(
         roster=roster,
         batting_half=batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
+        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
     )
     write_jsonl(destination, events)
     return EventDetectionResult(input_path=source, output_path=destination, event_count=len(events))
@@ -306,9 +320,20 @@ def player_name_for_state(state: OverlayState, roster: Optional[Roster] = None) 
 
     batter_name = state.metadata.get("batter_name")
     if roster is not None and batter_name:
+        jersey_number = _jersey_number_from_text(str(batter_name))
+        if jersey_number:
+            roster_name = roster.name_for_number(jersey_number)
+            if roster_name:
+                return roster_name
         roster_number = roster.number_for_name(str(batter_name))
         if roster_number:
             roster_name = roster.name_for_number(roster_number)
+            if roster_name:
+                return roster_name
+    if roster is not None:
+        lineup_number = _preferred_lineup_number_for_state(state, roster)
+        if lineup_number:
+            roster_name = roster.name_for_number(lineup_number)
             if roster_name:
                 return roster_name
     if roster is not None and state.batter_number:
@@ -320,9 +345,15 @@ def player_name_for_state(state: OverlayState, roster: Optional[Roster] = None) 
     return str(batter_name)
 
 
-def player_number_for_state(state: OverlayState, player_name: Optional[str], roster: Optional[Roster]) -> Optional[str]:
+def player_number_for_state(
+    state: OverlayState, player_name: Optional[str], roster: Optional[Roster]
+) -> Optional[str]:
     """Prefer roster number by OCR name, then OCR number."""
 
+    if roster is not None:
+        lineup_number = _preferred_lineup_number_for_state(state, roster)
+        if lineup_number:
+            return lineup_number
     if roster is not None and player_name:
         roster_number = roster.number_for_name(player_name)
         if roster_number:
@@ -341,6 +372,8 @@ def roster_match_source_for_state(
     batter_name = state.metadata.get("batter_name")
     if batter_name and roster.number_for_name(str(batter_name)):
         return "name"
+    if _preferred_lineup_number_for_state(state, roster):
+        return "lineup_number"
     if state.batter_number and roster.name_for_number(state.batter_number):
         source = state.metadata.get("batter_number_source")
         return "lineup_number" if source == "lineup_strip" else "number"
@@ -396,6 +429,8 @@ def _is_plausible_batter_identity(
         return False
     if len(effective_batter_number) > 2:
         return False
+    if player_name and _looks_like_player_name(player_name):
+        return True
     if state.batter_number:
         return _is_plausible_batter_state(state)
     if not player_name:
@@ -408,19 +443,77 @@ def _is_plausible_batter_source(
     player_name: Optional[str],
     roster: Optional[Roster],
 ) -> bool:
-    """Reject unrostered lineup-strip numbers when a roster is present."""
+    """Reject weak unrostered batter sources when a roster is present."""
 
-    if state.metadata.get("batter_number_source") != "lineup_strip":
-        return True
+    source = state.metadata.get("batter_number_source")
+    if source == "lineup_strip":
+        if roster is None:
+            return True
+        return _has_roster_match_for_state(state, roster)
+    if source == "batter_card" and roster is not None:
+        if state.batter_number and not _has_roster_match_for_state(state, roster):
+            return False
     if roster is None:
         return True
-    return player_name is not None
+    return True
 
 
 def _is_selected_batting_half(state: OverlayState, batting_half: Optional[HalfInning]) -> bool:
     if batting_half is None:
         return True
     return state.half == batting_half
+
+
+def _has_roster_match_for_state(state: OverlayState, roster: Roster) -> bool:
+    batter_name = state.metadata.get("batter_name")
+    return bool(
+        (state.batter_number and roster.name_for_number(state.batter_number))
+        or _active_lineup_number_for_state(state, roster)
+        or (
+            batter_name
+            and _jersey_number_from_text(str(batter_name))
+            and roster.name_for_number(_jersey_number_from_text(str(batter_name)))
+        )
+        or (batter_name and roster.number_for_name(str(batter_name)))
+    )
+
+
+def _preferred_lineup_number_for_state(
+    state: OverlayState,
+    roster: Roster,
+) -> Optional[str]:
+    """Return active lineup number when it should override a weak card number."""
+
+    source = state.metadata.get("batter_number_source")
+    lineup_number = _active_lineup_number_for_state(state, roster)
+    if not lineup_number:
+        return None
+    if source == "lineup_strip":
+        return lineup_number
+    if source != "batter_card":
+        return None
+    batter_name = state.metadata.get("batter_name")
+    if batter_name and roster.number_for_name(str(batter_name)):
+        return None
+    if batter_name and _jersey_number_from_text(str(batter_name)):
+        return None
+    return lineup_number
+
+
+def _active_lineup_number_for_state(
+    state: OverlayState,
+    roster: Roster,
+) -> Optional[str]:
+    for key in ("lineup_strip_number", "lineup_batter_number"):
+        value = state.metadata.get(key)
+        if value and roster.name_for_number(str(value)):
+            return str(value)
+    disagreement = state.metadata.get("batter_number_disagreement")
+    if disagreement:
+        match = re.search(r"(?:^|\s)lineup=([0-9]{1,2})(?:\s|$)", str(disagreement))
+        if match and roster.name_for_number(match.group(1)):
+            return match.group(1)
+    return None
 
 
 def _has_minimum_at_bat_spacing(
@@ -431,6 +524,62 @@ def _has_minimum_at_bat_spacing(
     if previous_timestamp_seconds is None:
         return True
     return timestamp_seconds - previous_timestamp_seconds >= minimum_seconds
+
+
+def _at_bat_spacing_for_roster_match(
+    roster_match_source: Optional[str],
+    min_spacing_seconds: float,
+    min_spacing_roster_confirmed_seconds: float,
+) -> float:
+    """Return the spacing floor for a candidate at-bat based on signal strength."""
+
+    if roster_match_source in {"name", "number", "lineup_number"}:
+        return min_spacing_roster_confirmed_seconds
+    return min_spacing_seconds
+
+
+def _enrich_states_digit_runs(
+    states: List[OverlayState],
+    roster: Roster,
+) -> List[OverlayState]:
+    """Resolve unambiguous fused lineup-strip digit runs before event detection."""
+
+    enriched = []
+    for state in states:
+        if (
+            state.metadata.get("batter_number_source") == "lineup_strip"
+            and state.batter_number
+            and len(state.batter_number) > 2
+        ):
+            resolved = _resolve_lineup_digit_run(state.batter_number, roster)
+            if resolved:
+                metadata = dict(state.metadata)
+                metadata["batter_number_digit_run_original"] = state.batter_number
+                state = replace(state, batter_number=resolved, metadata=metadata)
+        enriched.append(state)
+    return enriched
+
+
+def _resolve_lineup_digit_run(text: str, roster: Roster) -> Optional[str]:
+    """Find a single rostered number within a fused OCR digit run."""
+
+    digits = re.sub(r"\D", "", text)
+    if len(digits) <= 2:
+        return None
+    candidates = set()
+    for length in (1, 2):
+        for start in range(len(digits) - length + 1):
+            candidate = digits[start : start + length]
+            if candidate.lstrip("0") and roster.name_for_number(candidate):
+                candidates.add(candidate)
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _jersey_number_from_text(value: str) -> Optional[str]:
+    match = re.search(r"#\s*(\d{1,2})\b", value)
+    if not match:
+        return None
+    return match.group(1)
 
 
 def _looks_like_player_name(value: str) -> bool:

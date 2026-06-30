@@ -11,6 +11,7 @@ from sidelinehd_extractor.state import StateParseResult
 from sidelinehd_extractor.workflow import RunGameResult, export_paths, run_game, run_youtube_game
 from sidelinehd_extractor.youtube import DownloadResult
 
+
 class WorkflowTests(unittest.TestCase):
     def test_export_paths_uses_prefix(self):
         chapters_path, at_bats_path = export_paths(Path("runs/game"), Path("scratch/full"))
@@ -21,8 +22,12 @@ class WorkflowTests(unittest.TestCase):
     def test_export_paths_default_uses_game_named_folder(self):
         chapters_path, at_bats_path = export_paths(Path("runs/game-20260627-142836"))
 
-        self.assertEqual(chapters_path, Path("runs/game-20260627-142836/exports/game/game_chapters.txt"))
-        self.assertEqual(at_bats_path, Path("runs/game-20260627-142836/exports/game/game_at_bats.txt"))
+        self.assertEqual(
+            chapters_path, Path("runs/game-20260627-142836/exports/game/game_chapters.txt")
+        )
+        self.assertEqual(
+            at_bats_path, Path("runs/game-20260627-142836/exports/game/game_at_bats.txt")
+        )
 
     def test_run_game_chains_pipeline_and_writes_exports(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -46,6 +51,8 @@ class WorkflowTests(unittest.TestCase):
                 output_path=run_dir / "events.jsonl",
                 event_count=2,
             )
+            run_dir.mkdir(parents=True)
+            process_result.manifest_path.write_text("{}\n", encoding="utf-8")
             events = [
                 Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP),
                 Event(
@@ -59,10 +66,19 @@ class WorkflowTests(unittest.TestCase):
             ]
             stages = []
 
-            with patch("sidelinehd_extractor.workflow.process_video", return_value=process_result) as process:
-                with patch("sidelinehd_extractor.workflow.parse_samples_file", return_value=state_result) as parse:
-                    with patch("sidelinehd_extractor.workflow.detect_events_file", return_value=event_result) as detect:
-                        with patch("sidelinehd_extractor.workflow.load_events", return_value=events):
+            with patch(
+                "sidelinehd_extractor.workflow.process_video", return_value=process_result
+            ) as process:
+                with patch(
+                    "sidelinehd_extractor.workflow.parse_samples_file", return_value=state_result
+                ) as parse:
+                    with patch(
+                        "sidelinehd_extractor.workflow.detect_events_file",
+                        return_value=event_result,
+                    ) as detect:
+                        with patch(
+                            "sidelinehd_extractor.workflow.load_events", return_value=events
+                        ):
                             result = run_game(
                                 video_path=Path("game.mp4"),
                                 output_dir=root / "runs",
@@ -79,6 +95,7 @@ class WorkflowTests(unittest.TestCase):
                 roster=None,
                 batting_half=None,
                 min_at_bat_spacing_seconds=45.0,
+                min_at_bat_spacing_roster_confirmed_seconds=20.0,
             )
             self.assertEqual(stages, ["process", "parse-states", "detect-events", "export"])
             self.assertEqual(result.event_count, 2)
@@ -89,6 +106,10 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(
                 (root / "scratch" / "full_at_bats.txt").read_text(),
                 f"1st Inning\n10:05 Maya R. (#22)\n\n{PROJECT_CREDIT}\n",
+            )
+            self.assertIn(
+                '"min_at_bat_spacing_roster_confirmed_seconds": 20.0',
+                process_result.manifest_path.read_text(encoding="utf-8"),
             )
 
     def test_run_youtube_game_downloads_then_runs_pipeline(self):
@@ -114,7 +135,9 @@ class WorkflowTests(unittest.TestCase):
         )
         stages = []
 
-        with patch("sidelinehd_extractor.workflow.download_youtube_video", return_value=download) as dl:
+        with patch(
+            "sidelinehd_extractor.workflow.download_youtube_video", return_value=download
+        ) as dl:
             with patch("sidelinehd_extractor.workflow.run_game", return_value=run_result) as run:
                 result = run_youtube_game(
                     url="https://youtu.be/example",
