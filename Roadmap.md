@@ -279,7 +279,7 @@ Acceptance criteria:
 ### 19. Full Windows Support
 
 Source: Product backlog
-Status: Needs Design Review
+Status: Ready to implement
 
 Make the tool fully usable on Windows with accurate documentation and a CI
 matrix that catches regressions on both platforms.
@@ -312,58 +312,41 @@ test suite on `macos-latest` and `windows-latest` would surface any platform
 divergence early. The test suite is already fast (~0.2 s) and dependency-free
 for external binaries, so this should be low-friction to maintain.
 
-**Codex design review feedback:**
+**Design decisions (all points resolved):**
 
-I agree with the overall direction, but I do not consider this implementation-ready
-until the following details are resolved:
+1. **Linux in CI — included, not a bonus.** `ubuntu-latest` is in the matrix
+   alongside `macos-latest` and `windows-latest`. The Tesseract hint already
+   documents Linux; CI should match.
 
-1. **CI should include Linux, not treat it as a bonus.** The docs and runtime
-   Tesseract hint already mention Linux, and `ubuntu-latest` is cheap to add.
-   A practical first matrix is `ubuntu-latest`, `macos-latest`, and
-   `windows-latest` on one supported Python version.
+2. **Python version — raise to `>=3.10`.** Python 3.9 EOL'd in October 2025
+   and yt-dlp already warns on it. Update `pyproject.toml` `requires-python`
+   to `>=3.10` as part of this deliverable. CI tests 3.10 plus the current
+   stable Python version.
 
-2. **Decide the Python support policy before writing CI.** `pyproject.toml`
-   currently says `requires-python = ">=3.9"`, while the README recommends 3.10+
-   because recent `yt-dlp` warns on 3.9. CI should either test the declared
-   minimum or the project should raise the minimum to 3.10 before release.
-   My preference: raise to Python 3.10+ for the Windows-support release and test
-   3.10 plus one current Python version if the matrix stays fast.
+3. **CI installs via pip, not PYTHONPATH.** `python -m pip install -e ".[dev]"`
+   then `python -m unittest discover -s tests` and `ruff check .`. Tests the
+   console entry point packaging path correctly.
 
-3. **CI should install the package, not rely on `PYTHONPATH`.** The proposed
-   workflow correctly notes this. Use `python -m pip install -e ".[dev]"`, then
-   run `python -m unittest discover -s tests` and `ruff check .`. This tests the
-   console entry point packaging path more realistically than local
-   `PYTHONPATH=src` commands.
+4. **`next_commands` — use installed CLI commands.** Switch generated
+   `next_commands` output from `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...`
+   to `sidelinehd-extractor ...` throughout. This is a code change, not just
+   documentation.
 
-4. **Generated `next_commands` need a Windows-safe plan.** `run-game` and
-   `run-youtube` currently print follow-up commands such as
-   `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...`. Those are Unix shell
-   syntax. If Windows support is a release goal, either emit installed-CLI
-   commands (`sidelinehd-extractor ...`) or generate platform-specific fallback
-   commands. Prefer installed-CLI commands because the README setup already
-   installs the package.
+5. **Windows venv activation — document both shells.** README should show
+   `.venv\Scripts\Activate.ps1` for PowerShell and `.venv\Scripts\activate.bat`
+   for cmd.exe. Recommend `py -3` as the Python launcher on Windows instead of
+   `python3`.
 
-5. **Document Windows activation for both PowerShell and cmd.exe.** The roadmap
-   currently mentions `.venv\Scripts\activate`, but the most common PowerShell
-   command is `.venv\Scripts\Activate.ps1`; cmd.exe uses
-   `.venv\Scripts\activate.bat`. The README can avoid some shell variance by
-   recommending `python -m pip ...` after activation and noting the `py -3`
-   launcher as a fallback.
+6. **ffmpeg — recommended, not required.** Document it as "recommended for
+   reliable/best-quality YouTube downloads." Do not add a preflight check or
+   make CI depend on ffmpeg.
 
-6. **Clarify whether ffmpeg is required or recommended.** The current downloader
-   often works without ffmpeg because it requests `best[ext=mp4]/best`, but
-   `yt-dlp` can need ffmpeg for merging or remuxing. The docs should call it
-   "recommended for reliable/best-quality YouTube downloads" unless the code adds
-   a hard preflight check. Do not make CI depend on ffmpeg unless tests actually
-   exercise download/merge behavior.
+7. **Shell examples — short and labelled.** No backslash/caret/backtick line
+   continuations in Windows docs. Use separate labelled blocks (macOS/Linux
+   and Windows) for commands that differ across platforms.
 
-7. **Keep shell examples short and avoid platform-specific line continuations.**
-   Backslashes, carets, and PowerShell backticks all create copy/paste friction.
-   For Windows docs, prefer short single-line examples or separate labeled blocks
-   for PowerShell and cmd.exe.
-
-8. **Add an acceptance criterion for command-output portability.** Windows docs
-   are not enough if the tool itself prints Unix-only follow-up commands.
+8. **`next_commands` portability in acceptance criteria — included.** Already
+   reflected below.
 
 **Sub-tasks for Codex:**
 
@@ -387,10 +370,12 @@ until the following details are resolved:
 5. **NEW_GAME_CHECKLIST.md**: mirror the same Tesseract + ffmpeg install blocks
    and add Windows venv-activation alternative.
 
-6. **GitHub Actions CI** (`.github/workflows/ci.yml`): run `python -m unittest
-   discover -s tests` (no `PYTHONPATH=src` needed when the package is installed
-   via `pip install -e .`) on `macos-latest` and `windows-latest`, triggered on
-   push and pull request.
+6. **GitHub Actions CI** (`.github/workflows/ci.yml`): matrix of
+   `ubuntu-latest`, `macos-latest`, `windows-latest` × Python 3.10 and current
+   stable Python. Steps: `pip install -e ".[dev]"`, then
+   `python -m unittest discover -s tests`, then `ruff check .`. Triggered on
+   push and pull request. Also bump `pyproject.toml` `requires-python` to
+   `>=3.10` in this same PR.
 
 7. **CLI follow-up commands**: update generated `next_commands` to be
    cross-platform. Preferred output is installed-console-script commands such as
