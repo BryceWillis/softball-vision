@@ -1450,6 +1450,133 @@ Acceptance criteria:
   - `export_youtube_chapters(include_score=False)` omits score;
   - score absent from all window states → no parenthetical in export.
 
+### 30. Interactive Chapter Review Before Export
+
+Source: Product backlog
+Status: Ready to implement
+
+After event detection, walk through every half-inning transition interactively
+so the user can confirm, edit, or delete each chapter entry before the final
+YouTube paste is written. Particularly important now that chapter labels include
+scores (item 29) — a wrong score in the description looks bad and is hard to fix
+after posting.
+
+**Why not just use the existing corrections CSV workflow?**
+
+The existing review cycle is: run → inspect `review_report.md` → write
+corrections CSV → re-export. That round-trip is fine for at-bat events (there
+are many, typos are low-stakes) but half-inning chapters are few, high-visibility,
+and worth a quick confirm-or-fix pass right before the paste is ready.
+
+**Design: `--interactive` flag on `export --kind chapters`**
+
+Add `--interactive` (short: `-i`) to `export --kind chapters`. When set, after
+loading events but before writing the output file, walk the user through each
+`HALF_INNING_START` event one by one in the terminal.
+
+Also add `--interactive` to `run-game` and `run-youtube` so the review step
+can be folded into the end-to-end command without a separate `export` invocation.
+
+**Session format:**
+
+```
+Reviewing 14 chapter transitions. Enter to confirm, e to edit, d to delete.
+
+ 1/14   10:00  Top 1     (0-0)   >
+ 2/14   15:30  Bot 1     (0-0)   >
+ 3/14   24:10  Top 2     (1-0)   > e
+       Edit: timestamp [10:00], label [Top 2], away [1], home [0]
+       timestamp: 24:15
+ 3/14   24:15  Top 2     (1-0)   > [Enter]
+...
+```
+
+Prompt keys (single keypress, no Enter required except for edit values):
+- `Enter` — accept as-is, move to next
+- `e` — enter edit mode for this event (shows current values, accepts new ones
+  field by field; empty input keeps the current value)
+- `d` — mark for deletion, move to next
+- `s` — skip remaining (accept all from here without prompting)
+- `q` — quit without writing any output
+
+Edit mode allows changing:
+- `timestamp` — new `MM:SS` or `H:MM:SS` value
+- `label` — the chapter label text (e.g., `Top 2` → `Mid 2` if needed)
+- `away` — override away score integer
+- `home` — override home score integer
+
+Corrections accumulate in memory only (no file read/written during the session).
+
+**After the session:**
+
+- Write the chapter file with all confirmed/edited events (deleted ones omitted).
+- Print a one-line summary: `14 chapters: 12 confirmed, 1 edited, 1 deleted.`
+- If any edits or deletions were made, offer to save them as a corrections CSV:
+  `Save corrections to runs/YOUR_RUN/exports/chapters_corrections.csv? [Y/n]`
+  This makes the run reproducible — re-running `export --corrections` gives the
+  same output without re-reviewing.
+
+**When `--interactive` is not set:**
+
+The `export --kind chapters` command behaves exactly as it does today. No
+behavior change for existing non-interactive runs.
+
+**Non-TTY guard:**
+
+If `sys.stdin.isatty()` returns False (piped input, CI, tests), silently ignore
+`--interactive` and proceed as non-interactive. Log a one-line warning to stderr:
+`Warning: --interactive ignored (stdin is not a terminal).`
+
+**Implementation plan:**
+
+`export` command in `cli.py`:
+```python
+export.add_argument("--interactive", "-i", action="store_true",
+    help="Review each chapter transition before writing output.")
+```
+
+New function `interactive_chapter_review(events)` in `exports.py` (or a new
+`review_interactive.py`):
+
+```python
+def interactive_chapter_review(
+    events: List[Event],
+) -> tuple[List[Event], List[dict]]:
+    """
+    Walk the user through HALF_INNING_START events for confirmation.
+    Returns (final_events, correction_rows) where correction_rows is a list
+    of corrections-CSV-compatible dicts for any edits or deletions.
+    """
+```
+
+Returns the modified event list and a parallel list of correction rows so the
+caller can optionally persist them.
+
+Use `sys.stdin` with `tty` module's `setcbreak` (or `msvcrt.getwch` on Windows)
+for single-keypress input. Fall back to `input()` if raw mode is unavailable
+(some terminal emulators).
+
+**Acceptance criteria:**
+
+- `export --kind chapters --interactive` walks the user through each
+  `HALF_INNING_START` event before writing.
+- `Enter` accepts, `e` opens field-by-field edit, `d` deletes, `s` skips
+  remaining, `q` exits without writing.
+- Edit mode: empty input for any field keeps the current value.
+- Edited timestamp updates `timestamp_seconds` on the event (convert `MM:SS`
+  to seconds); the chapter file reflects the new time.
+- Deleted events do not appear in the output file.
+- Summary line printed after review: `N chapters: X confirmed, Y edited, Z deleted.`
+- If edits or deletions occurred, offer to save corrections CSV.
+- `--interactive` with non-TTY stdin: ignored with stderr warning, proceeds
+  non-interactively.
+- `--interactive` with `q`: no output file written, exit 0 (user chose to abort).
+- `run-youtube` and `run-game` support `--interactive` and pass it through to
+  the chapter export step only (at-bat export is not affected).
+- Tests cover: all-confirm (no changes), edit timestamp, edit score, delete
+  event, skip-remaining, non-TTY no-op. Use a fake readline/input injection;
+  do not require an actual terminal in tests.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
