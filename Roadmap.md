@@ -917,7 +917,7 @@ Acceptance criteria:
 ### 27. Interactive Roster Setup (`setup-roster`)
 
 Source: Product backlog
-Status: Ready to implement
+Status: Done
 
 Add an interactive `setup-roster` command that guides a user through pasting
 their roster and writing it to `rosters/<team-slug>.csv` — no text file

@@ -11,6 +11,7 @@ venv/
 videos/
 runs/
 scratch/
+rosters/
 calibration_frames/
 
 # Packaging/build artifacts

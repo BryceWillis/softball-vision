@@ -3,7 +3,12 @@ import unittest
 from pathlib import Path
 
 from sidelinehd_extractor.config import load_roster
-from sidelinehd_extractor.roster import parse_team_list, parse_team_list_line, write_roster_csv
+from sidelinehd_extractor.roster import (
+    default_roster_path,
+    parse_team_list,
+    parse_team_list_line,
+    write_roster_csv,
+)
 
 
 class RosterBuilderTests(unittest.TestCase):
@@ -49,6 +54,12 @@ class RosterBuilderTests(unittest.TestCase):
         self.assertEqual(result.player_count, 2)
         self.assertEqual(loaded.name_for_number("22"), "Maya R.")
         self.assertEqual(loaded.number_for_name("Amelia"), "26")
+
+    def test_default_roster_path_slugifies_team_name(self):
+        self.assertEqual(
+            default_roster_path("Smash It Sports 12U"),
+            Path("rosters") / "smash_it_sports_12u.csv",
+        )
 
 
 if __name__ == "__main__":

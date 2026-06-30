@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from sidelinehd_extractor.models import Roster, RosterPlayer
+from sidelinehd_extractor.naming import slugify
 
 
 ROSTER_CSV_FIELDS = ["number", "full_name", "preferred_name", "display_name", "aliases"]
@@ -100,6 +101,12 @@ def make_roster_from_lines(
 
     roster = parse_team_list("\n".join(lines), team_name=team_name)
     return write_roster_csv(roster, output_path)
+
+
+def default_roster_path(team_name: str) -> Path:
+    """Return the default private roster path for a team name."""
+
+    return Path("rosters") / f"{slugify(team_name, fallback='roster')}.csv"
 
 
 def _clean_name(value: str) -> str:

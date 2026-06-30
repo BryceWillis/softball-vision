@@ -16,7 +16,13 @@ Use this after cloning the repo and installing dependencies.
 
 ## Per-Team Setup
 
-- [ ] Paste the team list into a text file, one player per line:
+- [ ] Generate a private roster:
+
+```sh
+sidelinehd-extractor setup-roster
+```
+
+- [ ] Paste the team list when prompted, one player per line:
 
 ```text
 #2 Emma B.
@@ -24,10 +30,13 @@ Use this after cloning the repo and installing dependencies.
 #10 Mia K.
 ```
 
-- [ ] Generate a roster:
+- [ ] Press Enter twice to finish. The roster is written under `rosters/`, which
+      is ignored by git.
+
+- [ ] For scripted/non-interactive setup, use:
 
 ```sh
-sidelinehd-extractor make-roster team-list.txt --output roster.csv
+sidelinehd-extractor make-roster team-list.txt --output rosters/your_team.csv
 ```
 
 ## Per-Game Workflow
@@ -37,7 +46,7 @@ sidelinehd-extractor make-roster team-list.txt --output roster.csv
 ```sh
 sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
   --template examples/sidelinehd_640x360_active.example.json \
-  --roster roster.csv \
+  --roster rosters/your_team.csv \
   --start 0:00 \
   --ocr tesseract
 ```

@@ -19,7 +19,7 @@ from sidelinehd_extractor.config import load_overlay_template, load_roster
 from sidelinehd_extractor.corrections import apply_event_corrections, load_event_corrections
 from sidelinehd_extractor.events import detect_events_file, load_events
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
-from sidelinehd_extractor.models import HalfInning, RegionFraction
+from sidelinehd_extractor.models import HalfInning, RegionFraction, Roster
 from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
     OCRError,
@@ -31,7 +31,7 @@ from sidelinehd_extractor.publish import write_publish_kit
 from sidelinehd_extractor.processing import process_video
 from sidelinehd_extractor.review import render_event_review
 from sidelinehd_extractor.review_report import write_review_report
-from sidelinehd_extractor.roster import parse_team_list, write_roster_csv
+from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.video import probe_video, read_frame_at
@@ -258,6 +258,105 @@ def _cmd_make_roster(args: argparse.Namespace) -> int:
     result = write_roster_csv(roster, args.output)
     print(_to_json(result))
     return 0
+
+
+def _cmd_setup_roster(args: argparse.Namespace) -> int:
+    is_tty = sys.stdin.isatty()
+    team_name = args.team_name
+    if not team_name:
+        if not is_tty:
+            print("Error: --team-name is required when stdin is not a terminal.", file=sys.stderr)
+            return 1
+        team_name = input("Team name: ").strip()
+        if not team_name:
+            print("Error: team name is required.", file=sys.stderr)
+            return 1
+
+    if is_tty:
+        print("Paste roster lines like '#26 Amelia V.'. Press Enter twice when done:")
+        lines = _read_roster_lines_interactive()
+    else:
+        lines = sys.stdin.read().splitlines()
+
+    if not any(line.strip() for line in lines):
+        print("Error: no roster lines entered.", file=sys.stderr)
+        return 1
+
+    try:
+        roster = parse_team_list("\n".join(lines), team_name=team_name)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    output_path = args.output or default_roster_path(team_name)
+    if is_tty:
+        _print_roster_preview(roster)
+        response = input(
+            f"\nWrite {len(roster.players)} players to {output_path}? [Y/n] "
+        ).strip().lower()
+        if response and response not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
+
+    result = write_roster_csv(roster, output_path)
+    print(f"Wrote {result.player_count} players to {result.output_path}")
+    if is_tty:
+        print("")
+        print("Use your roster:")
+        print(f"  {_format_roster_next_command(result.output_path)}")
+    return 0
+
+
+def _read_roster_lines_interactive() -> List[str]:
+    lines = []
+    blank_count = 0
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if not line.strip():
+            blank_count += 1
+            if blank_count >= 2:
+                break
+        else:
+            blank_count = 0
+        lines.append(line)
+    return lines
+
+
+def _print_roster_preview(roster: Roster) -> None:
+    rows = [
+        (
+            player.number,
+            player.display_name or player.full_name,
+            "; ".join(player.aliases),
+        )
+        for player in roster.players
+    ]
+    headers = ("#", "Name", "Aliases")
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    print("")
+    print("Roster preview:")
+    print(_format_roster_preview_row(headers, widths))
+    print("-+-".join("-" * width for width in widths))
+    for row in rows:
+        print(_format_roster_preview_row(row, widths))
+
+
+def _format_roster_preview_row(row: tuple[str, str, str], widths: List[int]) -> str:
+    return " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+
+
+def _format_roster_next_command(roster_path: Path) -> str:
+    return (
+        "sidelinehd-extractor run-youtube 'YOUTUBE_URL' "
+        f"--roster {roster_path} "
+        "--template examples/sidelinehd_640x360_active.example.json"
+    )
 
 
 def _cmd_run_game(args: argparse.Namespace) -> int:
@@ -708,6 +807,17 @@ def build_parser() -> argparse.ArgumentParser:
     make_roster.add_argument("--output", "-o", type=Path, default=Path("roster.csv"))
     make_roster.add_argument("--team-name", help="Team name for JSON summaries and future metadata.")
     make_roster.set_defaults(func=_cmd_make_roster)
+
+    setup_roster = subparsers.add_parser(
+        "setup-roster",
+        help="Interactively paste a team roster and save it to rosters/.",
+    )
+    setup_roster.add_argument(
+        "--team-name",
+        help="Team name. Required when stdin is not a terminal.",
+    )
+    setup_roster.add_argument("--output", "-o", type=Path, help="Override the default output path.")
+    setup_roster.set_defaults(func=_cmd_setup_roster)
 
     run_game_parser = subparsers.add_parser(
         "run-game",

@@ -1,8 +1,8 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-06-29
-**Review passes:** 4 (Pass 4: lineup strip fallback)
+**Last updated:** 2026-06-30
+**Review passes:** 5 (Pass 5: setup-roster command and CR-19 cleanup)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,12 +19,31 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Open Items
 
-#### CR-19 — `_event_has_roster_name_match` has an unused `roster` parameter
+#### CR-20 — `_format_roster_next_command` hardcodes the default template path
+**File:** [cli.py](src/sidelinehd_extractor/cli.py)
+
+`_format_roster_next_command` always prints `--template examples/sidelinehd_640x360_active.example.json` in its hint. After item 26 ships nine additional layout templates, users on any non-default layout will copy a hint that points them at the wrong template and get silently wrong OCR results. Replace the template portion of the hint with `--template YOUR_TEMPLATE` (a placeholder) or omit the flag entirely from the printed command.
+
+#### CR-21 — `_read_roster_lines_interactive` has zero test coverage
+**File:** [cli.py](src/sidelinehd_extractor/cli.py)
+
+All `setup-roster` tests patch `sys.stdin` with `io.StringIO`, which has `isatty()` returning `False`, so every test takes the non-TTY `sys.stdin.read()` branch. `_read_roster_lines_interactive` — including its double-blank-line termination logic — is never exercised. A regression in the interactive loop would be invisible until a user runs the command in a real terminal. Add at least one test that patches `builtins.input` to inject a sequence of lines ending with two blanks and confirm the correct roster is returned.
+
+#### CR-22 — `default_roster_path` returns a cwd-relative path with no guard or documentation
+**File:** [roster.py](src/sidelinehd_extractor/roster.py)
+
+`default_roster_path(team_name)` returns `Path("rosters") / f"{slug}.csv"`, which is relative to the process working directory at the moment `write_roster_csv` resolves it. If `setup-roster` is run from any directory other than the project root (e.g. `~/videos/`), the roster lands in an unexpected location and the `.gitignore` entry for `rosters/` in the project root does not protect it. Mitigate by printing the resolved absolute path in the confirmation prompt (`output_path.resolve()`) so the user can see exactly where the file is going.
+
+#### CR-23 — `infer_batting_half` accumulates match counts before the `roster is None` guard
 **File:** [events.py](src/sidelinehd_extractor/events.py)
 
-After the item-21 simplification, `_event_has_roster_name_match(event, roster)` only reads `event.metadata` — `roster` is never used. Remove the parameter and update the single call site in `infer_batting_half()` to `_event_has_roster_name_match(event)`. No behavior change; this is dead code cleanup.
+The match-counting loop at line 245 runs unconditionally; the `if roster is None` early return at line 254 fires only after it completes. If the function is ever called with `roster=None` on events that already carry `roster_match_source: "name"` metadata (e.g. events loaded from a prior enriched `events.jsonl`), the returned `BattingHalfInference` will have `inferred_half=None, warning="no roster provided"` alongside non-zero `top_roster_matches` or `bottom_roster_matches` — a contradictory state. Not reachable via the current CLI (run_game always generates fresh events), but the guard should move to before the loop so the invariant is structurally enforced rather than relying on the call graph.
 
 ## Resolved Items
+
+#### CR-19 — `_event_has_roster_name_match` has an unused `roster` parameter
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 5
 
 #### CR-18 — Tesseract missing-binary error message is macOS-only
 **File:** [ocr.py](src/sidelinehd_extractor/ocr.py)

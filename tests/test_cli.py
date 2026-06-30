@@ -1,10 +1,13 @@
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from pathlib import Path
 
-from sidelinehd_extractor.cli import _default_run_fields, build_parser, main
+from sidelinehd_extractor.cli import _default_run_fields, _format_roster_next_command, build_parser, main
+from sidelinehd_extractor.config import load_roster
 
 
 class CLITests(unittest.TestCase):
@@ -155,6 +158,122 @@ class CLITests(unittest.TestCase):
         publish_helper = parser.parse_args(["publish-helper", "runs/game", "--no-html"])
 
         self.assertTrue(publish_helper.no_html)
+
+    def test_setup_roster_writes_piped_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stars.csv"
+            stdin = io.StringIO("#22 Maya R.\n#26 Amelia V.\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with patch("sys.stdin", stdin), redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "setup-roster",
+                        "--team-name",
+                        "Stars",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            loaded = load_roster(output_path, team_name="Stars")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("Wrote 2 players", stdout.getvalue())
+        self.assertEqual(loaded.name_for_number("22"), "Maya R.")
+        self.assertEqual(loaded.number_for_name("Amelia"), "26")
+
+    def test_setup_roster_requires_team_name_for_piped_input(self):
+        stdin = io.StringIO("#22 Maya R.\n")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch("sys.stdin", stdin), redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main(["setup-roster"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("--team-name is required", stderr.getvalue())
+
+    def test_setup_roster_rejects_duplicate_numbers_without_writing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stars.csv"
+            stdin = io.StringIO("#22 Maya R.\n#22 Other Player\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with patch("sys.stdin", stdin), redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "setup-roster",
+                        "--team-name",
+                        "Stars",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertFalse(output_path.exists())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("duplicate jersey number", stderr.getvalue())
+
+    def test_setup_roster_rejects_invalid_line_without_writing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stars.csv"
+            stdin = io.StringIO("Maya R.\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with patch("sys.stdin", stdin), redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "setup-roster",
+                        "--team-name",
+                        "Stars",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertFalse(output_path.exists())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("could not parse roster line 1", stderr.getvalue())
+
+    def test_setup_roster_rejects_empty_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "stars.csv"
+            stdin = io.StringIO("\n\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with patch("sys.stdin", stdin), redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "setup-roster",
+                        "--team-name",
+                        "Stars",
+                        "--output",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertFalse(output_path.exists())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("no roster lines entered", stderr.getvalue())
+
+    def test_format_roster_next_command_mentions_roster_and_template(self):
+        command = _format_roster_next_command(Path("rosters/stars.csv"))
+
+        self.assertIn("--roster rosters/stars.csv", command)
+        self.assertIn("--template examples/sidelinehd_640x360_active.example.json", command)
 
     def test_main_prints_clean_error_for_value_error(self):
         stderr = io.StringIO()

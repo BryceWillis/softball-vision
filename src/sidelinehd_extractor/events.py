@@ -246,7 +246,7 @@ def infer_batting_half(
         if event.event_type != EventType.AT_BAT_START or event.half not in counts:
             continue
         counts[event.half]["total"] += 1
-        if _event_has_roster_name_match(event, roster):
+        if _event_has_roster_name_match(event):
             counts[event.half]["matches"] += 1
 
     top_matches = counts[HalfInning.TOP]["matches"]
@@ -549,5 +549,5 @@ def _has_half_inning_activity_signal(state: OverlayState) -> bool:
     return _is_plausible_batter_state(state)
 
 
-def _event_has_roster_name_match(event: Event, roster: Optional[Roster]) -> bool:
+def _event_has_roster_name_match(event: Event) -> bool:
     return event.metadata.get("roster_match_source") == "name"

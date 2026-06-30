@@ -56,11 +56,13 @@ python -m pip install -r requirements.txt
 
 For a fresh game, use the checklist in [NEW_GAME_CHECKLIST.md](NEW_GAME_CHECKLIST.md).
 
-Create a roster from a pasted team list:
+Create a private roster from a pasted team list:
 
 ```sh
-sidelinehd-extractor make-roster examples/team-list.example.txt --output roster.csv
+sidelinehd-extractor setup-roster
 ```
+
+For scripted use, `make-roster` still accepts a text file or stdin.
 
 Download a completed YouTube game, process it locally, and write both YouTube text
 exports:
@@ -69,7 +71,7 @@ exports:
 sidelinehd-extractor run-youtube \
   'https://www.youtube.com/live/YOUR_VIDEO_ID' \
   --template examples/sidelinehd_640x360_active.example.json \
-  --roster roster.csv \
+  --roster rosters/your_team.csv \
   --start 10:00 \
   --ocr tesseract
 ```
@@ -213,7 +215,13 @@ The run folder contains:
 Provide a simple CSV roster so OCR names can be corrected to official jersey
 numbers. This is especially useful when the overlay number is tiny or ambiguous.
 
-The easiest way is to paste a team list into a text file:
+The easiest way is to run the interactive setup command and paste a team list:
+
+```sh
+sidelinehd-extractor setup-roster
+```
+
+Paste lines in this format, then press Enter twice:
 
 ```text
 #2 Emma B.
@@ -222,11 +230,14 @@ The easiest way is to paste a team list into a text file:
 #26 Amelia V.
 ```
 
-Then generate the CSV:
+This writes a private CSV under `rosters/`, which is ignored by git so real
+player names are not accidentally committed.
+
+For scripted use, generate the CSV from a text file:
 
 ```sh
 sidelinehd-extractor make-roster examples/team-list.example.txt \
-  --output roster.csv
+  --output rosters/your_team.csv
 ```
 
 This writes the roster format used by `run-game` and `detect-events`:
