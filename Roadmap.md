@@ -1308,13 +1308,19 @@ has a `SCORE_CHANGE` event type, but scores are never sampled or populated.
 (PSM 10, digit whitelist, scale 6) and the example template defines both
 regions. The plumbing exists; it just needs to be wired up.
 
-Note: the scorebug shows teams positionally (left team, right team). SidelineHD
-does not guarantee which side is home vs. away — that depends on the team setup
-in the app. The pipeline treats them as `left_score` / `right_score` throughout
-and stores them that way in event metadata. The `OverlayState.home_score` and
-`away_score` fields are populated from left/right respectively as a convenience
-mapping (the field names are legacy). Do not rename these fields now; track the
-naming debt as item 22 if it ever becomes a real product.
+**Scorebug convention:** SidelineHD always places the away team on the left and
+the home team on the right. This is set at game creation in the app and is
+enforced by the scoring mode (pitching vs batting). The OCR crop fields keep
+their positional names (`left_score`, `right_score`) since they describe crop
+geometry, but the semantic mapping is now known: `left_score` → `away_score`,
+`right_score` → `home_score`. The `OverlayState` fields are named accordingly.
+
+**Known limitation:** If the home/away assignment is corrected mid-game in the
+SidelineHD app (wrong setup at game start, then fixed), the scorebug sides will
+flip at the correction point. The OCR numbers remain accurate, but
+`away_score`/`home_score` labeling in metadata will be inverted for events
+before the correction. There is no reliable way to detect this from the overlay
+alone. The mitigation is correct game setup before the first pitch.
 
 **What changes:**
 
@@ -1346,12 +1352,11 @@ def parse_score(value: Optional[str]) -> Optional[int]:
     return int(match.group(0)) if match else None
 ```
 
-In `state_from_samples()`, populate `home_score` and `away_score` from the
-left/right OCR fields:
+In `state_from_samples()`, apply the away-left / home-right convention:
 
 ```python
-home_score = parse_score(_sample_text(samples_by_field, "left_score"))
-away_score = parse_score(_sample_text(samples_by_field, "right_score"))
+away_score = parse_score(_sample_text(samples_by_field, "left_score"))
+home_score = parse_score(_sample_text(samples_by_field, "right_score"))
 ```
 
 Pass them into the `OverlayState` constructor:
@@ -1359,8 +1364,8 @@ Pass them into the `OverlayState` constructor:
 ```python
 return OverlayState(
     ...
-    home_score=home_score,
     away_score=away_score,
+    home_score=home_score,
     ...
 )
 ```
@@ -1380,26 +1385,28 @@ def _score_snapshot(
     window: int,
 ) -> tuple:
     for state in states[start_index : start_index + window]:
-        if state.home_score is not None and state.away_score is not None:
-            return state.home_score, state.away_score
+        if state.away_score is not None and state.home_score is not None:
+            return state.away_score, state.home_score
     return None, None
 ```
 
 When emitting a `HALF_INNING_START` event, add the score to metadata:
 
 ```python
-left_score, right_score = _score_snapshot(ordered_states, index, half_inning_confirmation_window)
+away_score, home_score = _score_snapshot(ordered_states, index, half_inning_confirmation_window)
 metadata={
     "source": "state_change",
-    "left_score": left_score,
-    "right_score": right_score,
+    "away_score": away_score,
+    "home_score": home_score,
 }
 ```
 
 **`exports.py` — `export_youtube_chapters()`**
 
 Add `include_score: bool = True` parameter. When True and both score values are
-present in event metadata, append `(left-right)` to the chapter label:
+present in event metadata, append `(away-home)` to the chapter label. Sports
+scores are conventionally shown away-first, which matches the scorebug left-right
+order:
 
 ```python
 def export_youtube_chapters(events, ..., include_score: bool = True):
@@ -1407,10 +1414,10 @@ def export_youtube_chapters(events, ..., include_score: bool = True):
     for event in events:
         label = event.label
         if include_score and event.event_type == EventType.HALF_INNING_START:
-            left = event.metadata.get("left_score")
-            right = event.metadata.get("right_score")
-            if left is not None and right is not None:
-                label = f"{label} ({left}-{right})"
+            away = event.metadata.get("away_score")
+            home = event.metadata.get("home_score")
+            if away is not None and home is not None:
+                label = f"{label} ({away}-{home})"
         lines.append(f"{format_timestamp(event.timestamp_seconds)} {label}")
 ```
 
@@ -1423,11 +1430,11 @@ two run commands; `export` wires it independently.
 
 Acceptance criteria:
 - `left_score` and `right_score` are in the default run field list.
-- `state_from_samples()` populates `home_score` / `away_score` when those OCR
-  fields are present.
-- `HALF_INNING_START` events include `left_score` and `right_score` in metadata;
+- `state_from_samples()` maps `left_score` → `away_score` and `right_score` →
+  `home_score` on `OverlayState`.
+- `HALF_INNING_START` events include `away_score` and `home_score` in metadata;
   both are `None` when OCR was absent for the entire confirmation window.
-- Chapter export appends `(left-right)` to each `HALF_INNING_START` line when
+- Chapter export appends `(away-home)` to each `HALF_INNING_START` line when
   both scores are non-None.
 - Chapter export omits the parenthetical when either score is None — no
   placeholder, no interpolation.
@@ -1436,10 +1443,10 @@ Acceptance criteria:
 - At-bat exports are unchanged.
 - Tests cover:
   - `parse_score()` for digits, `#`-prefixed strings, empty/None input;
-  - `state_from_samples()` with `left_score` / `right_score` OCR fields;
+  - `state_from_samples()` maps left OCR → `away_score`, right OCR → `home_score`;
   - `_score_snapshot()` returns first non-None pair, falls back to `(None, None)`;
-  - `detect_events()` stores score in `HALF_INNING_START` metadata;
-  - `export_youtube_chapters()` appends score when present;
+  - `detect_events()` stores `away_score`/`home_score` in `HALF_INNING_START` metadata;
+  - `export_youtube_chapters()` appends score as `(away-home)` when present;
   - `export_youtube_chapters(include_score=False)` omits score;
   - score absent from all window states → no parenthetical in export.
 
