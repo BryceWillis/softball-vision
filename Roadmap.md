@@ -1450,6 +1450,93 @@ Acceptance criteria:
   - `export_youtube_chapters(include_score=False)` omits score;
   - score absent from all window states → no parenthetical in export.
 
+### 30. Originality and Differentiation Audit vs. `jcspeegs/loups`
+
+Source: Engineering hygiene / pre-release
+Status: Ready to implement
+
+A closely related project exists: `jcspeegs/loups` (MIT, on PyPI), also built for
+fastpitch softball, also using template matching plus EasyOCR to emit YouTube
+chapters keyed on batter name and jersey number. We did not start from or reference
+its code. But the model assistance used while building ours may have been informed
+by training data that included loups, so some convergence could have crept in
+without us choosing it.
+
+This is not a licensing concern. MIT permits reuse, and independent creation is not
+infringement. The goal is genuine originality: confirm our implementation is our own
+in substance, and diverge deliberately wherever a real design choice exists, so the
+tool reflects our decisions rather than the obvious-path defaults loups also landed
+on.
+
+**Scope:** Audit the core pipeline against what is publicly known about loups,
+document where we already differ, and consciously diverge (or record independent
+rationale) wherever the two could look alike.
+
+**Already differentiated — document the rationale, no change needed:**
+
+These are real architectural differences in our favor. Capture a short "design
+decisions" note in the README or CLAUDE.md so the independent derivation is on
+record.
+
+- **Ingestion:** we pull source via yt-dlp; loups operates on a local file argument.
+- **State:** we persist run state in JSONL files; loups is stateless with file output.
+- **Identity resolution:** we resolve batters through a roster CSV keyed on jersey
+  number; loups OCRs the name and number straight off the frame with no roster layer.
+- **Target format:** we are specific to the SidelineHD scorebug layout; loups is a
+  generic bring-your-own-template model with one bundled team overlay.
+
+**Review for convergence — change where practical, justify where not:**
+
+- **OCR engine choice.** EasyOCR is a common library, so sharing it is not
+  significant. Differentiate at the layer around it: our ROI cropping, preprocessing
+  (threshold/denoise/upscale), and confidence handling should be our own. Record a
+  decision on whether to make the OCR backend pluggable so EasyOCR is a selectable
+  option rather than a hard dependency. (Note: we currently use Tesseract, not
+  EasyOCR — this is already a material difference.)
+- **Frame-of-interest trigger.** loups uses OpenCV template matching as the "this
+  frame matters" signal. Confirm that ours keys off the SidelineHD layout-aware ROI
+  and scorebug-change detection rather than a generic template image. Document the
+  approach.
+- **OCR result ordering.** loups sorts detected text left-to-right. If we do the same
+  anywhere, note it; prefer targeting known sub-regions of the SidelineHD bug (name
+  field, number field) so we read by position rather than sorting a flat result set.
+- **Chapter title composition.** The timestamp format is fixed by YouTube, so that is
+  not differentiable. For title text: confirm we use roster-resolved canonical names,
+  our own handling for unknown or low-confidence numbers, and context loups does not
+  include (inning, score state per item 29) so our output is distinct on its face.
+- **At-bat boundary logic.** Document how we decide a new at-bat has started (dedup
+  window, minimum gap, batter-number change) and confirm it is our own logic, not a
+  mirror of loups's first-match/threshold approach.
+- **CLI surface.** Flag names, command structure, and defaults should be ours. Avoid
+  matching loups's `-t / -o / -q / --debug` arrangement or its options-before-positional
+  ordering by coincidence. A quick diff of help output against loups's documented flags
+  is enough.
+- **Thumbnail feature (if we add one).** loups does SSIM first-match thumbnail
+  extraction. If we want thumbnails, pick a different strategy (e.g., best-scoring
+  frame across a window, or a roster/event-driven pick) rather than copying first-match
+  SSIM.
+
+Acceptance criteria:
+- Side-by-side comparison table (ours vs. loups) committed to `docs/` covering:
+  ingestion, trigger mechanism, OCR layer, identity resolution, state, output
+  composition, CLI.
+- Every "review for convergence" point above is resolved as either *diverged* (with the
+  change made) or *retained* (with a one-line independent rationale).
+- No file, function, or comment in our repo reproduces loups naming or structure.
+  Confirm we have never vendored or pasted any loups source.
+- A short "Prior art and independence" note added to the README acknowledging loups
+  exists, stating we built independently, and summarizing how the implementations
+  differ.
+- Decision recorded on OCR-backend abstraction (do it now / defer / decline) with
+  reasoning.
+
+Notes:
+- loups is explicitly designed to accept custom templates. If open-sourcing, a
+  friendly path is to contribute a SidelineHD template/recipe upstream rather than
+  position as a competitor. Optional — not part of this item's acceptance criteria.
+- Worth a one-time read of how loups handles OCR confidence filtering and text sorting
+  before finalizing ours, purely to make informed *different* choices, not to copy.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
