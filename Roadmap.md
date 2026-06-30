@@ -2078,26 +2078,213 @@ Acceptance criteria:
 ### 34. True Game-Start Detection After Pregame Team-Side Changes
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready to design
+Status: Ready to implement
 
 The Victor Vipers game exposed an assumption around pregame setup: the scoring app initially had Smash It Sports configured as away and Victor Vipers as home, but after the coin toss the teams were swapped before the real game state began. The exported chapters currently start `Top 1` at `0:00`, even though the visible in-game overlay does not show the real first-inning game state until about `6:34`.
 
 Confirmed still present after item 36 rerun: `0:00 Top 1` still appears in the export for `9AaT4645z6s`. The correct chapter start is around `6:34`.
 
-This is distinct from adding a `0:00 Pregame` intro. The detector should avoid treating pregame or stale setup overlay state as a real half-inning start when the stream begins before the scoring app reaches active game state.
+---
 
-Design direction:
-- Add a stronger "active game state" confirmation for the first half-inning, not just inning text.
-- Treat team-name side swaps during pregame as non-authoritative until inning/count/scorebug activity becomes stable.
-- Prefer the first stable in-game overlay frame around `6:34` for `Top 1` in this run.
-- Keep support for videos that truly begin mid-game at `0:00`; do not force a pregame chapter when the first frame is already active game state.
+#### Root cause
 
-Acceptance criteria:
-- On `9AaT4645z6s`, exported chapters include `0:00 Pregame` and the first inning starts around `6:34`, not `0:00`.
-- Existing videos that start with active game state still allow `Top 1` or the current half-inning at `0:00`.
-- Team-name position changes before first pitch do not select the batting half or create a first inning chapter by themselves.
-- Add tests for a pregame setup state followed by a real first-inning state.
-- Add tests for a mid-game stream start where the initial state is already active and should remain at `0:00`.
+The activity-signal check (`_has_half_inning_activity_signal`) only examines a SINGLE state at the trigger point:
+
+```python
+def _has_half_inning_activity_signal(state: OverlayState) -> bool:
+    return _is_plausible_batter_state(state)
+```
+
+After item 33, the lineup strip's HSV chip detection (`lineup_strip_confidence="lineup_highlight"`) fires on the pregame lineup display and populates `state.batter_number` with the highlighted first batter's jersey number. `_is_plausible_batter_state()` returns True at t=0, even though no pitch has been thrown. The stable `Top 1` overlay clears the confirmation window, and `HALF_INNING_START` is emitted at 0:00.
+
+**The key distinguishing property of real game activity:** the ball-strike count changes from 0-0 once a pitch is thrown, or the batter changes once an at-bat completes. During pregame, the count is stuck at 0-0 and the lineup highlight shows the same first batter for the entire pregame period. These are observably different from the window perspective.
+
+---
+
+#### Architecture — changes to `events.py`
+
+**Remove** `_has_half_inning_activity_signal(state: OverlayState) -> bool`.
+
+**Add** two new functions:
+
+```python
+def _window_has_game_active_signal(
+    window_states: List[OverlayState],
+    half_key: Tuple[int, HalfInning],
+) -> bool:
+    """Return True if any state in the window shows real game activity.
+
+    A plausible batter number alone is not enough — the pregame lineup
+    highlight passes that test after item 33. We also require a non-zero
+    ball-strike count (at least one pitch thrown) or a batter-number change
+    (at least one at-bat completed) within the confirmation window.
+    """
+    prev_batter: Optional[str] = None
+    for state in window_states:
+        if _half_key(state) != half_key:
+            continue
+        if not _is_plausible_batter_state(state):
+            continue
+        if (
+            state.balls is not None
+            and state.strikes is not None
+            and (state.balls > 0 or state.strikes > 0)
+        ):
+            return True
+        if prev_batter is not None and state.batter_number and state.batter_number != prev_batter:
+            return True
+        if state.batter_number:
+            prev_batter = state.batter_number
+    return False
+
+
+def _game_active_timestamp(
+    states: List[OverlayState],
+    start_index: int,
+    half_key: Tuple[int, HalfInning],
+    window: int,
+) -> Optional[float]:
+    """Return the timestamp of the first state in the window that satisfies the
+    activity signal — the earliest evidence of a real pitch or batter change.
+
+    Used to place the HALF_INNING_START chapter at the moment game activity
+    first appeared rather than at the trigger state (which may still be
+    pregame). Returns None if no activity signal is found in the window.
+    """
+    window_states = states[start_index : start_index + window]
+    prev_batter: Optional[str] = None
+    for state in window_states:
+        if _half_key(state) != half_key:
+            continue
+        if not _is_plausible_batter_state(state):
+            continue
+        if (
+            state.balls is not None
+            and state.strikes is not None
+            and (state.balls > 0 or state.strikes > 0)
+        ):
+            return state.timestamp_seconds
+        if prev_batter is not None and state.batter_number and state.batter_number != prev_batter:
+            return state.timestamp_seconds
+        if state.batter_number:
+            prev_batter = state.batter_number
+    return None
+```
+
+**Update** `_confirmed_half_key()` to use the window-based check:
+
+```python
+def _confirmed_half_key(
+    states: List[OverlayState],
+    start_index: int,
+    half_key: Tuple[int, HalfInning],
+    window: int,
+    minimum: int,
+    require_activity_signal: bool = False,
+) -> bool:
+    window_states = states[start_index : start_index + window]
+    observations = sum(1 for s in window_states if _half_key(s) == half_key)
+    if len(window_states) < minimum:
+        confirmed = len(window_states) >= 2 and observations == len(window_states)
+    else:
+        confirmed = observations >= minimum
+    if not confirmed:
+        return False
+    if require_activity_signal:
+        return _window_has_game_active_signal(window_states, half_key)
+    return True
+```
+
+**Update** the emit site in `detect_events()` to use `_game_active_timestamp` when placing the chapter:
+
+```python
+if (
+    half_key is not None
+    and half_key != last_half_key
+    and _is_valid_half_inning_progression(last_half_key, half_key)
+    and _confirmed_half_key(
+        ordered_states,
+        index,
+        half_key,
+        half_inning_confirmation_window,
+        min_half_inning_observations,
+        require_activity_signal=last_half_key is None and starts_at_zero,
+    )
+):
+    inning, half = half_key
+    chapter_ts = state.timestamp_seconds
+    if last_half_key is None and starts_at_zero:
+        active_ts = _game_active_timestamp(
+            ordered_states, index, half_key, half_inning_confirmation_window
+        )
+        if active_ts is not None:
+            chapter_ts = active_ts
+    events.append(
+        Event(
+            event_type=EventType.HALF_INNING_START,
+            timestamp_seconds=chapter_ts,
+            label=format_half_inning_label(inning, half),
+            inning=inning,
+            half=half,
+            metadata={"source": "state_change"},
+        )
+    )
+    last_half_key = half_key
+```
+
+---
+
+#### How each scenario behaves
+
+**Victor Vipers pregame (the bug):** pregame shows `Top 1`, count=0-0, batter=`#26` (lineup highlight). `require_activity_signal=True`. Window of 12 states (≈60s at 5s sampling) all have count=0-0 and batter unchanged. `_window_has_game_active_signal` returns False. HALF_INNING_START is NOT emitted at 0:00.
+
+At the game start (~6:34), the first pitch changes the count to 0-1. When the trigger window first spans past this count-change state, `_window_has_game_active_signal` returns True. `_game_active_timestamp` returns the timestamp of the 0-1 count state. HALF_INNING_START emitted near 6:34. The export automatically adds `0:00 Pregame` because the first chapter is not at 0:00. ✓
+
+**Mid-game stream start (already active at 0:00):** the first sampled state is mid-at-bat with a non-zero count. `_window_has_game_active_signal` returns True immediately. `_game_active_timestamp` returns a timestamp near 0:00. Chapter placed near 0:00. ✓
+
+**Very fast first at-bat (first-pitch out, count never sampled non-zero):** a different batter appears within the window. `_window_has_game_active_signal` returns True via the batter-change criterion. ✓
+
+**Subsequent half-inning transitions:** `last_half_key is not None`, so `require_activity_signal=False`. Window activity check not invoked. Behavior unchanged. ✓
+
+**`--start 10:00` run (not zero-starting):** `starts_at_zero=False`, `require_activity_signal=False`. Window activity check never invoked. Behavior unchanged. ✓
+
+---
+
+#### Edge cases
+
+- **Window spans the game-start boundary:** the trigger fires at t=334s (window reaches t=394s). If the first non-zero count is at t=399s, `_game_active_timestamp` returns 399s. The chapter is emitted near 6:39, not at 0:00 or at the 5:34 trigger. Within sampling-resolution error of the real game start — good enough for a chapter marker.
+
+- **Template without count fields:** if `balls` and `strikes` are not OCR'd, both are always `None`. The non-zero-count criterion never fires; only the batter-change criterion gates the activity signal. If the lineup highlight is stable throughout pregame (same batter displayed), the first chapter is correctly deferred until a batter change is sampled. If count is needed for tighter detection, add `count` to the field list.
+
+- **Game where count is always 0-0 in the window (very fast first at-bat, first-pitch out, next batter also at 0-0 when sampled):** the batter-change criterion covers this. Two different numbers visible in the window → activity signal fires.
+
+---
+
+#### Acceptance criteria
+
+- On `9AaT4645z6s`, exported chapters include `0:00 Pregame` and the first inning chapter appears at or after the first non-zero count in the overlay (approximately 6:34), not at 0:00.
+- Videos with mid-game stream starts still allow a chapter at or near 0:00.
+- `--start 10:00` runs are unaffected.
+- Team-side swaps before the game do not select the batting half or create a first inning chapter on their own.
+- `_window_has_game_active_signal` returns True as soon as a non-zero count or batter change appears in the window.
+- `_game_active_timestamp` returns the timestamp of the first activity-signal state.
+- Subsequent half-inning transitions are unaffected by the window activity check.
+
+#### Tests to add
+
+- `test_window_has_game_active_signal_returns_false_for_pregame_zero_count_stable_batter`
+- `test_window_has_game_active_signal_returns_true_on_nonzero_balls`
+- `test_window_has_game_active_signal_returns_true_on_nonzero_strikes`
+- `test_window_has_game_active_signal_returns_true_on_batter_change`
+- `test_window_has_game_active_signal_ignores_states_with_wrong_half_key`
+- `test_window_has_game_active_signal_ignores_implausible_batter_states`
+- `test_game_active_timestamp_returns_first_nonzero_count_state`
+- `test_game_active_timestamp_returns_batter_change_timestamp_when_no_count`
+- `test_game_active_timestamp_returns_none_when_no_signal_in_window`
+- `test_detect_events_defers_first_chapter_to_game_active_timestamp_on_pregame_stream`
+- `test_detect_events_emits_first_chapter_at_zero_for_mid_game_stream_start`
+- `test_detect_events_skips_activity_signal_for_non_zero_starting_stream`
+- `test_detect_events_subsequent_half_innings_unaffected_by_activity_signal_change`
 
 ### 35. Final Scorebug Marker
 
