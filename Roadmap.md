@@ -738,6 +738,182 @@ Acceptance criteria:
   - `roster_match_source_for_state()` returns `"lineup_number"` for lineup match;
   - `infer_batting_half()` does not count `"lineup_number"` matches.
 
+### 26. Multi-Layout Template Support
+
+Source: Product backlog
+Status: Ready to implement
+
+Support all 10 SidelineHD stream styling combinations via named template files,
+plus a small code fix so Minimal-style layouts (name badge only, no batter
+number) work correctly with the activity signal gate.
+
+**Background — overlay layout variants:**
+
+SidelineHD's Stream Styling settings produce 10 distinct burned-in overlay
+layouts. The current template (`sidelinehd_640x360_active.example.json`) covers
+only one: Default style, Bottom scoreboard position, Flip player card ON.
+
+The 10 variants come from two axes:
+
+**Style axis — Default vs Minimal:**
+
+- *Default*: Full scorebug block (teams, scores, inning, count, diamonds,
+  lineup strip "12 24 88 14") plus a large batter card with player photo,
+  name, jersey number, and batting stats (Bats/Throws/Class).
+- *Minimal*: A thin single-line scorebug bar (teams, scores, inning, count,
+  outs) plus a small name-only badge for the current batter. No photo, no
+  number, no lineup strip.
+
+**Position/flip axis:**
+
+| Style   | Scoreboard Position | Flip | Batter card corner     |
+|---------|---------------------|------|------------------------|
+| Default | Bottom (full-width) | ON   | Bottom-left ← CURRENT  |
+| Default | Bottom (full-width) | OFF  | Bottom-right           |
+| Default | Top (full-width)    | ON   | Bottom-left            |
+| Default | Top (full-width)    | OFF  | Bottom-right           |
+| Default | Bottom Left (block) | N/A  | Bottom-right           |
+| Default | Top Right (block)   | N/A  | Top-left               |
+| Minimal | Bottom              | ON   | Bottom-left            |
+| Minimal | Bottom              | OFF  | Bottom-right           |
+| Minimal | Top                 | ON   | Top-right              |
+| Minimal | Top                 | OFF  | Top-left               |
+
+Batter card corners for Default + Top layouts and Minimal layouts should be
+verified with `template-guide` before use — the table above reflects the most
+likely positions based on the SidelineHD settings preview, but pixel-level
+confirmation requires actual game footage.
+
+**What changes between layouts:**
+
+*Between Default variants:*
+- `batter_card`, `batter_card_name`, `batter_card_number` regions shift corner.
+- `scorebug_full`, `inning`, `count`, `left_score`, `right_score` shift
+  between full-width strip and compact block.
+- `lineup_strip`, `batter_number`, `on_deck_number` shift with the scorebug.
+
+*Default vs Minimal:*
+- Minimal templates omit `batter_card_number`, `lineup_strip`, `batter_number`,
+  `on_deck_number` (these are not present in the Minimal overlay).
+- `batter_card_name` in Minimal covers the small name badge, not a card.
+- The scorebug regions cover the thin bar, not the wider block.
+
+**Code change — activity signal for Minimal layouts:**
+
+`_has_half_inning_activity_signal()` currently only returns `True` when
+`_is_plausible_batter_state(state)` passes, which requires `state.batter_number`
+to be set. In Minimal mode `state.batter_number` is always `None` (no number
+in the overlay), so the pregame-guard would never clear and the first inning
+chapter would be suppressed when running from `--start 0:00`.
+
+Fix: extend the function to also accept a plausible player name as an activity
+signal. A name-only batter badge appearing on screen is equally valid evidence
+that the game is live.
+
+```python
+def _has_half_inning_activity_signal(state: OverlayState) -> bool:
+    if _is_plausible_batter_state(state):
+        return True
+    batter_name = state.metadata.get("batter_name")
+    return bool(batter_name and _looks_like_player_name(str(batter_name)))
+```
+
+This is the only code change required. No other pipeline logic needs updating:
+- `player_name_for_state()` already handles name-only states.
+- `player_number_for_state()` already falls back to roster lookup by name.
+- `_is_plausible_batter_identity()` already takes the `player_name` path when
+  `state.batter_number` is `None` (lines 395–399 in events.py).
+- `_confirmed_batter_identity()` works correctly with name-only states.
+
+Minimal layouts without a roster will produce no at-bat events (acceptable:
+the tool is designed for rostered use).
+
+**Template naming scheme:**
+
+Twelve template files total (current one plus 9 new):
+
+```
+examples/sidelinehd_640x360_active.example.json    ← existing, do not rename
+examples/sidelinehd_default_bottom_noflip.example.json
+examples/sidelinehd_default_top_flip.example.json
+examples/sidelinehd_default_top_noflip.example.json
+examples/sidelinehd_default_bottomleft.example.json
+examples/sidelinehd_default_topright.example.json
+examples/sidelinehd_minimal_bottom_flip.example.json
+examples/sidelinehd_minimal_bottom_noflip.example.json
+examples/sidelinehd_minimal_top_flip.example.json
+examples/sidelinehd_minimal_top_noflip.example.json
+```
+
+The `sidelinehd_640x360_active.example.json` file is kept as-is for backward
+compatibility. A `NOTE` field in each new template identifies which SidelineHD
+settings it matches.
+
+**Template skeleton format for new files:**
+
+Each new template ships with `TODO` placeholders in the `notes` field and
+approximate coordinates derived by mirroring the calibrated Default-Bottom-Flip
+template. Example for `sidelinehd_default_bottom_noflip.example.json`:
+
+```json
+{
+  "name": "sidelinehd_default_bottom_noflip",
+  "video_width": 640,
+  "video_height": 360,
+  "regions": {
+    "inning": { "x": ..., ... },
+    "count": { "x": ..., ... },
+    "batter_card_name": { "x": ..., ... },
+    "batter_card_number": { "x": ..., ... },
+    "lineup_strip": { "x": ..., ... },
+    "batter_number": { "x": ..., ... },
+    "on_deck_number": { "x": ..., ... }
+  },
+  "notes": "SidelineHD settings: Default style, Bottom scoreboard, Flip OFF. SKELETON — verify all regions with template-guide before first use."
+}
+```
+
+Minimal templates omit the four regions not present in that overlay style.
+
+**Calibration workflow for new templates:**
+
+Skeleton templates ship with mirrored/estimated coordinates. Each must be
+verified against real footage using the existing `template-guide` command:
+
+```sh
+sidelinehd-extractor template-guide path/to/game.mp4 scratch/guide.png \
+  --template examples/sidelinehd_default_bottom_noflip.example.json \
+  --timestamp 10:00
+```
+
+Adjust fractional coordinates until the guide overlays align, then commit the
+validated template. Ryan must validate templates he actually uses.
+
+**README additions:**
+
+- New "Template Selection" section listing the 10 layouts in a table, matching
+  each to its template file and the corresponding SidelineHD settings page
+  selections (Style, Scoreboard Position, Flip toggle).
+- Note that skeleton templates require calibration before first use.
+
+Acceptance criteria:
+- `_has_half_inning_activity_signal()` returns `True` for states with a
+  plausible player name even when `batter_number` is `None`.
+- 9 new skeleton template files exist in `examples/`, one per layout variant
+  not covered by the existing calibrated template.
+- Each skeleton template includes a `notes` field identifying the SidelineHD
+  settings it matches and a calibration reminder.
+- Minimal templates do not include `batter_card_number`, `lineup_strip`,
+  `batter_number`, or `on_deck_number` regions.
+- README "Template Selection" section maps all 10 SidelineHD layout
+  combinations to template files.
+- Tests cover:
+  - `_has_half_inning_activity_signal()` returns `True` for a name-only state
+    with a plausible player name;
+  - `_has_half_inning_activity_signal()` returns `False` for a state with
+    neither a batter number nor a plausible player name;
+  - existing batter-number activity signal test still passes.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
