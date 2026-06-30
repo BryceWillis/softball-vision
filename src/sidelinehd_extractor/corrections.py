@@ -21,6 +21,11 @@ class EventCorrection:
     event_type: Optional[EventType] = None
     match_window_seconds: float = 0.5
     reason: Optional[str] = None
+    label: Optional[str] = None
+    player_number: Optional[str] = None
+    player_name: Optional[str] = None
+    inning: Optional[int] = None
+    half: Optional[HalfInning] = None
 
 
 def load_event_corrections(path: Path) -> List[EventCorrection]:
@@ -55,13 +60,19 @@ def apply_event_corrections(
     deleted_indexes = set()
 
     for correction in corrections:
+        if _is_add_field(correction.field_name):
+            corrected_events.append(_event_from_add_correction(correction))
+            continue
         index = _find_target_event(corrected_events, correction, deleted_indexes)
         if _is_delete_field(correction.field_name):
             deleted_indexes.add(index)
             continue
         corrected_events[index] = _apply_field_correction(corrected_events[index], correction)
 
-    return [event for index, event in enumerate(corrected_events) if index not in deleted_indexes]
+    return sorted(
+        [event for index, event in enumerate(corrected_events) if index not in deleted_indexes],
+        key=lambda event: event.timestamp_seconds,
+    )
 
 
 def _correction_from_row(row: dict, row_number: int) -> EventCorrection:
@@ -72,6 +83,8 @@ def _correction_from_row(row: dict, row_number: int) -> EventCorrection:
     event_type_text = (row.get("event_type") or "").strip()
     event_type = EventType(event_type_text) if event_type_text else None
     match_window_text = (row.get("match_window_seconds") or row.get("match_window") or "").strip()
+    half_text = (row.get("half") or "").strip()
+    inning_text = (row.get("inning") or "").strip()
 
     return EventCorrection(
         timestamp_seconds=parse_timestamp_value(timestamp_text),
@@ -80,6 +93,11 @@ def _correction_from_row(row: dict, row_number: int) -> EventCorrection:
         value=(row.get("value") or "").strip(),
         match_window_seconds=float(match_window_text) if match_window_text else 0.5,
         reason=(row.get("reason") or "").strip() or None,
+        label=(row.get("label") or "").strip() or None,
+        player_number=(row.get("player_number") or "").strip() or None,
+        player_name=(row.get("player_name") or "").strip() or None,
+        inning=int(inning_text) if inning_text else None,
+        half=HalfInning(half_text) if half_text else None,
     )
 
 
@@ -133,6 +151,36 @@ def _apply_field_correction(event: Event, correction: EventCorrection) -> Event:
         return replace(event, event_type=EventType(value))
 
     raise ValueError(f"unsupported correction field: {field_name}")
+
+
+def _event_from_add_correction(correction: EventCorrection) -> Event:
+    if correction.event_type is None:
+        raise ValueError("add correction requires event_type")
+    label = correction.label or correction.value
+    if not label:
+        label = _format_added_event_label(correction)
+    return Event(
+        event_type=correction.event_type,
+        timestamp_seconds=correction.timestamp_seconds,
+        label=label,
+        inning=correction.inning,
+        half=correction.half,
+        player_number=correction.player_number,
+        player_name=correction.player_name,
+        metadata={"source": "manual_correction"},
+    )
+
+
+def _format_added_event_label(correction: EventCorrection) -> str:
+    if correction.player_name and correction.player_number:
+        return f"{correction.player_name} (#{correction.player_number})"
+    if correction.player_number:
+        return f"#{correction.player_number}"
+    raise ValueError("add correction requires label or player_number")
+
+
+def _is_add_field(field_name: str) -> bool:
+    return field_name.strip() in {"add", "insert"}
 
 
 def _is_delete_field(field_name: str) -> bool:

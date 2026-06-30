@@ -367,8 +367,15 @@ at_bat_start,1:33:40,player_name,Olivia M.,1,Keep structured player name in sync
 ```
 
 Supported correction fields are `label`, `timestamp_seconds`, `player_number`,
-`player_name`, `inning`, `half`, `event_type`, and `delete`. Use `delete` to
-remove a false event from exports.
+`player_name`, `inning`, `half`, `event_type`, `delete`, and `add`. Use
+`delete` to remove a false event from exports. Use `add` to insert a missing
+event; add rows can include `label`, `player_number`, `player_name`, `inning`,
+and `half` columns:
+
+```csv
+event_type,timestamp,field,value,inning,half,player_number,player_name,label,reason
+at_bat_start,18:48,add,,2,top,26,Amelia V.,Amelia V. (#26),Add missing at-bat
+```
 
 Preview or export with corrections:
 
