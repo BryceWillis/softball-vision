@@ -1805,6 +1805,323 @@ Acceptance criteria:
 - When roster is `None`, the pre-pass is skipped entirely.
 - Tests cover: fused run with one match → resolved; fused run with two matches → not resolved; fused run with no match → not resolved; ≤2-digit string → no-op; batter-card source state → untouched.
 
+### 34. True Game-Start Detection After Pregame Team-Side Changes
+
+Source: Product QA from `9AaT4645z6s` / Victor Vipers run
+Status: Ready to design
+
+The Victor Vipers game exposed an assumption around pregame setup: the scoring app initially had Smash It Sports configured as away and Victor Vipers as home, but after the coin toss the teams were swapped before the real game state began. The exported chapters currently start `Top 1` at `0:00`, even though the visible in-game overlay does not show the real first-inning game state until about `6:34`.
+
+This is distinct from adding a `0:00 Pregame` intro. The detector should avoid treating pregame or stale setup overlay state as a real half-inning start when the stream begins before the scoring app reaches active game state.
+
+Design direction:
+- Add a stronger "active game state" confirmation for the first half-inning, not just inning text.
+- Treat team-name side swaps during pregame as non-authoritative until inning/count/scorebug activity becomes stable.
+- Prefer the first stable in-game overlay frame around `6:34` for `Top 1` in this run.
+- Keep support for videos that truly begin mid-game at `0:00`; do not force a pregame chapter when the first frame is already active game state.
+
+Acceptance criteria:
+- On `9AaT4645z6s`, exported chapters include `0:00 Pregame` and the first inning starts around `6:34`, not `0:00`.
+- Existing videos that start with active game state still allow `Top 1` or the current half-inning at `0:00`.
+- Team-name position changes before first pitch do not select the batting half or create a first inning chapter by themselves.
+- Add tests for a pregame setup state followed by a real first-inning state.
+- Add tests for a mid-game stream start where the initial state is already active and should remain at `0:00`.
+
+### 35. Final Scorebug Marker
+
+Source: Product QA from `9AaT4645z6s` / Victor Vipers run
+Status: Ready to design
+
+The current chapter export stops at the last detected half-inning. A useful publishing marker would be a final timestamp when the scorebug changes from inning/count display to `FINAL` in the middle/status area of the scorebug.
+
+Important template caveat: this applies to the current SidelineHD 640x360 active overlay style. Other SidelineHD templates may place `FINAL` in a different region or use different styling, so this should be modeled as an optional template region/field rather than hardcoded global coordinates.
+
+Design direction:
+- Add an optional overlay template region such as `scorebug_status` or `game_status`.
+- OCR that region only when configured.
+- Parse stable `FINAL` text over multiple samples before emitting a final event/chapter.
+- Export as a chapter line such as `1:36:00 Final` or another consistent label.
+- If the template has no status/final region, behavior is unchanged.
+
+Acceptance criteria:
+- On overlays with a configured status region, stable `FINAL` OCR emits one final marker.
+- The final marker is not emitted from a single noisy OCR read.
+- Templates without the status region continue to run unchanged.
+- Documentation notes that the provided coordinates are for the current 640x360 active overlay style only.
+- Tests cover stable final detection, noisy single-frame final text, and no configured status region.
+
+### 36. Active Lineup-Strip Confidence and Order Recovery
+
+Source: Product QA from `9AaT4645z6s` / Victor Vipers run
+Status: Ready to implement
+
+The lineup-strip improvements in item 33 recovered missing batters in the FLX game, but the Victor Vipers run exposes a false-positive side effect:
+
+- At `19:20`, the export shows `Riley S. (#15)`. `#15` is visible somewhere in the lineup strip but is not the highlighted active batter. The HSV chip detector did not fire (no highlighted chip found), so the fallback full-strip OCR ran and returned `#15` — the first number Tesseract found in the strip image. The detector accepted this as a real at-bat start because #15 is rostered.
+- Around `18:33`, `Maya R. (#22)` is missing. Recovery of missing batters is deferred to item 32 (batting-order continuity validator); item 36 focuses only on stopping the false-positive from full-strip reads.
+- Bottom-of-4th ordering (`#26` before `#2`) is also deferred to item 32.
+
+**Root cause:** `tesseract_ocr_image("lineup_strip")` currently returns the same `OCRBackendResult` shape regardless of whether the HSV highlight chip was found. The caller — `processing.py`, then `state.py`, then `events.py` — has no way to distinguish "the highlighted chip was found and OCR'd" from "the whole strip was OCR'd and we got whatever Tesseract found first." Item 33 stored both `lineup_strip_number` and `lineup_batter_number` but both are treated equally as usable signals.
+
+**Fix: propagate lineup strip OCR confidence end-to-end**
+
+---
+
+#### Layer 1 — `ocr.py`: add `source_detail` to `OCRBackendResult`
+
+```python
+@dataclass(frozen=True)
+class OCRBackendResult:
+    text: str
+    normalized_text: str
+    confidence: Optional[float] = None
+    backend: str = "none"
+    source_detail: Optional[str] = None  # new
+```
+
+`tesseract_ocr_image()` sets this field for `lineup_strip` only:
+
+```python
+if field_name == "lineup_strip":
+    highlighted = _extract_highlighted_lineup_crop(image)
+    if highlighted is not None:
+        processed_highlighted = preprocess_for_ocr(highlighted, "batter_number")
+        highlighted_result = _tesseract_ocr_preprocessed_image(
+            processed_highlighted,
+            OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
+            field_name,
+        )
+        if highlighted_result.normalized_text:
+            return dataclasses.replace(highlighted_result, source_detail="lineup_highlight")
+    processed = preprocess_for_ocr(image, field_name)
+    config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+    result = _tesseract_ocr_preprocessed_image(processed, config, field_name)
+    return dataclasses.replace(result, source_detail="lineup_full_strip")
+```
+
+All other fields leave `source_detail=None`.
+
+Values:
+- `"lineup_highlight"` — HSV chip detection succeeded and Tesseract returned text from that crop.
+- `"lineup_full_strip"` — HSV chip detection failed or returned no text; Tesseract ran on the whole strip.
+- `None` — any field other than `lineup_strip`.
+
+---
+
+#### Layer 2 — `models.py`: add `source_detail` to `OCRSample`
+
+```python
+@dataclass
+class OCRSample:
+    timestamp_seconds: float
+    field_name: str
+    raw_text: str
+    video_sha256: Optional[str] = None
+    normalized_text: Optional[str] = None
+    confidence: Optional[float] = None
+    crop_path: Optional[Path] = None
+    source_detail: Optional[str] = None  # new
+    created_at: datetime = field(default_factory=_utc_now)
+```
+
+Backward-compatible: existing `samples.jsonl` files without this field deserialize with `source_detail=None`, which is treated as `"lineup_full_strip"` (conservative — old full-strip reads don't auto-emit at-bats without re-running OCR).
+
+---
+
+#### Layer 3 — `processing.py`: pass `source_detail` through
+
+```python
+OCRSample(
+    ...
+    source_detail=ocr_result.source_detail,
+)
+```
+
+Also update `write_jsonl` / `load_ocr_samples` to serialize/deserialize the new field.
+
+---
+
+#### Layer 4 — `state.py`: store confidence in OverlayState metadata
+
+In `load_ocr_samples()`, read `source_detail` from JSONL:
+
+```python
+OCRSample(
+    ...
+    source_detail=row.get("source_detail"),
+)
+```
+
+In `state_from_samples()`, extract and store it:
+
+```python
+lineup_strip_sample = samples_by_field.get("lineup_strip")
+lineup_strip_confidence = (
+    lineup_strip_sample.source_detail if lineup_strip_sample else None
+)
+```
+
+Store in metadata:
+
+```python
+metadata={
+    ...
+    "lineup_strip_confidence": lineup_strip_confidence,
+    ...
+}
+```
+
+`lineup_strip_confidence` will be `"lineup_highlight"`, `"lineup_full_strip"`, or `None` (old data / field not sampled).
+
+---
+
+#### Layer 5 — `events.py`: gate lineup-strip at-bat starts on confidence
+
+**New helper:**
+
+```python
+def _lineup_is_highlight_confirmed(state: OverlayState) -> bool:
+    """True when the lineup-strip read came from the HSV-detected chip, not the full strip."""
+    return state.metadata.get("lineup_strip_confidence") == "lineup_highlight"
+```
+
+**Update `_is_plausible_batter_source()`:**
+
+```python
+if source == "lineup_strip":
+    if roster is None:
+        # Without a roster, only allow highlight-confirmed reads
+        return _lineup_is_highlight_confirmed(state)
+    if not _lineup_is_highlight_confirmed(state):
+        return False  # full-strip reads cannot trigger at-bat starts
+    return _has_roster_match_for_state(state, roster)
+```
+
+This is a tightening relative to the current code (which only checked `_has_roster_match_for_state`). Full-strip reads are now hard-blocked from emitting at-bat starts regardless of roster match, because the number may simply be visible in the strip but not the current batter.
+
+**Update `_preferred_lineup_number_for_state()`:**
+
+Change the internal call from `_active_lineup_number_for_state()` to a new helper that only returns a lineup number when highlight-confirmed:
+
+```python
+def _preferred_lineup_number_for_state(state, roster):
+    source = state.metadata.get("batter_number_source")
+    lineup_number = _highlight_lineup_number_for_state(state, roster)  # changed
+    if not lineup_number:
+        return None
+    if source == "lineup_strip":
+        return lineup_number
+    if source != "batter_card":
+        return None
+    batter_name = state.metadata.get("batter_name")
+    if batter_name and roster.number_for_name(str(batter_name)):
+        return None
+    if batter_name and _jersey_number_from_text(str(batter_name)):
+        return None
+    return lineup_number
+```
+
+**New helper `_highlight_lineup_number_for_state()`:**
+
+```python
+def _highlight_lineup_number_for_state(
+    state: OverlayState, roster: Roster
+) -> Optional[str]:
+    """Return a rostered lineup number only when the lineup-strip read is highlight-confirmed."""
+    if not _lineup_is_highlight_confirmed(state):
+        return None
+    return _active_lineup_number_for_state(state, roster)
+```
+
+`_active_lineup_number_for_state()` continues to check all lineup sources (including full-strip `lineup_strip_number`) and is used for roster-match checks in `_has_roster_match_for_state()` — full-strip reads can still confirm a roster match, they just can't be the basis for starting an at-bat.
+
+**Update `_enrich_states_digit_runs()`:**
+
+Only resolve fused digit runs from highlight-confirmed lineup reads:
+
+```python
+def _enrich_states_digit_runs(states, roster):
+    enriched = []
+    for state in states:
+        if (
+            state.metadata.get("batter_number_source") == "lineup_strip"
+            and _lineup_is_highlight_confirmed(state)  # new guard
+            and state.batter_number
+            and len(state.batter_number) > 2
+        ):
+            resolved = _resolve_lineup_digit_run(state.batter_number, roster)
+            if resolved:
+                metadata = dict(state.metadata)
+                metadata["batter_number_digit_run_original"] = state.batter_number
+                state = replace(state, batter_number=resolved, metadata=metadata)
+        enriched.append(state)
+    return enriched
+```
+
+A full-strip read that OCRs as a fused `"265"` is not safe to resolve — we don't know which chip in the strip was at the top and whether the fused string is from adjacent chips or a single chip smear.
+
+---
+
+#### Layer 6 — `review.py`: add `lineup-unconfirmed` flag
+
+```python
+# lineup-unconfirmed
+if (
+    event.metadata.get("batter_number_source") == "lineup_strip"
+    and event.metadata.get("lineup_strip_confidence") != "lineup_highlight"
+):
+    flags_by_index[index].append(
+        f"lineup-unconfirmed={event.metadata.get('lineup_strip_confidence') or 'unknown'}"
+    )
+```
+
+This fires when a `lineup_strip` event slipped through despite non-highlight confidence (e.g., no-roster run, or older data where `lineup_strip_confidence` is absent). It makes these visible for correction.
+
+---
+
+#### What's deferred to item 32
+
+Recovery of missing batters (`Maya R. #22`) and ordering problems (bottom 4 starting with `#2` instead of `#26`) require batting-order continuity. Item 36 only addresses the false-positive suppression. Item 32's validator will use `lineup_strip_confidence` in metadata to know when a lineup-strip read is trustworthy versus speculative.
+
+---
+
+#### Backward compatibility
+
+Existing `samples.jsonl` files produced before this change have no `source_detail` field. When loaded, `lineup_strip_confidence` will be `None` for those samples. Since `None != "lineup_highlight"`, existing lineup-strip reads from old runs will be treated as full-strip (non-highlight) and will no longer trigger at-bat starts on `detect-events` re-runs. Users must re-run `process` (or `run-game`/`run-youtube`) to get the new `source_detail` field into their samples. This is expected and consistent with the behavior of any OCR-layer change.
+
+---
+
+#### Acceptance criteria
+
+- `lineup_strip_confidence` key is present in `OverlayState` metadata whenever a `lineup_strip` sample exists; value is `"lineup_highlight"`, `"lineup_full_strip"`, or `None` for fields that were not sampled.
+- `OCRSample.source_detail` is serialized to and deserialized from JSONL. Old JSONL rows without the field load with `source_detail=None`.
+- A state with `lineup_strip_confidence="lineup_full_strip"` and `batter_number_source="lineup_strip"` does NOT emit an `AT_BAT_START`, even when the number is rostered.
+- A state with `lineup_strip_confidence="lineup_highlight"` and a rostered number DOES emit an `AT_BAT_START` (regression: item 33 FLX behavior preserved).
+- A state with `lineup_strip_confidence="lineup_highlight"` and a 3-digit fused string has the digit run resolved via `_resolve_lineup_digit_run()`.
+- A state with `lineup_strip_confidence="lineup_full_strip"` and a 3-digit fused string is NOT digit-run resolved (the `len > 2` state will be rejected by `_is_plausible_batter_state()` as usual).
+- `lineup-unconfirmed` review flag appears on events where `batter_number_source == "lineup_strip"` and confidence is not `"lineup_highlight"`.
+- `lineup-unconfirmed` does NOT appear on events whose source is `"batter_card"` or `None`.
+- On `9AaT4645z6s`, the `19:20 Riley S. (#15)` event is suppressed (it was a full-strip read; #15 was visible in the strip but not highlighted).
+- On the FLX regression run, the confirmed 2nd-inning batter sequence is unchanged.
+
+#### Tests to add
+
+- `test_lineup_is_highlight_confirmed_returns_true_for_lineup_highlight`
+- `test_lineup_is_highlight_confirmed_returns_false_for_full_strip`
+- `test_lineup_is_highlight_confirmed_returns_false_for_none`
+- `test_detect_events_suppresses_full_strip_lineup_event_even_when_rostered`
+- `test_detect_events_emits_at_bat_from_lineup_highlight_with_roster`
+- `test_detect_events_emits_at_bat_from_lineup_highlight_without_roster`
+- `test_detect_events_suppresses_full_strip_event_without_roster` (no roster → still suppressed)
+- `test_enrich_states_digit_runs_skips_full_strip_states`
+- `test_enrich_states_digit_runs_resolves_highlight_confirmed_states`
+- `test_lineup_unconfirmed_flag_appears_for_full_strip_event`
+- `test_lineup_unconfirmed_flag_not_appears_for_batter_card_event`
+- `test_ocr_sample_serializes_source_detail`
+- `test_load_ocr_samples_reads_source_detail`
+- `test_load_ocr_samples_defaults_source_detail_to_none_for_old_rows`
+- `test_state_from_samples_stores_lineup_strip_confidence_in_metadata`
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
