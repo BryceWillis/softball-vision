@@ -1116,6 +1116,158 @@ actually writes the file only if implemented.
 - Should `[defaults]` be the only section, or should there be a `[team]`
   section for `team_name` too?
 
+### 29. Score at Inning Transitions
+
+Source: Product backlog
+Status: Ready to implement
+
+Record the score at each half-inning start and include it in chapter labels by
+default, so YouTube chapters read `10:00 Top 3 (2-1)` instead of `10:00 Top 3`.
+On by default; `--no-inning-score` suppresses it.
+
+**Background:**
+
+`OverlayState` already has `home_score` and `away_score` fields and the model
+has a `SCORE_CHANGE` event type, but scores are never sampled or populated.
+`FIELD_CONFIGS` in `ocr.py` has tuned configs for `left_score` and `right_score`
+(PSM 10, digit whitelist, scale 6) and the example template defines both
+regions. The plumbing exists; it just needs to be wired up.
+
+Note: the scorebug shows teams positionally (left team, right team). SidelineHD
+does not guarantee which side is home vs. away — that depends on the team setup
+in the app. The pipeline treats them as `left_score` / `right_score` throughout
+and stores them that way in event metadata. The `OverlayState.home_score` and
+`away_score` fields are populated from left/right respectively as a convenience
+mapping (the field names are legacy). Do not rename these fields now; track the
+naming debt as item 22 if it ever becomes a real product.
+
+**What changes:**
+
+**`cli.py` — `_default_run_fields()`**
+
+Add `"left_score"` and `"right_score"` to the default field list:
+
+```python
+return _parse_field_list(args.field) or [
+    "inning",
+    "count",
+    "left_score",
+    "right_score",
+    "batter_card_name",
+    "batter_card_number",
+    "batter_number",
+]
+```
+
+**`state.py` — `parse_score()` and `state_from_samples()`**
+
+Add a score parser alongside the existing number/count parsers:
+
+```python
+def parse_score(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    match = re.search(r'\d+', value)
+    return int(match.group(0)) if match else None
+```
+
+In `state_from_samples()`, populate `home_score` and `away_score` from the
+left/right OCR fields:
+
+```python
+home_score = parse_score(_sample_text(samples_by_field, "left_score"))
+away_score = parse_score(_sample_text(samples_by_field, "right_score"))
+```
+
+Pass them into the `OverlayState` constructor:
+
+```python
+return OverlayState(
+    ...
+    home_score=home_score,
+    away_score=away_score,
+    ...
+)
+```
+
+**`events.py` — `_score_snapshot()` and `detect_events()`**
+
+Add a helper that finds the first non-None score pair in the confirmation window.
+Taking the first available pair (not just the trigger state) handles the common
+case where the trigger state has an OCR gap but adjacent states are readable. Do
+not look beyond the confirmation window — the score could change if runs score
+early in the half-inning.
+
+```python
+def _score_snapshot(
+    states: List[OverlayState],
+    start_index: int,
+    window: int,
+) -> tuple:
+    for state in states[start_index : start_index + window]:
+        if state.home_score is not None and state.away_score is not None:
+            return state.home_score, state.away_score
+    return None, None
+```
+
+When emitting a `HALF_INNING_START` event, add the score to metadata:
+
+```python
+left_score, right_score = _score_snapshot(ordered_states, index, half_inning_confirmation_window)
+metadata={
+    "source": "state_change",
+    "left_score": left_score,
+    "right_score": right_score,
+}
+```
+
+**`exports.py` — `export_youtube_chapters()`**
+
+Add `include_score: bool = True` parameter. When True and both score values are
+present in event metadata, append `(left-right)` to the chapter label:
+
+```python
+def export_youtube_chapters(events, ..., include_score: bool = True):
+    ...
+    for event in events:
+        label = event.label
+        if include_score and event.event_type == EventType.HALF_INNING_START:
+            left = event.metadata.get("left_score")
+            right = event.metadata.get("right_score")
+            if left is not None and right is not None:
+                label = f"{label} ({left}-{right})"
+        lines.append(f"{format_timestamp(event.timestamp_seconds)} {label}")
+```
+
+**`cli.py` — `--no-inning-score` flag**
+
+Add `--no-inning-score` to `run-game`, `run-youtube`, and `export` commands.
+Pass `include_score=not args.no_inning_score` to `export_youtube_chapters()`.
+The shared `_add_run_processing_arguments()` helper can carry this flag for the
+two run commands; `export` wires it independently.
+
+Acceptance criteria:
+- `left_score` and `right_score` are in the default run field list.
+- `state_from_samples()` populates `home_score` / `away_score` when those OCR
+  fields are present.
+- `HALF_INNING_START` events include `left_score` and `right_score` in metadata;
+  both are `None` when OCR was absent for the entire confirmation window.
+- Chapter export appends `(left-right)` to each `HALF_INNING_START` line when
+  both scores are non-None.
+- Chapter export omits the parenthetical when either score is None — no
+  placeholder, no interpolation.
+- `--no-inning-score` suppresses the score in chapter output.
+- Score is not appended to the pregame intro line (`0:00 Pregame`).
+- At-bat exports are unchanged.
+- Tests cover:
+  - `parse_score()` for digits, `#`-prefixed strings, empty/None input;
+  - `state_from_samples()` with `left_score` / `right_score` OCR fields;
+  - `_score_snapshot()` returns first non-None pair, falls back to `(None, None)`;
+  - `detect_events()` stores score in `HALF_INNING_START` metadata;
+  - `export_youtube_chapters()` appends score when present;
+  - `export_youtube_chapters(include_score=False)` omits score;
+  - score absent from all window states → no parenthetical in export.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
