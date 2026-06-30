@@ -5,6 +5,7 @@ from unittest.mock import patch
 from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
     OCRFieldConfig,
+    _tesseract_install_hint,
     _tesseract_command,
     create_ocr_backend,
     normalize_ocr_text,
@@ -34,6 +35,14 @@ class OCRTests(unittest.TestCase):
         with patch("sidelinehd_extractor.ocr.shutil.which", return_value=None):
             with self.assertRaises(OCRBackendUnavailable):
                 create_ocr_backend("tesseract")
+
+    def test_tesseract_install_hint_is_platform_specific(self):
+        with patch("sidelinehd_extractor.ocr.sys.platform", "darwin"):
+            self.assertIn("brew install tesseract", _tesseract_install_hint())
+        with patch("sidelinehd_extractor.ocr.sys.platform", "linux"):
+            self.assertIn("sudo apt install tesseract-ocr", _tesseract_install_hint())
+        with patch("sidelinehd_extractor.ocr.sys.platform", "win32"):
+            self.assertIn("UB Mannheim", _tesseract_install_hint())
 
     def test_preprocess_for_ocr_rejects_none_image(self):
         with self.assertRaisesRegex(ValueError, "OpenCV image array"):

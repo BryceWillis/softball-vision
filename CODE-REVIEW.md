@@ -19,33 +19,15 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Open Items
 
-### Low Priority
-
-#### CR-18 — Tesseract missing-binary error message is macOS-only
-**File:** [ocr.py:104](src/sidelinehd_extractor/ocr.py#L104)
-**Status:** Open
-**Added:** Pass 3
-
-The error raised when Tesseract is not on PATH tells the user to run
-`brew install tesseract`, which is wrong on Windows and Linux.
-
-```python
-"Tesseract OCR was not found on PATH. Install it with `brew install tesseract`, "
-"then rerun with `--ocr tesseract`."
-```
-
-The message should detect the current platform and give the right install
-command for each:
-
-- **macOS**: `brew install tesseract`
-- **Linux**: `sudo apt install tesseract-ocr` (or equivalent)
-- **Windows**: download the installer from
-  `https://github.com/UB-Mannheim/tesseract/wiki`
-
-**Acceptance:** The error message includes a platform-appropriate install
-command. A generic fallback covers unrecognised platforms.
+*(No open items.)*
 
 ## Resolved Items
+
+#### CR-18 — Tesseract missing-binary error message is macOS-only
+**File:** [ocr.py](src/sidelinehd_extractor/ocr.py)
+**Resolved:** Pass 3
+
+`_tesseract_install_hint()` branches on `sys.platform` for darwin, linux, and win, with a generic fallback for unrecognised platforms. Tests cover all three specific platforms via `patch`. 111 tests pass.
 
 #### CR-10a — `export_paths` return type is untyped
 **File:** [workflow.py](src/sidelinehd_extractor/workflow.py)

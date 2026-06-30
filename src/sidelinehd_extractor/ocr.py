@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
@@ -101,8 +102,8 @@ def ensure_tesseract_available() -> None:
 
     if shutil.which("tesseract") is None:
         raise OCRBackendUnavailable(
-            "Tesseract OCR was not found on PATH. Install it with `brew install tesseract`, "
-            "then rerun with `--ocr tesseract`."
+            "Tesseract OCR was not found on PATH. "
+            f"{_tesseract_install_hint()} Then rerun with `--ocr tesseract`."
         )
 
 
@@ -213,3 +214,16 @@ def _tesseract_command(input_path: Path, config: OCRFieldConfig) -> Sequence[str
     if config.whitelist:
         command.extend(["-c", f"tessedit_char_whitelist={config.whitelist}"])
     return command
+
+
+def _tesseract_install_hint() -> str:
+    if sys.platform == "darwin":
+        return "Install it with `brew install tesseract`."
+    if sys.platform.startswith("linux"):
+        return "Install it with `sudo apt install tesseract-ocr` or your distribution's equivalent."
+    if sys.platform.startswith("win"):
+        return (
+            "Install it from the UB Mannheim Windows installer: "
+            "https://github.com/UB-Mannheim/tesseract/wiki."
+        )
+    return "Install Tesseract OCR for your operating system and make sure `tesseract` is on PATH."

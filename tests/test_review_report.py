@@ -69,6 +69,25 @@ class ReviewReportTests(unittest.TestCase):
         self.assertIn("at_bat_start,10:00,delete,true,1,Remove false positive event", text)
         self.assertNotIn("Mia K. (#10)", text)
 
+    def test_render_review_report_skips_roster_name_matched_number_noise(self):
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="Amelia V. (#26)",
+                inning=1,
+                half=HalfInning.TOP,
+                player_number="26",
+                player_name="Amelia V.",
+                metadata={"ocr_player_number": "28", "roster_match_source": "name"},
+            ),
+        ]
+
+        text = render_review_report(events=events, states=[], samples=[], run_path=Path("runs/game"))
+
+        self.assertIn("Flagged events: 0", text)
+        self.assertNotIn("## 10:00 Amelia V. (#26)", text)
+
     def test_write_review_report_uses_run_files(self):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"

@@ -5,7 +5,10 @@ Use this after cloning the repo and installing dependencies.
 ## One-Time Setup
 
 - [ ] Install Python 3.10 or newer.
-- [ ] Install Tesseract: `brew install tesseract`
+- [ ] Install Tesseract:
+  - macOS: `brew install tesseract`
+  - Linux: `sudo apt install tesseract-ocr` or your distribution's equivalent
+  - Windows: install from `https://github.com/UB-Mannheim/tesseract/wiki`
 - [ ] Create a virtual environment: `python3 -m venv .venv`
 - [ ] Activate it: `source .venv/bin/activate`
 - [ ] Install the tool: `python -m pip install -e .`
@@ -35,7 +38,7 @@ sidelinehd-extractor make-roster team-list.txt --output roster.csv
 sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
   --template examples/sidelinehd_640x360_active.example.json \
   --roster roster.csv \
-  --start 10:00 \
+  --start 0:00 \
   --ocr tesseract
 ```
 
@@ -65,6 +68,10 @@ sidelinehd-extractor review-report runs/YOUR_RUN --kind at-bats
 ```sh
 sidelinehd-extractor publish-helper runs/YOUR_RUN
 ```
+
+By default, the paste kit is written under
+`runs/YOUR_RUN/exports/GAME_SLUG/youtube_paste_kit.md`. Add
+`--output-dir scratch/publish` if you want all paste kits in one shared folder.
 
 ## YouTube Posting
 

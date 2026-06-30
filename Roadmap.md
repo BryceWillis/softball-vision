@@ -144,6 +144,7 @@ Acceptance criteria:
 ### 11. Improve Publish Output Defaults
 
 Source: Product backlog
+Status: Done
 
 Revisit the default `scratch/publish/` behavior so first-time users can find outputs easily outside the repo workflow.
 
@@ -155,6 +156,7 @@ Acceptance criteria:
 ### 12. Generalize New Game Checklist
 
 Source: Product backlog
+Status: Done
 
 Make `NEW_GAME_CHECKLIST.md` feel like a reusable template for other teams and users.
 
@@ -257,9 +259,26 @@ Acceptance criteria:
 - Existing tests pass; new tests cover the inference logic with a mock roster
   and mock events split across top/bottom halves.
 
+### 18. Reduce Noisy OCR Number Review Warnings
+
+Source: Product backlog
+Status: Done
+
+Real-game testing showed that SidelineHD's font often makes specific jersey
+numbers OCR incorrectly even when the player name is read well enough to match
+the roster. The review report should flag number mismatches when they matter,
+but it should not distract users with harmless number noise after a roster-name
+match has already corrected the exported player.
+
+Acceptance criteria:
+- `ocr-number=...` remains flagged for number-only or otherwise unanchored detections.
+- `ocr-number=...` is suppressed when `roster_match_source` is `name`.
+- Plain review output and Markdown review reports share the same behavior.
+- Tests cover both the flagged and suppressed paths.
+
 ## Discussion / Later Deliverables
 
-### 17. Detection Configuration Object
+### 19. Detection Configuration Object
 
 Source: Architectural note / Product backlog
 
@@ -269,7 +288,7 @@ Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
 
-### 18. Correction Log Format
+### 20. Correction Log Format
 
 Source: Architectural note / Product backlog
 
@@ -279,7 +298,7 @@ Reason to defer:
 - CSV is currently easy to paste, diff, and explain.
 - JSONL would add complexity before multi-reviewer workflows exist.
 
-### 19. Package/Product Naming
+### 21. Package/Product Naming
 
 Source: Architectural note / Product backlog
 
@@ -289,7 +308,7 @@ Reason to defer:
 - The MVP is intentionally SidelineHD-focused.
 - Renaming package/module paths too early creates churn without improving today’s workflow.
 
-### 20. Half-Inning Progression Policy
+### 22. Half-Inning Progression Policy
 
 Source: Architectural note / Product backlog
 

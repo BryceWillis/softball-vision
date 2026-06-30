@@ -21,13 +21,14 @@ class PublishKitResult:
 
 def default_publish_kit_path(
     run_path: Path,
-    output_dir: Path = Path("scratch/publish"),
+    output_dir: Optional[Path] = None,
     game_name: Optional[str] = None,
 ) -> Path:
     """Return the default paste-kit path for a run/game."""
 
     slug = game_slug_for_run(run_path, explicit_name=game_name)
-    return output_dir.expanduser() / slug / "youtube_paste_kit.md"
+    base_dir = output_dir.expanduser() if output_dir else run_path.expanduser() / "exports"
+    return base_dir / slug / "youtube_paste_kit.md"
 
 
 def write_publish_kit(
@@ -35,7 +36,7 @@ def write_publish_kit(
     chapters_path: Path,
     at_bats_path: Path,
     output_path: Optional[Path] = None,
-    output_dir: Path = Path("scratch/publish"),
+    output_dir: Optional[Path] = None,
     game_name: Optional[str] = None,
 ) -> PublishKitResult:
     """Write a Markdown paste kit from chapter and at-bat text files."""

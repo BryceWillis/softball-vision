@@ -818,8 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_helper.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("scratch/publish"),
-        help="Base output directory when --output is not supplied.",
+        help="Base output directory when --output is not supplied. Defaults to RUN/exports.",
     )
     publish_helper.add_argument("--game-name", help="Override game name used in the kit title and folder.")
     publish_helper.set_defaults(func=_cmd_publish_helper)

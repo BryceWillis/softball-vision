@@ -128,6 +128,12 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_youtube.batting_half, "auto")
         self.assertEqual(detect_events.batting_half, "both")
 
+    def test_publish_helper_defaults_to_run_export_directory(self):
+        parser = build_parser()
+        publish_helper = parser.parse_args(["publish-helper", "runs/game"])
+
+        self.assertIsNone(publish_helper.output_dir)
+
     def test_main_prints_clean_error_for_value_error(self):
         stderr = io.StringIO()
         stdout = io.StringIO()

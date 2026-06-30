@@ -28,6 +28,11 @@ class PublishTests(unittest.TestCase):
 
         self.assertEqual(path, Path("scratch/publish/game/youtube_paste_kit.md"))
 
+    def test_default_publish_kit_path_uses_run_exports_when_no_output_dir_is_given(self):
+        path = default_publish_kit_path(Path("runs/game-20260627-142836"))
+
+        self.assertEqual(path, Path("runs/game-20260627-142836/exports/game/youtube_paste_kit.md"))
+
     def test_write_publish_kit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
