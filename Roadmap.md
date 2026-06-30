@@ -544,9 +544,203 @@ Acceptance criteria:
 - README and `NEW_GAME_CHECKLIST.md` explain when to open the `.html` file versus
   the `.md` fallback.
 
+### 21. Lineup Strip Fallback for Missing Batter Cards
+
+Source: Product backlog
+Status: Ready to implement
+
+Use the SidelineHD top-header `batter_number` region as a secondary signal when
+the large batter card is missing, blank, or fails to parse.
+
+**Issue observed:**
+In the `7Caey7n-4jA` run, the top of the 2nd inning missed the first two
+rostered batters. The large batter card did not appear for those at-bats, so the
+pipeline emitted one number-only event (`18:35 #7`) and missed `#26` and `#2`
+entirely. The top-header lineup strip was present in those frames and would have
+recovered the missing batters.
+
+**Design decisions (all questions resolved):**
+
+**Q: Does `batter_number` reliably point at the current highlighted lineup slot?**
+The `batter_number` region in the template is a fixed pixel crop
+(`x: 0.265, y: 0.111, w: 0.039, h: 0.050`). It was calibrated on one game and
+will read whatever is in that position for any video using the same SidelineHD
+layout. It is not theme-invariant — a different SidelineHD theme could shift
+the lineup strip position. Mitigation: require roster validation before treating
+a lineup-sourced number as authoritative. An unrostered number from the lineup
+strip is discarded when a roster is available.
+
+**Q: Should `lineup_strip` (full-strip OCR) be added now?**
+No. v1 adds only `batter_number` to the default field list. The `batter_number`
+region is already tuned (`psm=10`, digit whitelist, scale=6) and already has a
+fallback path in `state_from_samples()`. Full lineup-strip parsing (multi-number
+text, positional current-batter detection) is deferred until fixed-region OCR
+proves insufficient.
+
+**Q: Should lineup-recovered matches count toward batting-half inference?**
+No. `infer_batting_half()` scores only `roster_match_source == "name"` hits (named
+batter-card OCR). Lineup number matches produce `roster_match_source:
+"lineup_number"` — a distinct value that the inference function ignores. This
+keeps inference based on the strongest signal only and avoids overconfidence from
+the weaker lineup fallback.
+
+**Implementation plan:**
+
+**`cli.py` — `_default_run_fields()`**
+
+Add `"batter_number"` to the default field list:
+
+```python
+return _parse_field_list(args.field) or [
+    "inning",
+    "count",
+    "batter_card_name",
+    "batter_card_number",
+    "batter_number",
+]
+```
+
+**`state.py` — `state_from_samples()`**
+
+Replace the single `or`-chained fallback with an explicit if/elif/else to track
+which source produced the batter number:
+
+```python
+batter_card_text = _sample_text(samples_by_field, "batter_card_number")
+lineup_text = _sample_text(samples_by_field, "batter_number")
+
+if batter_card_text:
+    batter_number = parse_jersey_number(batter_card_text)
+    batter_number_source = "batter_card" if batter_number else None
+elif lineup_text:
+    batter_number = parse_jersey_number(lineup_text)
+    batter_number_source = "lineup_strip" if batter_number else None
+else:
+    batter_number, batter_number_source = None, None
+
+# Detect disagreement when both sources parse successfully to different numbers
+batter_number_disagreement = None
+if batter_card_text and lineup_text:
+    card_num = parse_jersey_number(batter_card_text)
+    lineup_num = parse_jersey_number(lineup_text)
+    if card_num and lineup_num and card_num != lineup_num:
+        batter_number_disagreement = f"batter_card={card_num} lineup={lineup_num}"
+```
+
+Store both in `metadata`:
+
+```python
+metadata={
+    "batter_name": _sample_text(samples_by_field, "batter_card_name"),
+    "batter_number_source": batter_number_source,
+    "batter_number_disagreement": batter_number_disagreement,
+    "fields": {...},
+}
+```
+
+**`events.py` — new `_is_plausible_batter_source()` helper**
+
+Add a filter that rejects unrostered lineup-strip numbers when a roster is
+available. Slot it into `detect_events()` after the existing
+`_is_plausible_batter_identity()` check:
+
+```python
+def _is_plausible_batter_source(
+    state: OverlayState,
+    player_name: Optional[str],
+    roster: Optional[Roster],
+) -> bool:
+    """Reject unrostered lineup-strip numbers when a roster is present."""
+    if state.metadata.get("batter_number_source") != "lineup_strip":
+        return True
+    if roster is None:
+        return True
+    # player_name is set by player_name_for_state() only when the roster matches
+    return player_name is not None
+```
+
+Add to the condition in `detect_events()`:
+
+```python
+and _is_plausible_batter_source(state, player_name, roster)
+```
+
+**`events.py` — `roster_match_source_for_state()`**
+
+When the batter number is from the lineup strip and matches the roster, return
+`"lineup_number"` instead of `"number"`:
+
+```python
+if state.batter_number and roster.name_for_number(state.batter_number):
+    source = state.metadata.get("batter_number_source")
+    return "lineup_number" if source == "lineup_strip" else "number"
+```
+
+**`events.py` — event metadata in `detect_events()`**
+
+Add two new keys to the emitted event:
+
+```python
+metadata={
+    ...
+    "batter_number_source": state.metadata.get("batter_number_source"),
+    "batter_number_disagreement": state.metadata.get("batter_number_disagreement"),
+},
+```
+
+**`review.py` — new review flags**
+
+Add two new flags in `_review_flags()`:
+
+- `lineup-recovered` when `event.metadata.get("batter_number_source") == "lineup_strip"`
+- `card-vs-lineup=<detail>` when `event.metadata.get("batter_number_disagreement")` is set
+
+Also suppress `ocr-number=` noise for lineup-recovered roster matches (same
+rationale as suppressing it for named-card matches):
+
+```python
+if (
+    event.metadata.get("roster_match_source") not in {"name", "lineup_number"}
+    and event.metadata.get("ocr_player_number")
+    and event.player_number != event.metadata.get("ocr_player_number")
+):
+    flags.append(f"ocr-number={event.metadata['ocr_player_number']}")
+```
+
+Acceptance criteria:
+- `"batter_number"` is in the default run field list alongside `batter_card_number`.
+- When `batter_card_number` is absent or unparseable and `batter_number` is
+  present and rostered, the pipeline emits an at-bat with
+  `batter_number_source: "lineup_strip"` in its metadata.
+- When `batter_card_number` is present and parseable, it takes priority; the
+  lineup strip number is recorded only in `batter_number_disagreement` if it
+  differs.
+- Named batter-card roster matches (`roster_match_source: "name"`) are never
+  overridden by the lineup strip.
+- `roster_match_source_for_state()` returns `"lineup_number"` for roster matches
+  sourced from the lineup strip.
+- `infer_batting_half()` scoring is unchanged: only `"name"` source events
+  count; `"lineup_number"` events do not.
+- Unrostered lineup numbers are not emitted as at-bat events when a roster is
+  provided.
+- Review report shows `lineup-recovered` flag for lineup-sourced events.
+- Review report shows `card-vs-lineup=batter_card=N lineup=M` flag when both
+  sources parse to different numbers.
+- `ocr-number=` flag is suppressed for `"lineup_number"` source matches (same
+  as for `"name"` source).
+- Tests cover:
+  - missing batter card (`batter_card_number` absent) recovered from rostered
+    `batter_number`;
+  - unrostered `batter_number` is not emitted when roster is provided;
+  - present `batter_card_number` takes priority; lineup fallback does not fire;
+  - named batter-card match not overridden by conflicting lineup number;
+  - `batter_number_disagreement` metadata set when both sources differ;
+  - `roster_match_source_for_state()` returns `"lineup_number"` for lineup match;
+  - `infer_batting_half()` does not count `"lineup_number"` matches.
+
 ## Discussion / Later Deliverables
 
-### 21. Detection Configuration Object
+### 22. Detection Configuration Object
 
 Source: Architectural note / Product backlog
 
@@ -556,7 +750,7 @@ Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
 
-### 22. Correction Log Format
+### 23. Correction Log Format
 
 Source: Architectural note / Product backlog
 
@@ -566,7 +760,7 @@ Reason to defer:
 - CSV is currently easy to paste, diff, and explain.
 - JSONL would add complexity before multi-reviewer workflows exist.
 
-### 23. Package/Product Naming
+### 24. Package/Product Naming
 
 Source: Architectural note / Product backlog
 
@@ -576,7 +770,7 @@ Reason to defer:
 - The MVP is intentionally SidelineHD-focused.
 - Renaming package/module paths too early creates churn without improving today’s workflow.
 
-### 24. Half-Inning Progression Policy
+### 25. Half-Inning Progression Policy
 
 Source: Architectural note / Product backlog
 
