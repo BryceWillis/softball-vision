@@ -410,6 +410,88 @@ Acceptance criteria:
   `macos-latest`, and `windows-latest`.
 - All existing tests and Ruff continue to pass on all CI platforms.
 
+### 20. HTML Paste Kit with One-Click Copy Buttons
+
+Source: Product backlog
+
+Generate an optional self-contained HTML file alongside the existing Markdown
+paste kit so users can copy each YouTube section to the clipboard with a single
+click instead of manually selecting text.
+
+**Background — current workflow friction:**
+The current `publish-helper` writes a `youtube_paste_kit.md` file with two
+blocks of text that must be copy-pasted into YouTube: the description chapters
+and the pinned-comment at-bats. Opening a Markdown file and manually selecting
+the right block is awkward, especially when posting from a phone or a secondary
+machine. A local HTML file opened in any browser removes that friction.
+
+**Feature description:**
+`publish-helper` gains a `--html` flag (or generates the HTML file alongside
+the Markdown by default — see decision note below) that writes a
+`youtube_paste_kit.html` next to the `.md` file. When opened in a browser it
+shows:
+
+- **Section 1 — Description chapters**: the timestamp chapter block, with a
+  "Copy to clipboard" button. One click, ready to paste into the YouTube
+  description.
+- **Section 2 — Pinned-comment at-bats**: the inning-grouped at-bat block,
+  with its own "Copy to clipboard" button.
+- **Section 3 — Posting checklist**: the same checklist from the Markdown kit,
+  rendered as a readable HTML checklist (checkboxes the user can tick in the
+  browser to track their progress through the posting workflow).
+
+**Decision note — opt-in vs always-on:**
+Generating HTML by default adds no runtime cost (pure string output), but a
+first-time user who opens the run directory may find two output files
+confusing. Recommended approach: generate HTML by default and add
+`--no-html` to suppress it if desired. Codex should make the final call and
+document it.
+
+**Implementation constraints:**
+
+1. **Self-contained, no external dependencies.** The HTML file must work when
+   opened as a `file://` URL with no internet connection. All CSS and
+   JavaScript must be inline. No CDN links, no external fonts.
+
+2. **Clipboard API with fallback.** `navigator.clipboard.writeText()` is the
+   modern API but may be blocked on `file://` URLs in some browsers. Include
+   a `document.execCommand('copy')` fallback (deprecated but reliable for
+   local files). Show a brief "Copied!" confirmation message on the button
+   after a successful copy.
+
+3. **No new Python runtime dependencies.** Use `string.Template` or f-strings
+   for HTML generation. Do not add Jinja2 or any other templating library.
+
+4. **Plain, functional styling.** The HTML does not need to be beautiful — it
+   needs to be clear and usable. A clean two-column or stacked layout with
+   large "Copy" buttons is sufficient. Avoid elaborate CSS that would be hard
+   to maintain.
+
+5. **Content parity with Markdown.** The chapters and at-bats text must be
+   identical to what `export_youtube_chapters` and `export_at_bat_comment`
+   produce (including the project credit footer). Do not re-derive the text in
+   the HTML generator — pass the already-rendered strings through.
+
+6. **Project credit in the HTML footer.** Include the same MIT license and
+   GitHub link that appears in the text exports.
+
+Acceptance criteria:
+- `publish-helper` generates `youtube_paste_kit.html` alongside the Markdown
+  file (or behind `--html` if opt-in is chosen — decision must be documented).
+- The HTML file opens correctly in Chrome, Firefox, and Safari from a
+  `file://` URL with no internet connection.
+- Both copy buttons work in all three browsers; a "Copied!" confirmation is
+  shown after a successful copy.
+- The posting checklist is rendered as interactive HTML checkboxes.
+- The chapters and at-bats text in the HTML is byte-for-byte identical to the
+  corresponding `.txt` export content (minus the credit line, which appears
+  once in the HTML footer rather than embedded in the copyable text — Codex's
+  call on whether to keep or strip it from the copied payload).
+- No new runtime dependencies are added to `pyproject.toml`.
+- Tests verify that the HTML output contains the expected chapter text, at-bat
+  text, both copy buttons, and the checklist.
+- The generator function is unit-testable without a browser.
+
 ## Discussion / Later Deliverables
 
 ### 21. Detection Configuration Object
