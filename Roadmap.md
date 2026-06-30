@@ -276,9 +276,81 @@ Acceptance criteria:
 - Plain review output and Markdown review reports share the same behavior.
 - Tests cover both the flagged and suppressed paths.
 
+### 19. Full Windows Support
+
+Source: Product backlog
+
+Make the tool fully usable on Windows with accurate documentation and a CI
+matrix that catches regressions on both platforms.
+
+**Background — current state:**
+The Python code is already cross-platform (pathlib throughout, no shell=True,
+no Unix-specific syscalls). The gaps are entirely in documentation and the
+absence of any CI. The v0.1.0 release notes explicitly call out Windows as
+untested.
+
+**Gap inventory (documentation):**
+
+| Gap | Location |
+|---|---|
+| `source .venv/bin/activate` is Unix-only | README Setup, checklist |
+| `python3` command | README throughout (Windows usually uses `python`) |
+| `brew install tesseract` appears twice | README Setup + OCR sections |
+| `PYTHONPATH=src python3 ...` env-var syntax | README Dev Checks + inline fallback |
+| `ffmpeg` is completely undocumented | README, checklist |
+
+**Note on ffmpeg:** `yt-dlp` silently falls back to lower-quality single-stream
+formats when `ffmpeg` is unavailable, but for best results it needs `ffmpeg` to
+merge separate audio and video streams. On macOS users typically already have it
+(`brew install ffmpeg`). On Windows it requires a manual step that is currently
+invisible to users. This should be documented alongside Tesseract in Setup.
+
+**Gap inventory (CI):**
+No `.github/` directory exists. Adding a GitHub Actions workflow that runs the
+test suite on `macos-latest` and `windows-latest` would surface any platform
+divergence early. The test suite is already fast (~0.2 s) and dependency-free
+for external binaries, so this should be low-friction to maintain.
+
+**Sub-tasks for Codex:**
+
+1. **README — Setup section**: add a tabbed or clearly-marked set of
+   Windows alternatives for venv creation (`python -m venv`), activation
+   (`.venv\Scripts\activate`), and Tesseract install (UB Mannheim link).
+
+2. **README — OCR section**: the second `brew install tesseract` reference
+   (line ~257) should mirror the same multi-platform guidance as Setup.
+
+3. **README — Development Checks**: `PYTHONPATH=src python -m unittest` works
+   on macOS/Linux. Add a Windows note: use
+   `set PYTHONPATH=src && python -m unittest discover -s tests` in cmd.exe, or
+   `$env:PYTHONPATH="src"; python -m unittest discover -s tests` in PowerShell.
+
+4. **README — ffmpeg**: add a brief "External dependencies" summary near the
+   top of Setup listing both Tesseract and ffmpeg with per-platform install
+   commands. ffmpeg on Windows: `winget install Gyan.FFmpeg` or manual download
+   from https://ffmpeg.org/download.html.
+
+5. **NEW_GAME_CHECKLIST.md**: mirror the same Tesseract + ffmpeg install blocks
+   and add Windows venv-activation alternative.
+
+6. **GitHub Actions CI** (`.github/workflows/ci.yml`): run `python -m unittest
+   discover -s tests` (no `PYTHONPATH=src` needed when the package is installed
+   via `pip install -e .`) on `macos-latest` and `windows-latest`, triggered on
+   push and pull request.
+
+Acceptance criteria:
+- README Setup section documents venv creation, activation, Tesseract, and
+  ffmpeg for both macOS and Windows (Linux a bonus).
+- `brew install tesseract` does not appear without a Windows/Linux alternative
+  nearby.
+- ffmpeg is documented as a recommended system dependency.
+- A GitHub Actions workflow exists and passes on both `macos-latest` and
+  `windows-latest`.
+- All existing tests continue to pass on both platforms.
+
 ## Discussion / Later Deliverables
 
-### 19. Detection Configuration Object
+### 21. Detection Configuration Object
 
 Source: Architectural note / Product backlog
 
@@ -288,7 +360,7 @@ Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
 
-### 20. Correction Log Format
+### 22. Correction Log Format
 
 Source: Architectural note / Product backlog
 
@@ -298,7 +370,7 @@ Reason to defer:
 - CSV is currently easy to paste, diff, and explain.
 - JSONL would add complexity before multi-reviewer workflows exist.
 
-### 21. Package/Product Naming
+### 23. Package/Product Naming
 
 Source: Architectural note / Product backlog
 
@@ -308,7 +380,7 @@ Reason to defer:
 - The MVP is intentionally SidelineHD-focused.
 - Renaming package/module paths too early creates churn without improving today’s workflow.
 
-### 22. Half-Inning Progression Policy
+### 24. Half-Inning Progression Policy
 
 Source: Architectural note / Product backlog
 
