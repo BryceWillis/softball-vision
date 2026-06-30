@@ -1660,65 +1660,335 @@ Acceptance criteria:
 Source: Product backlog (CR-24 observation)
 Status: Ready to implement
 
-Once a likely batting order is established from confirmed at-bats (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), out-of-order candidates can be flagged for human review without suppressing events automatically.
+Once a likely batting order is established from confirmed at-bats (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), the validator has two jobs:
 
-**Substitution constraint:** Substitutions are uncommon but valid. A player may replace an existing lineup slot or be inserted between two batters. The validator must treat continuity as a soft signal, not a hard gate — a player appearing out of the inferred order is not necessarily a false event; it may be a legitimate substitute. Out-of-order events are flagged as `out-of-order-candidate` in the review report; they are never suppressed automatically.
+1. **Fill gaps** — when the next confirmed batter is 1–2 positions ahead of expected, the skipped batters are likely missing from OCR. Synthesize inferred AT_BAT_START events for them with `order_flags: ["inferred-missing"]` so they appear in the review report and can be accepted, corrected, or deleted via the corrections CSV. This addresses the missing-batter cases from the Victor Vipers run.
 
-**Design decisions (all questions resolved):**
+2. **Flag anomalies** — batters appearing more than 2 positions ahead of expected, or appearing at all without being in the inferred cycle, get review flags (`out-of-order-candidate`, `possible-substitute`). No event is ever suppressed.
 
-**Post-detection pass, not inline.** The batting order is only observable after at least one complete inning of confirmed at-bats. A post-detection pass avoids speculative look-ahead and keeps `detect_events()` free of order-tracking state.
+**Substitution constraint:** Substitutions are valid. A player may replace an existing slot or be inserted between two batters. A player not in the cycle gets `possible-substitute`; a player in the cycle but appearing more than 2 positions ahead gets `out-of-order-candidate`. Neither flag suppresses the event.
 
-**Architecture — new functions in `events.py`:**
+---
+
+#### Architecture — new functions in `events.py`
+
+**Public functions:**
 
 ```python
 def infer_batting_cycle(events: List[Event]) -> List[str]:
-    """Return ordered player numbers from the first qualifying seed inning."""
+    """Return ordered player numbers from the first qualifying seed half-inning."""
+
+def validate_batting_order(
+    events: List[Event],
+    roster: Optional[Roster] = None,
+    tolerance: int = 2,
+) -> List[Event]:
+    """Post-pass: flag anomalies and synthesize inferred-missing events."""
 ```
+
+**Internal helper:**
 
 ```python
-def validate_batting_order(events: List[Event]) -> List[Event]:
-    """Add out-of-order-candidate / possible-substitute flags to AT_BAT_START metadata."""
+def _infer_seed_info(events: List[Event]) -> Tuple[List[str], Optional[HalfInning]]:
+    """Return (cycle, seed_half) — the half the cycle was seeded from."""
 ```
 
-`validate_batting_order()`:
-1. Calls `infer_batting_cycle()` to get the ordered number list.
-2. If no cycle (fewer than 3 consecutive roster-matched at-bats in any half-inning), returns events unchanged.
-3. Tracks a position pointer (advances per confirmed at-bat). For each AT_BAT_START event:
-   - Player in cycle within ±2 positions of pointer: advance pointer, no flag.
-   - Player in cycle but > ±2 away: add `out-of-order-candidate` to `event.metadata["order_flags"]`.
-   - Player not in cycle: add `possible-substitute` to `event.metadata["order_flags"]`.
-4. Returns a new list with updated metadata; uses `dataclasses.replace` — original events are not mutated.
+`infer_batting_cycle()` calls `_infer_seed_info()` and returns only the cycle.
 
-**Seed-inning qualification:** A half-inning qualifies if it contributes ≥ 3 consecutive at-bat events with `roster_match_source` in `{"name", "number", "lineup_number"}`. The first qualifying half-inning defines the initial cycle. Later innings extend the cycle with newly seen players (up to roster size), accommodating batters who were absent earlier.
+---
 
-**Cycle advance rule:** The pointer advances modularly (wraps after last position). A substitute (not in cycle) does not advance the pointer. Missing at-bats (e.g. a batter skipped by OCR) are handled by the ±2 tolerance window.
+#### `_infer_seed_info()` — full logic
 
-**Order flags flow into `_review_flags()`:**
+A half-inning qualifies if it has ≥ 3 AT_BAT_START events whose `roster_match_source` is in `{"name", "number", "lineup_number"}`. The first such half-inning (earliest `(inning, half)` tuple in sort order) provides the seed.
+
+```python
+CONFIRMED_SOURCES = frozenset({"name", "number", "lineup_number"})
+MIN_SEED = 3
+
+groups: Dict[Tuple[int, HalfInning], List[str]] = defaultdict(list)
+for event in events:
+    if (
+        event.event_type == EventType.AT_BAT_START
+        and event.inning is not None
+        and event.half is not None
+        and event.player_number
+        and event.metadata.get("roster_match_source") in CONFIRMED_SOURCES
+    ):
+        groups[(event.inning, event.half)].append(event.player_number)
+
+for key in sorted(groups.keys()):
+    players = list(dict.fromkeys(groups[key]))  # dedup, preserve order
+    if len(players) >= MIN_SEED:
+        return players, key[1]  # cycle, seed HalfInning
+
+return [], None
+```
+
+`dict.fromkeys()` deduplicates while preserving insertion order. A player who bats twice in a long half-inning (cycle wrap) appears once in the cycle.
+
+---
+
+#### `validate_batting_order()` — full logic
+
+**Setup:**
+
+```python
+cycle, seed_half = _infer_seed_info(events)
+if len(cycle) < 3 or seed_half is None:
+    return list(events)
+
+cycle_len = len(cycle)
+
+# name lookup: from observed events, then roster
+number_to_name: Dict[str, str] = {}
+for event in events:
+    if event.event_type == EventType.AT_BAT_START and event.player_number and event.player_name:
+        number_to_name[event.player_number] = event.player_name
+# fill from roster for players not yet seen with a name
+if roster is not None:
+    for num in cycle:
+        if num not in number_to_name:
+            name = roster.name_for_number(num)
+            if name:
+                number_to_name[num] = name
+
+# half-inning start timestamps — used as prev_ts at the start of each new half
+half_start_ts: Dict[Tuple[int, HalfInning], float] = {}
+for event in events:
+    if event.event_type == EventType.HALF_INNING_START and event.inning and event.half:
+        half_start_ts[(event.inning, event.half)] = event.timestamp_seconds
+```
+
+**Tracking state:**
+
+```python
+cycle_pos = 0          # next expected position in cycle (modular)
+prev_ts: Optional[float] = None   # timestamp reference for inferred event spacing
+result: List[Event] = []
+```
+
+**Main loop:**
+
+```python
+for event in events:
+    # Track current half start timestamp for inferred event timing
+    if (
+        event.event_type == EventType.HALF_INNING_START
+        and event.half == seed_half
+    ):
+        prev_ts = event.timestamp_seconds  # reset to half-inning start
+        result.append(event)
+        continue
+
+    if (
+        event.event_type != EventType.AT_BAT_START
+        or event.half != seed_half
+        or not event.player_number
+    ):
+        result.append(event)
+        continue
+
+    player_num = event.player_number
+
+    if player_num not in cycle:
+        # Possible substitute — not in the inferred cycle
+        flags = list(event.metadata.get("order_flags") or [])
+        flags.append("possible-substitute")
+        result.append(replace(event, metadata={**event.metadata, "order_flags": flags}))
+        # Do NOT advance pointer; a sub does not consume a cycle slot
+        prev_ts = event.timestamp_seconds
+        continue
+
+    actual_pos = cycle.index(player_num)
+    forward_skip = (actual_pos - cycle_pos) % cycle_len
+
+    if forward_skip <= tolerance:
+        # Within tolerance: synthesize inferred events for any skipped positions
+        if forward_skip > 0 and prev_ts is not None:
+            gap = event.timestamp_seconds - prev_ts
+            for j in range(forward_skip):
+                skipped_pos = (cycle_pos + j) % cycle_len
+                skipped_num = cycle[skipped_pos]
+                ts = prev_ts + gap * (j + 1) / (forward_skip + 1)
+                result.append(
+                    Event(
+                        event_type=EventType.AT_BAT_START,
+                        timestamp_seconds=ts,
+                        label=format_at_bat_label(
+                            skipped_num,
+                            number_to_name.get(skipped_num),
+                        ),
+                        inning=event.inning,
+                        half=event.half,
+                        player_number=skipped_num,
+                        player_name=number_to_name.get(skipped_num),
+                        metadata={
+                            "roster_match_source": "batting_order",
+                            "order_flags": ["inferred-missing"],
+                        },
+                    )
+                )
+        # Confirmed event: no order flag
+        result.append(event)
+        cycle_pos = (actual_pos + 1) % cycle_len
+
+    else:
+        # Out of tolerance
+        flags = list(event.metadata.get("order_flags") or [])
+        flags.append("out-of-order-candidate")
+        result.append(replace(event, metadata={**event.metadata, "order_flags": flags}))
+        # Still advance the pointer — the player is at-bat regardless
+        cycle_pos = (actual_pos + 1) % cycle_len
+
+    prev_ts = event.timestamp_seconds
+
+result.sort(key=lambda e: e.timestamp_seconds)
+return result
+```
+
+**Key design decisions captured above:**
+
+- **`prev_ts` resets at each HALF_INNING_START for the seed half.** When the first batter of a new half was missed (Bottom 4 starts with #2 instead of #26), `prev_ts` equals the HALF_INNING_START timestamp. The inferred event for #26 gets `ts = half_start_ts + gap/2`, placing it between the half start and the first detected batter.
+
+- **Pointer always advances after out-of-tolerance events.** We still need to track where the cycle is, even when something looks wrong. If we didn't advance, subsequent correct batters would cascade into more out-of-order flags.
+
+- **Substitutes don't advance the pointer.** A substitute takes an at-bat but occupies no cycle slot. The next rostered batter should continue from the same expected position.
+
+- **Inferred events get `roster_match_source="batting_order"`.** This is a new value. `infer_batting_half()` only counts `"name"` matches, so inferred events don't affect half-side inference. `_at_bat_spacing_for_roster_match()` treats unknown sources as unconfirmed (standard spacing). No other code paths are affected.
+
+- **No dedup guard on inferred events.** Inferred events are only synthesized when there is a confirmed gap (forward_skip ≥ 1 within tolerance). Since the confirmed event that triggered the gap is not a duplicate of the inferred event, no dedup is needed.
+
+---
+
+#### `forward_skip` worked example
+
+Cycle: `["26", "2", "13", "5", "4"]`, tolerance: 2.
+
+| cycle_pos | detected | actual_pos | forward_skip | action |
+|---|---|---|---|---|
+| 0 | 26 | 0 | 0 | no flag, advance to 1 |
+| 1 | 13 | 2 | 1 | infer #2 between prev and 13, advance to 3 |
+| 3 | 5 | 3 | 0 | no flag, advance to 4 |
+| 4 | 26 | 0 | 1 | infer #4 between prev and 26, advance to 1 (wrapped) |
+| 1 | 5 | 3 | 2 | infer #2 and #13 between prev and 5, advance to 4 |
+| 4 | 2 | 1 | 2 | forward_skip=2: `(1-4+5)%5 = 2` ≤ tolerance — infer #4 and #26, advance to 2 |
+
+Note on the last row: when cycle_pos=4 and actual_pos=1, `(1-4+5)%5 = 2` — this is interpreted as "2 forward skips" (skip #4 at position 4, then #26 at position 0), landing on #2 at position 1. If the cycle were longer and forward_skip > 2, that same situation would be flagged as `out-of-order-candidate` instead.
+
+---
+
+#### Review integration
+
+`_review_flags()` in `review.py` already passes through `order_flags`:
 
 ```python
 for flag in (event.metadata.get("order_flags") or []):
     flags_by_index[index].append(flag)
 ```
 
-**Calling site — `detect_events_file()` and relevant CLI commands:**
+No change needed. `inferred-missing`, `out-of-order-candidate`, and `possible-substitute` all appear in the flags column of `review-events` and `review-report` output.
+
+Note: `review-report` collects only events with flags. Inferred-missing events always have flags, so they always appear in the report for human review. This is intentional — the reviewer should confirm or correct every inferred at-bat before exporting.
+
+---
+
+#### Pipeline calling sites
+
+**`detect_events_file()`:** Add `order_validation: bool = True` parameter and call after detection:
 
 ```python
-events = detect_events(states, roster=roster, ...)
-if roster is not None:
-    events = validate_batting_order(events)
+def detect_events_file(
+    states_path,
+    output_path=None,
+    roster=None,
+    batting_half=None,
+    min_at_bat_spacing_seconds=45.0,
+    min_at_bat_spacing_roster_confirmed_seconds=20.0,
+    order_validation: bool = True,   # new
+) -> EventDetectionResult:
+    ...
+    events = detect_events(...)
+    if roster is not None and order_validation:
+        events = validate_batting_order(events, roster=roster)
+    write_jsonl(destination, events)
+    ...
 ```
 
-Add `--no-order-validation` flag to `detect-events`, `run-game`, `run-youtube` for debugging.
+**`workflow.py` → `run_game()`:** Add `order_validation: bool = True` parameter, thread into `detect_events_file()`.
 
-Acceptance criteria:
-- `infer_batting_cycle()` returns an ordered list of player numbers from the first half-inning with ≥ 3 consecutive roster-matched at-bats.
-- `validate_batting_order()` flags `out-of-order-candidate` for players in the cycle but > ±2 positions from expected.
-- `validate_batting_order()` flags `possible-substitute` for players not in the cycle.
-- No event is removed or suppressed — metadata only.
-- When no seed inning qualifies, no flags are added.
-- `validate_batting_order()` is called after `detect_events()` when roster is present; `--no-order-validation` skips it.
-- Review report renders `out-of-order-candidate` and `possible-substitute` in the flags column.
-- Tests cover: seed inference; in-order player at expected position → no flag; player within ±2 → no flag; player > ±2 → `out-of-order-candidate`; player not in cycle → `possible-substitute`; cycle wraps modularly; insufficient seed → no flags; `--no-order-validation` skips the pass.
+**CLI (`cli.py`):** Add `--no-order-validation` to `_add_run_processing_arguments()` and to the `detect-events` subparser:
+
+```python
+parser.add_argument(
+    "--no-order-validation",
+    action="store_true",
+    dest="no_order_validation",
+    help="Skip batting-order continuity validation after event detection.",
+)
+```
+
+Pass `order_validation=not args.no_order_validation` at each call site.
+
+---
+
+#### Edge cases
+
+- **`prev_ts is None` for the very first at-bat in the seed half** — if no HALF_INNING_START precedes it (e.g., the first event in the file is an AT_BAT_START), no inferred events are generated for the gap. The validator cannot estimate a timestamp without a reference point. Flag `out-of-order-candidate` on the first detected batter if forward_skip > 0.
+
+- **Cycle shorter than 3 players** — no validation, events pass through unchanged. This handles the case where the roster is present but all games were short or OCR never confirmed enough batters.
+
+- **`batting_half="both"` run** — the seed is from one half; events from the other half pass through unchanged. The validator never applies to the other team's at-bats.
+
+- **End of game / incomplete inning** — if the game ends mid-inning without the expected remaining batters, no inferred events are generated for trailing positions since there's no "next confirmed event" to anchor the timing.
+
+- **Inferred events in the corrections CSV** — the user can delete inferred events that are wrong using `delete=true` on the inferred timestamp, or correct the timestamp using `timestamp_seconds`. The `roster_match_source="batting_order"` in the event metadata distinguishes inferred events from OCR-detected ones for correction targeting.
+
+---
+
+#### Acceptance criteria
+
+- `infer_batting_cycle()` returns ordered player numbers from the first half-inning with ≥ 3 confirmed at-bats; returns `[]` if no qualifying half-inning exists.
+- `validate_batting_order()` with `tolerance=2`:
+  - Expected position (forward_skip=0): no flag, pointer advances.
+  - forward_skip 1–2: inferred-missing events synthesized for skipped positions; pointer advances.
+  - forward_skip > 2: `out-of-order-candidate` flag added; pointer still advances.
+  - Player not in cycle: `possible-substitute` flag added; pointer does not advance.
+  - Cycle wraps modularly at end-of-lineup.
+  - Inferred events have `roster_match_source="batting_order"` and `order_flags=["inferred-missing"]`.
+  - Inferred event timestamps split the gap proportionally between prev_ts and current event.
+  - Inferred events use roster name when available; player_name from observed events as fallback.
+  - No event is removed or suppressed (all original events remain in output).
+  - Output is sorted by timestamp.
+- Events from the opposite half pass through unchanged.
+- When no cycle is inferred, all events pass through unchanged.
+- `validate_batting_order()` is called in `detect_events_file()` when roster is present and `order_validation=True`.
+- `--no-order-validation` skips the pass.
+- `inferred-missing`, `out-of-order-candidate`, `possible-substitute` flags appear in `review-events` and `review-report` output.
+- On `9AaT4645z6s` bottom 4: an inferred-missing event appears for the first batter before the next confirmed batter.
+- On the FLX regression run: known 2nd-inning confirmed sequence still exports; inferred events only appear where gaps exist.
+
+#### Tests to add
+
+- `test_infer_batting_cycle_returns_cycle_from_first_qualifying_half`
+- `test_infer_batting_cycle_returns_empty_when_insufficient_confirmed_events`
+- `test_infer_batting_cycle_ignores_unconfirmed_events`
+- `test_infer_batting_cycle_deduplicates_repeated_player`
+- `test_validate_batting_order_no_flag_at_expected_position`
+- `test_validate_batting_order_synthesizes_inferred_event_for_one_skipped_batter`
+- `test_validate_batting_order_synthesizes_two_inferred_events_for_two_skipped_batters`
+- `test_validate_batting_order_flags_out_of_order_when_forward_skip_exceeds_tolerance`
+- `test_validate_batting_order_flags_possible_substitute_for_unknown_player`
+- `test_validate_batting_order_substitute_does_not_advance_pointer`
+- `test_validate_batting_order_cycle_wraps_modularly`
+- `test_validate_batting_order_inferred_event_uses_roster_name`
+- `test_validate_batting_order_inferred_event_splits_gap_proportionally`
+- `test_validate_batting_order_inferred_event_uses_half_start_when_first_batter_missing`
+- `test_validate_batting_order_opposite_half_events_pass_through`
+- `test_validate_batting_order_no_cycle_returns_events_unchanged`
+- `test_validate_batting_order_out_of_order_event_still_advances_pointer`
+- `test_detect_events_file_calls_order_validation_when_roster_present`
+- `test_detect_events_file_skips_order_validation_when_no_roster`
+- `test_no_order_validation_flag_skips_pass`
 
 ### 33. Full Lineup-Strip Digit-Run Parsing
 
