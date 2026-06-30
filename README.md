@@ -82,11 +82,12 @@ sidelinehd-extractor review-events runs/YOUR_RUN --kind chapters
 sidelinehd-extractor publish-helper runs/YOUR_RUN
 ```
 
-`publish-helper` creates a game-named Markdown file under the run's `exports/`
-folder with:
+`publish-helper` creates game-named Markdown and HTML paste-kit files under the
+run's `exports/` folder with:
 
 - Description chapters for the YouTube description.
 - Pinned-comment at-bats grouped by inning.
+- One-click copy buttons in the HTML file.
 - A short posting checklist.
 
 ## YouTube Download Notes
@@ -380,19 +381,22 @@ sidelinehd-extractor publish-helper runs/YOUR_RUN \
   --at-bats scratch/full_at_bats.txt
 ```
 
-By default, this writes a game-named Markdown file beside the run exports, such
-as:
+By default, this writes game-named Markdown and HTML files beside the run
+exports, such as:
 
 ```text
 runs/YOUR_RUN/exports/your_team_game_name_12u_2026_06_24/youtube_paste_kit.md
+runs/YOUR_RUN/exports/your_team_game_name_12u_2026_06_24/youtube_paste_kit.html
 ```
 
 Use `--output-dir scratch/publish` if you prefer one central publish folder.
+Use `--no-html` if you only want the Markdown file.
 
 The paste kit contains:
 
 - Description chapters to paste into the YouTube description.
 - Pinned-comment at-bats to paste as a YouTube comment.
+- HTML copy buttons for each section.
 - A short project credit with the GitHub repo and MIT license.
 - A short publishing checklist.
 

@@ -398,7 +398,7 @@ Acceptance criteria:
 ### 20. HTML Paste Kit with One-Click Copy Buttons
 
 Source: Product backlog
-Status: Ready to implement
+Status: Done
 
 Generate an optional self-contained HTML file alongside the existing Markdown
 paste kit so users can copy each YouTube section to the clipboard with a single

@@ -475,6 +475,7 @@ def _cmd_publish_helper(args: argparse.Namespace) -> int:
         output_path=args.output,
         output_dir=args.output_dir,
         game_name=args.game_name,
+        generate_html=not args.no_html,
     )
     print(_to_json(result))
     return 0
@@ -819,6 +820,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         help="Base output directory when --output is not supplied. Defaults to RUN/exports.",
+    )
+    publish_helper.add_argument(
+        "--no-html",
+        action="store_true",
+        help="Only write the Markdown paste kit; skip the HTML copy helper.",
     )
     publish_helper.add_argument("--game-name", help="Override game name used in the kit title and folder.")
     publish_helper.set_defaults(func=_cmd_publish_helper)

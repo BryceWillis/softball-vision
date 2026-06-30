@@ -70,12 +70,15 @@ sidelinehd-extractor publish-helper runs/YOUR_RUN
 ```
 
 By default, the paste kit is written under
-`runs/YOUR_RUN/exports/GAME_SLUG/youtube_paste_kit.md`. Add
-`--output-dir scratch/publish` if you want all paste kits in one shared folder.
+`runs/YOUR_RUN/exports/GAME_SLUG/` as both `youtube_paste_kit.md` and
+`youtube_paste_kit.html`. Open the HTML file for one-click copy buttons, or use
+the Markdown file as a plain-text fallback. Add `--output-dir scratch/publish`
+if you want all paste kits in one shared folder.
 
 ## YouTube Posting
 
-- [ ] Paste the chapter block into the YouTube description.
+- [ ] Open `youtube_paste_kit.html`.
+- [ ] Copy the chapter block into the YouTube description.
 - [ ] Save the description and confirm chapters appear on the progress bar.
-- [ ] Paste the at-bat block as a YouTube comment.
+- [ ] Copy the at-bat block as a YouTube comment.
 - [ ] Pin the at-bat comment.

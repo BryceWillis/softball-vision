@@ -133,6 +133,13 @@ class CLITests(unittest.TestCase):
         publish_helper = parser.parse_args(["publish-helper", "runs/game"])
 
         self.assertIsNone(publish_helper.output_dir)
+        self.assertFalse(publish_helper.no_html)
+
+    def test_publish_helper_can_disable_html(self):
+        parser = build_parser()
+        publish_helper = parser.parse_args(["publish-helper", "runs/game", "--no-html"])
+
+        self.assertTrue(publish_helper.no_html)
 
     def test_main_prints_clean_error_for_value_error(self):
         stderr = io.StringIO()
