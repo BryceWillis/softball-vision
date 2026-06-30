@@ -914,114 +914,207 @@ Acceptance criteria:
     neither a batter number nor a plausible player name;
   - existing batter-number activity signal test still passes.
 
-### 27. Easier Roster Setup and Defaults
+### 27. Interactive Roster Setup (`setup-roster`)
+
+Source: Product backlog
+Status: Ready to implement
+
+Add an interactive `setup-roster` command that guides a user through pasting
+their roster and writing it to `rosters/<team-slug>.csv` — no text file
+required, no path to remember, no silent parse failures.
+
+This is the v1 of what Codex proposed. The v2 (project config defaults so
+`--roster` and `--template` can be omitted entirely) is a separate design
+problem involving a stdlib version question and is tracked as item 28.
+
+**Why now:** Roster quality directly improves batting-half inference, OCR
+correction, and lineup-strip fallback safety (items 17 and 21). Lowering the
+barrier to creating and maintaining a good roster has compounding value.
+
+**Design decisions (all open questions resolved):**
+
+**Terminator:** Two consecutive blank lines OR EOF (Ctrl+D / Ctrl+Z). Print
+clear instructions. A single accidental Enter while pasting doesn't terminate
+early. No custom sentinel needed.
+
+**Duplicate numbers:** Refuse to write. `parse_team_list()` already raises
+`ValueError` with the line number — surface that message as-is and exit 1.
+
+**Invalid lines:** Fail the whole roster and show the bad line. Same reason:
+a partial roster is worse than no roster.
+
+**Non-interactive (piped stdin):** Detect with `sys.stdin.isatty()`. When not
+a TTY, read all of stdin and skip the name prompt (require `--team-name`),
+skip preview and confirmation, write directly. This makes the command
+testable and scriptable without fighting interactive mocks.
+
+**No config file writing in v1.** See item 28.
+
+**`.gitignore`:** Add `rosters/` — real rosters contain player names and must
+not be committed to a public repo.
+
+**Implementation plan:**
+
+**`.gitignore`**
+
+Add `rosters/` to the local-generated-artifacts block alongside `runs/` and
+`scratch/`.
+
+**`roster.py` — new `default_roster_path()` helper**
+
+```python
+def default_roster_path(team_name: str) -> Path:
+    """Return the default roster path for a team name."""
+    from sidelinehd_extractor.naming import slugify
+    return Path("rosters") / f"{slugify(team_name)}.csv"
+```
+
+**`cli.py` — `_cmd_setup_roster(args)`**
+
+```python
+def _cmd_setup_roster(args: argparse.Namespace) -> int:
+    is_tty = sys.stdin.isatty()
+
+    # Step 1: team name
+    team_name = args.team_name
+    if not team_name:
+        if not is_tty:
+            print("Error: --team-name is required when stdin is not a terminal.", file=sys.stderr)
+            return 1
+        team_name = input("Team name: ").strip()
+        if not team_name:
+            print("Error: team name is required.", file=sys.stderr)
+            return 1
+
+    # Step 2: roster lines
+    if is_tty:
+        print("Paste your roster lines (#number Name). Press Enter twice when done:")
+        lines = _read_roster_lines_interactive()
+    else:
+        lines = sys.stdin.read().splitlines()
+
+    if not any(line.strip() for line in lines):
+        print("Error: no roster lines entered.", file=sys.stderr)
+        return 1
+
+    # Step 3: parse
+    try:
+        roster = parse_team_list("\n".join(lines), team_name=team_name)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    # Step 4: preview (TTY only)
+    if is_tty:
+        _print_roster_preview(roster)
+
+    # Step 5: confirm (TTY only)
+    output_path = args.output or default_roster_path(team_name)
+    if is_tty:
+        response = input(f"\nWrite {len(roster.players)} players to {output_path}? [Y/n] ").strip().lower()
+        if response and response not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
+
+    # Step 6: write
+    result = write_roster_csv(roster, output_path)
+    print(f"Wrote {result.player_count} players to {result.output_path}")
+    if is_tty:
+        print(f"\nUse your roster:")
+        print(f"  sidelinehd-extractor run-youtube 'YOUTUBE_URL' --roster {result.output_path} --template YOUR_TEMPLATE")
+    return 0
+```
+
+`_read_roster_lines_interactive()` reads with `input()` in a loop, tracking
+consecutive blank lines. Two in a row = done; EOFError = done. Returns
+`List[str]`.
+
+`_print_roster_preview(roster)` prints a column-aligned table to stdout. Compute
+column widths from the data; no external libraries. Example output:
+
+```
+ # | Name       | Aliases
+---+------------+--------
+ 2 | Emma B.    | Emma
+26 | Amelia V.  | Amelia
+```
+
+**`cli.py` — `setup-roster` subparser**
+
+```python
+setup_roster = subparsers.add_parser(
+    "setup-roster",
+    help="Interactively paste a team roster and save it to rosters/.",
+)
+setup_roster.add_argument("--team-name", help="Team name (required when stdin is not a terminal).")
+setup_roster.add_argument("--output", "-o", type=Path, help="Override the default output path.")
+setup_roster.set_defaults(func=_cmd_setup_roster)
+```
+
+Acceptance criteria:
+- `setup-roster` (TTY): prompts for team name, reads lines, shows preview,
+  confirms, writes `rosters/<slug>.csv`.
+- `setup-roster --team-name "X"` with piped stdin: reads stdin, writes directly,
+  no preview or confirmation.
+- Generated CSV passes `load_roster()` without error.
+- Duplicate jersey numbers → error on stderr, no file written, exit 1.
+- Invalid line → error on stderr with line number, no file written, exit 1.
+- Empty input → error on stderr, exit 1.
+- `--output` overrides the default path.
+- `rosters/` added to `.gitignore`.
+- `make-roster` is unchanged.
+- `default_roster_path()` is exported from `roster.py` and unit-tested.
+- Tests cover: piped happy-path write, duplicate number rejection, invalid line
+  rejection, empty input rejection, default path slug, `--output` override,
+  next-command text in TTY output.
+- README "Quick Start" and `NEW_GAME_CHECKLIST.md` mention `setup-roster` as
+  the preferred first-run path.
+
+### 28. Project Config Defaults (`sidelinehd.cfg`)
 
 Source: Product backlog
 Status: Needs Design Review
 
-Make roster creation feel like a guided first-run setup instead of a CSV/manual
-path-management task. The current `make-roster` command works, but users still
-need to create a text file, choose an output path, remember that path for every
-game, and trust that the parse was correct. Since roster quality now directly
-improves batting-half inference, OCR number correction, and lineup-strip
-fallback safety, roster setup should be one of the easiest parts of the tool.
+Allow users to set `roster` and `template` once per working directory so every
+`run-youtube` call only needs the URL. This is the v2 of what Codex proposed
+in item 27.
 
-**Current working path:**
+**The problem that blocks item 27:** TOML (`tomllib`) is only in stdlib from
+Python 3.11+. Our minimum is 3.10 (item 19). Using TOML requires either adding
+`tomli` as a runtime dependency or targeting 3.11+. INI format via `configparser`
+(stdlib since 2.x) avoids any dependency decision.
 
-```sh
-sidelinehd-extractor make-roster team-list.txt \
-  --team-name "Smash It Sports 12U" \
-  --output roster.csv
+**Proposed design (needs review before Codex implements):**
+
+Config file name: `sidelinehd.cfg` in the current working directory. Plain text,
+INI format, editable in any text editor. Not hidden (`.`-prefix files confuse
+non-developers on macOS Finder and Windows Explorer).
+
+```ini
+[defaults]
+roster   = rosters/smash-it-sports-12u.csv
+template = examples/sidelinehd_640x360_active.example.json
 ```
 
-The existing paste format remains the preferred input format:
+Config is loaded silently when present. Missing file = no error. CLI flags
+always override config values.
 
-```text
-#2 Emma B.
-#3 Olivia M.
-#10 Mia K.
-#26 Amelia V.
-```
+`setup-roster` (item 27) prints a note after writing the roster: "To skip
+--roster on future runs, add it to sidelinehd.cfg — see README." Item 28
+actually writes the file only if implemented.
 
-**Recommended v1: `setup-roster` command**
+**Open design questions for Claude's next review:**
 
-Add an interactive CLI command:
-
-```sh
-sidelinehd-extractor setup-roster
-```
-
-The command should:
-- prompt for `team_name`;
-- accept pasted roster lines until EOF or a blank-line terminator;
-- parse with the existing `parse_team_list()` logic;
-- print a preview table with `number`, `full_name`, `display_name`, and
-  generated aliases;
-- warn clearly about duplicate jersey numbers, missing names, invalid lines,
-  or suspiciously small rosters;
-- write the CSV to `rosters/<team-slug>.csv` by default;
-- create the `rosters/` directory when needed;
-- print the exact `run-youtube --roster rosters/<team-slug>.csv` command to use
-  next.
-
-**Recommended v2: project default config**
-
-Add an optional local config file so repeat runs do not require `--roster`:
-
-```toml
-# .sidelinehd-extractor.toml
-default_roster = "rosters/smash-it-sports-12u.csv"
-team_name = "Smash It Sports 12U"
-```
-
-Run commands should load this file from the current working directory when
-present, while still allowing explicit CLI flags to override it:
-
-```sh
-sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
-  --template examples/sidelinehd_640x360_active.example.json
-```
-
-**Design notes for review:**
-
-- Reuse the existing `roster.py` parser/writer instead of adding another roster
-  format.
-- Keep CSV as the durable output because it is easy to inspect and edit.
-- Do not require a third-party prompt library; standard input and clear terminal
-  text are enough for v1.
-- Keep `make-roster` for scriptable/non-interactive usage.
-- Treat config loading as optional and local-first. Missing config should never
-  block a run.
-- The config file should not be required for published examples because users
-  can still pass `--roster` explicitly.
-- Consider adding `.sidelinehd-extractor.example.toml` if config support lands,
-  but do not commit a user-specific `.sidelinehd-extractor.toml`.
-
-**Open questions for review:**
-
-- Should `setup-roster` immediately write `.sidelinehd-extractor.toml`, or ask
-  first? Recommendation: ask first, default yes for local users.
-- Should pasted roster input end on EOF only, or also on a blank line?
-  Recommendation: support both.
-- Should duplicate jersey numbers fail hard or warn and refuse to write?
-  Recommendation: refuse to write until corrected.
-- Should invalid lines fail the whole roster or be skipped? Recommendation:
-  fail the whole roster and show the bad line numbers.
-
-Acceptance criteria:
-- `setup-roster` creates `rosters/<team-slug>.csv` from pasted `#N Name` lines.
-- The generated CSV round-trips through `load_roster()`.
-- The preview table shows every parsed player before writing.
-- Duplicate numbers and invalid lines produce clean, actionable errors.
-- `make-roster` continues to work unchanged.
-- Optional config support, if included in the same work item, lets `run-game`,
-  `run-youtube`, `process`, and `detect-events` use a default roster/team name
-  while allowing explicit CLI args to override config values.
-- README and `NEW_GAME_CHECKLIST.md` are updated only after the command/config
-  behavior exists.
-- Tests cover parser reuse, duplicate-number validation, default output path,
-  generated command text, and config override precedence if config support is
-  included.
+- Should `template` be a config key too, or only `roster`? Both would reduce
+  the `run-youtube` invocation to just the URL, which is the most ergonomic
+  outcome.
+- Should `setup-roster` offer to write `sidelinehd.cfg` after writing the
+  roster, or leave that as a manual step?
+- Should `sidelinehd.cfg` be gitignored by default? Recommendation: yes — it
+  contains local paths that won't transfer to other machines. Add an
+  `examples/sidelinehd.example.cfg` as a template.
+- Should `[defaults]` be the only section, or should there be a `[team]`
+  section for `team_name` too?
 
 ## Discussion / Later Deliverables
 
