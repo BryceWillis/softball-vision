@@ -1537,6 +1537,54 @@ Notes:
 - Worth a one-time read of how loups handles OCR confidence filtering and text sorting
   before finalizing ours, purely to make informed *different* choices, not to copy.
 
+### 31. Tiered At-Bat Spacing Gate by Signal Confidence
+
+Source: CR-24 follow-up
+Status: Ready to design
+
+The current 45-second minimum spacing is calibrated for unconfirmed detections and can suppress legitimate short at-bats in fast innings. On the `7Caey7n-4jA` 2nd inning, four rostered at-bats were missed that occurred 30–50 seconds apart.
+
+**Design direction:** Apply shorter minimums when the candidate is strongly roster-confirmed:
+- Roster-name match (`roster_match_source == "name"`): allow ~20 seconds
+- Lineup-number roster match (`roster_match_source == "lineup_number"`): allow ~25 seconds
+- Unrostered/noisy number: keep 45 seconds or higher
+
+Intersects item 22 (DetectionConfig). Do not expose new CLI flags until defaults are validated across at least two previously correct games to avoid trading missed at-bats for false positives.
+
+Acceptance criteria:
+- `detect_events()` applies a shorter minimum spacing when the incoming candidate is roster-confirmed by name or lineup number.
+- Unrostered/weak-signal spacing is unchanged from the current 45-second default.
+- Previously validated games produce comparable or better at-bat lists.
+- Synthetic fixture reproducing the `7Caey7n-4jA` short-spacing case validates the fix.
+
+### 32. Batting-Order Continuity Validator
+
+Source: Product backlog (CR-24 observation)
+Status: Ready to design
+
+Once a likely batting order is established (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), the expected next batter can be used to prefer or reject ambiguous candidates. This is the strongest possible signal for fast innings with OCR noise.
+
+**Design note:** The order is only observable after a full inning, so the validator must operate in a post-detection pass, not inline. This may require restructuring `detect_events()` or adding a correction step. Design the architecture before implementing.
+
+Acceptance criteria (to be filled in during design):
+- Observed batting order is derivable from confirmed roster-matched at-bats within a game.
+- A post-pass can correct or flag events that contradict the observed order.
+- Architecture document or Roadmap update captures the chosen approach.
+
+### 33. Full Lineup-Strip Digit-Run Parsing
+
+Source: Product backlog (CR-24 observation)
+Status: Ready to design
+
+The fixed `batter_number` crop (item 21) recovers single lineup-strip numbers as a fallback. When OCR returns a fused digit run like `265` or `426`, the current parser discards it as an invalid single number. Those runs are often two adjacent roster numbers.
+
+**Design direction:** When `parse_jersey_number()` fails on a multi-digit string, attempt a roster-aware split. Prefer splits that maximize matched roster numbers (`265` → `26` + `5` if both are rostered, over `2` + `65`). Only apply when a roster is present; discard ambiguous splits where multiple interpretations score equally.
+
+Acceptance criteria (to be filled in during design):
+- `parse_jersey_number()` or a new helper can attempt a roster-aware split of a multi-digit OCR string.
+- Split is used only when exactly one rostered number is unambiguously resolved.
+- Ambiguous splits (multiple valid candidates) are discarded, not guessed.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object

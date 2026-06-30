@@ -19,31 +19,72 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Open Items
 
-#### CR-20 — `_format_roster_next_command` hardcodes the default template path
-**File:** [cli.py](src/sidelinehd_extractor/cli.py)
-**Resolved:** Pass 5 re-review
+#### CR-24 — `_is_plausible_batter_source` does not reject unrostered batter-card events
+**Status:** Open
+**File:** [events.py](src/sidelinehd_extractor/events.py)
 
-Hint now uses `--template YOUR_TEMPLATE`. Unit test updated to match. Clean fix.
+`_is_plausible_batter_source()` rejects unrostered lineup-strip numbers when a roster is present, but passes all batter-card source events unconditionally. When a roster is present, a batter-card event whose number is not in the roster and whose name produces no match should also be rejected — it is an equally weak signal.
 
-#### CR-21 — `_read_roster_lines_interactive` has zero test coverage
-**File:** [cli.py](src/sidelinehd_extractor/cli.py)
-**Resolved:** Pass 5 re-review
+Observed on `7Caey7n-4jA` run (top 2, 18:35): `batter_card_number=7` (unrostered), empty `batter_card_name`, `batter_number_disagreement=batter_card=7 lineup=265`. The correct batter was `#26` (rostered, present in the lineup strip as part of `265`), but the unrostered card number was taken as authoritative and the event emitted as `#7`. A second garbled-name event at 20:10 also passed the same gap (noisy name text, unrostered `#7`).
 
-Direct test added using patched `builtins.input` with a double-blank terminator sequence. Test correctly asserts the returned list includes the trailing single blank (appended before the break) and stops before the second blank. 133 tests pass.
+**Fix:** Extend `_is_plausible_batter_source()` with a batter-card guard:
 
-#### CR-22 — `default_roster_path` returns a cwd-relative path with no guard or documentation
-**File:** [roster.py](src/sidelinehd_extractor/roster.py)
-**Resolved:** Pass 5 re-review
+```python
+def _is_plausible_batter_source(
+    state: OverlayState,
+    player_name: Optional[str],
+    roster: Optional[Roster],
+) -> bool:
+    source = state.metadata.get(“batter_number_source”)
+    if source == “lineup_strip”:
+        if roster is None:
+            return True
+        return player_name is not None
+    if source == “batter_card” and roster is not None and player_name is None:
+        if state.batter_number and not roster.name_for_number(state.batter_number):
+            return False
+    return True
+```
 
-TTY confirmation prompt now shows `output_path.expanduser().resolve()` (absolute path). Test added that patches `builtins.input` with a `FakeTTY` stdin and confirms the resolved path appears in the prompt string. 133 tests pass.
+Add a test: unrostered batter-card number, no name match, roster present → event suppressed. Existing lineup-strip suppression tests must continue to pass.
 
-#### CR-23 — `infer_batting_half` accumulates match counts before the `roster is None` guard
+#### CR-25 — Review report lacks flags for unrostered card numbers and garbled card names
+**Status:** Open
+**File:** [review.py](src/sidelinehd_extractor/review.py)
+
+The existing `card-vs-lineup` flag captures source disagreement but not the underlying signal quality. Three new flags would make weak or noisy events visible without requiring raw `events.jsonl` inspection:
+
+- `unrostered-card-number` — `batter_number_source == “batter_card”` and the number is not in the roster
+- `garbled-card-name` — `batter_card_name` metadata is set but contains no token of 3+ characters and the name did not match the roster (conservative: `”Jo”` is a valid short name; `” ad om val”` is clearly broken)
+- `lineup-had-rostered-candidate` — `batter_number_disagreement` is set and the lineup side of the disagreement resolves to a rostered number
+
+`_review_flags()` will need roster access to check membership for `unrostered-card-number` and `lineup-had-rostered-candidate`. Pass the roster in (already available at all call sites). Add tests for each new flag and for the suppression path (garbled name that is actually a valid short name).
+
+## Resolved Items
+
+#### CR-23 — `infer_batting_half` zeroed at-bat totals in `roster is None` early return
 **File:** [events.py](src/sidelinehd_extractor/events.py)
 **Resolved:** Pass 5 re-review
 
-Loop now always counts at-bat totals; match step guarded with `if roster is not None`. The `roster is None` branch is checked after the loop and returns real `top_at_bats`/`bottom_at_bats` with zeroed match counts. Regression test updated to assert `top_at_bats == 1`. 133 tests pass.
+Loop now always counts at-bat totals; match step guarded with `if roster is not None`. The `roster is None` branch checks after the loop and returns real top/bottom at-bat counts with zeroed match counts. Regression test updated to assert `top_at_bats == 1`. 133 tests pass.
 
-## Resolved Items
+#### CR-22 — TTY confirmation prompt showed relative output path
+**File:** [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 5 re-review
+
+`display_output_path = output_path.expanduser().resolve()` computed and used in TTY confirmation prompt. Test verifies the resolved absolute path appears in the prompt string. 133 tests pass.
+
+#### CR-21 — `_read_roster_lines_interactive` had zero test coverage
+**File:** [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 5 re-review
+
+Test added using patched `builtins.input` with a double-blank terminator sequence. Asserts the trailing single blank is included and the second consecutive blank stops iteration. 133 tests pass.
+
+#### CR-20 — `_format_roster_next_command` hardcoded the default template path
+**File:** [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 5 re-review
+
+Hint now uses `--template YOUR_TEMPLATE`. Unit test updated to match. 133 tests pass.
 
 #### CR-19 — `_event_has_roster_name_match` has an unused `roster` parameter
 **File:** [events.py](src/sidelinehd_extractor/events.py)
