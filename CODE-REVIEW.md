@@ -1,8 +1,8 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-06-28
-**Review passes:** 3 (Pass 3: documentation review)
+**Last updated:** 2026-06-29
+**Review passes:** 4 (Pass 4: lineup strip fallback)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,7 +19,10 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Open Items
 
-*(No open items.)*
+#### CR-19 — `_event_has_roster_name_match` has an unused `roster` parameter
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+
+After the item-21 simplification, `_event_has_roster_name_match(event, roster)` only reads `event.metadata` — `roster` is never used. Remove the parameter and update the single call site in `infer_batting_half()` to `_event_has_roster_name_match(event)`. No behavior change; this is dead code cleanup.
 
 ## Resolved Items
 

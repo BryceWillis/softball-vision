@@ -12,6 +12,7 @@ from sidelinehd_extractor.state import (
     parse_samples_file,
     parse_states,
     smooth_states,
+    state_from_samples,
 )
 
 
@@ -94,6 +95,39 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(states[0].strikes, 0)
         self.assertEqual(states[0].batter_number, "22")
         self.assertEqual(states[0].metadata["batter_name"], "Maya R.")
+        self.assertEqual(states[0].metadata["batter_number_source"], "batter_card")
+
+    def test_state_from_samples_falls_back_to_lineup_batter_number(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "batter_number": OCRSample(600.0, "batter_number", "26", normalized_text="26"),
+            },
+        )
+
+        self.assertEqual(state.batter_number, "26")
+        self.assertEqual(state.metadata["batter_number_source"], "lineup_strip")
+
+    def test_state_from_samples_prefers_batter_card_over_lineup_number(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "batter_card_number": OCRSample(
+                    600.0,
+                    "batter_card_number",
+                    "#15",
+                    normalized_text="#15",
+                ),
+                "batter_number": OCRSample(600.0, "batter_number", "18", normalized_text="18"),
+            },
+        )
+
+        self.assertEqual(state.batter_number, "15")
+        self.assertEqual(state.metadata["batter_number_source"], "batter_card")
+        self.assertEqual(
+            state.metadata["batter_number_disagreement"],
+            "batter_card=15 lineup=18",
+        )
 
     def test_parse_states_smooths_missing_inning_from_neighbors(self):
         states = parse_states(

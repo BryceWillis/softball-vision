@@ -4,7 +4,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 from pathlib import Path
 
-from sidelinehd_extractor.cli import build_parser, main
+from sidelinehd_extractor.cli import _default_run_fields, build_parser, main
 
 
 class CLITests(unittest.TestCase):
@@ -127,6 +127,21 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_game.batting_half, "auto")
         self.assertEqual(run_youtube.batting_half, "auto")
         self.assertEqual(detect_events.batting_half, "both")
+
+    def test_default_run_fields_include_lineup_batter_number(self):
+        parser = build_parser()
+        run_game = parser.parse_args(["run-game", "game.mp4"])
+
+        self.assertEqual(
+            _default_run_fields(run_game),
+            [
+                "inning",
+                "count",
+                "batter_card_name",
+                "batter_card_number",
+                "batter_number",
+            ],
+        )
 
     def test_publish_helper_defaults_to_run_export_directory(self):
         parser = build_parser()

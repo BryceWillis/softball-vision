@@ -161,6 +161,7 @@ def detect_events(
 
         if (
             _is_plausible_batter_identity(state, effective_batter_number, player_name)
+            and _is_plausible_batter_source(state, player_name, roster)
             and _is_selected_batting_half(state, batting_half)
             and _has_minimum_at_bat_spacing(
                 state.timestamp_seconds,
@@ -195,6 +196,8 @@ def detect_events(
                         "source": "batter_number_change",
                         "ocr_player_number": state.batter_number,
                         "roster_match_source": roster_match_source,
+                        "batter_number_source": state.metadata.get("batter_number_source"),
+                        "batter_number_disagreement": state.metadata.get("batter_number_disagreement"),
                     },
                 )
             )
@@ -339,7 +342,8 @@ def roster_match_source_for_state(
     if batter_name and roster.number_for_name(str(batter_name)):
         return "name"
     if state.batter_number and roster.name_for_number(state.batter_number):
-        return "number"
+        source = state.metadata.get("batter_number_source")
+        return "lineup_number" if source == "lineup_strip" else "number"
     return None
 
 
@@ -397,6 +401,20 @@ def _is_plausible_batter_identity(
     if not player_name:
         return False
     return _looks_like_player_name(player_name)
+
+
+def _is_plausible_batter_source(
+    state: OverlayState,
+    player_name: Optional[str],
+    roster: Optional[Roster],
+) -> bool:
+    """Reject unrostered lineup-strip numbers when a roster is present."""
+
+    if state.metadata.get("batter_number_source") != "lineup_strip":
+        return True
+    if roster is None:
+        return True
+    return player_name is not None
 
 
 def _is_selected_batting_half(state: OverlayState, batting_half: Optional[HalfInning]) -> bool:
@@ -532,9 +550,4 @@ def _has_half_inning_activity_signal(state: OverlayState) -> bool:
 
 
 def _event_has_roster_name_match(event: Event, roster: Optional[Roster]) -> bool:
-    if event.metadata.get("roster_match_source") == "name":
-        return True
-    if roster is None or not event.player_name:
-        return False
-    roster_number = roster.number_for_name(event.player_name)
-    return bool(roster_number and roster_number == event.player_number)
+    return event.metadata.get("roster_match_source") == "name"

@@ -89,12 +89,17 @@ def _review_flags(events: List[Event], options: ReviewOptions) -> List[List[str]
         if event.event_type == EventType.AT_BAT_START:
             if not event.player_name or not event.player_number:
                 flags_by_index[index].append("missing-player")
+            if event.metadata.get("batter_number_source") == "lineup_strip":
+                flags_by_index[index].append("lineup-recovered")
+            disagreement = event.metadata.get("batter_number_disagreement")
+            if disagreement:
+                flags_by_index[index].append(f"card-vs-lineup={disagreement}")
             ocr_player_number = event.metadata.get("ocr_player_number")
             if (
                 ocr_player_number
                 and event.player_number
                 and str(ocr_player_number) != str(event.player_number)
-                and not _has_roster_name_match(event)
+                and not _has_roster_number_match(event)
             ):
                 flags_by_index[index].append(f"ocr-number={ocr_player_number}")
             if previous_at_bat is not None:
@@ -119,5 +124,5 @@ def _review_flags(events: List[Event], options: ReviewOptions) -> List[List[str]
     return flags_by_index
 
 
-def _has_roster_name_match(event: Event) -> bool:
-    return event.metadata.get("roster_match_source") == "name"
+def _has_roster_number_match(event: Event) -> bool:
+    return event.metadata.get("roster_match_source") in {"name", "lineup_number"}

@@ -139,6 +139,8 @@ def _render_state_context(state: OverlayState, event_timestamp_seconds: float) -
         f"| inning | `{half} {state.inning or ''}` |",
         f"| count | `{_format_count(state)}` |",
         f"| batter_number | `{state.batter_number or ''}` |",
+        f"| batter_number_source | `{state.metadata.get('batter_number_source') or ''}` |",
+        f"| batter_number_disagreement | `{state.metadata.get('batter_number_disagreement') or ''}` |",
         f"| batter_name | `{state.metadata.get('batter_name') or ''}` |",
     ]
     for field_name, value in sorted(fields.items()):

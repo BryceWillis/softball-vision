@@ -108,6 +108,7 @@ def _default_run_fields(args: argparse.Namespace) -> List[str]:
         "count",
         "batter_card_name",
         "batter_card_number",
+        "batter_number",
     ]
 
 

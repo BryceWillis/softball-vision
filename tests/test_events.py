@@ -91,6 +91,115 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(at_bat.player_name, "Maya R.")
         self.assertEqual(at_bat.label, "Maya R. (#22)")
 
+    def test_detect_events_recovers_missing_batter_card_from_lineup_number(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_number_source": "lineup_strip"},
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_number_source": "lineup_strip"},
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Amelia V.")
+        self.assertEqual(at_bat.player_number, "26")
+        self.assertEqual(at_bat.metadata["roster_match_source"], "lineup_number")
+        self.assertEqual(at_bat.metadata["batter_number_source"], "lineup_strip")
+
+    def test_detect_events_ignores_unrostered_lineup_number_when_roster_is_available(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={"batter_number_source": "lineup_strip"},
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="7",
+                    metadata={"batter_number_source": "lineup_strip"},
+                ),
+            ],
+            roster=roster,
+        )
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            [EventType.HALF_INNING_START],
+        )
+
+    def test_detect_events_named_card_match_is_not_overridden_by_lineup_disagreement(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="15", full_name="Caroline M.", display_name="Caroline M."),
+                RosterPlayer(number="18", full_name="Other Player", display_name="Other Player"),
+            ],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_name": "Caroline M.",
+                        "batter_number_source": "batter_card",
+                        "batter_number_disagreement": "batter_card=15 lineup=18",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="15",
+                    metadata={
+                        "batter_name": "Caroline M.",
+                        "batter_number_source": "batter_card",
+                        "batter_number_disagreement": "batter_card=15 lineup=18",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Caroline M.")
+        self.assertEqual(at_bat.player_number, "15")
+        self.assertEqual(at_bat.metadata["roster_match_source"], "name")
+        self.assertEqual(
+            at_bat.metadata["batter_number_disagreement"],
+            "batter_card=15 lineup=18",
+        )
+
     def test_detect_events_uses_roster_number_from_ocr_name(self):
         roster = Roster(
             team_name="Stars",
@@ -618,6 +727,29 @@ class EventDetectionTests(unittest.TestCase):
         self.assertIsNone(inference.inferred_half)
         self.assertEqual(inference.warning, "no roster-name matches found")
         self.assertIn("Inferred batting half: both", inference.message)
+
+    def test_infer_batting_half_ignores_lineup_number_matches(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+        events = [
+            Event(
+                EventType.AT_BAT_START,
+                600,
+                "Amelia V. (#26)",
+                half=HalfInning.TOP,
+                player_number="26",
+                player_name="Amelia V.",
+                metadata={"roster_match_source": "lineup_number"},
+            ),
+        ]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertIsNone(inference.inferred_half)
+        self.assertEqual(inference.top_roster_matches, 0)
+        self.assertEqual(inference.warning, "no roster-name matches found")
 
     def test_infer_batting_half_falls_back_to_both_without_roster(self):
         events = [

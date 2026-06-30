@@ -123,10 +123,24 @@ def state_from_samples(timestamp_seconds: float, samples_by_field: Dict[str, OCR
     count_text = _sample_text(samples_by_field, "count")
     balls, strikes = parse_count(count_text)
     inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
-    batter_number = parse_jersey_number(
-        _sample_text(samples_by_field, "batter_card_number")
-        or _sample_text(samples_by_field, "batter_number")
-    )
+    batter_card_text = _sample_text(samples_by_field, "batter_card_number")
+    lineup_text = _sample_text(samples_by_field, "batter_number")
+    batter_card_number = parse_jersey_number(batter_card_text)
+    lineup_number = parse_jersey_number(lineup_text)
+
+    if batter_card_number:
+        batter_number = batter_card_number
+        batter_number_source = "batter_card"
+    elif lineup_number:
+        batter_number = lineup_number
+        batter_number_source = "lineup_strip"
+    else:
+        batter_number = None
+        batter_number_source = None
+
+    batter_number_disagreement = None
+    if batter_card_number and lineup_number and batter_card_number != lineup_number:
+        batter_number_disagreement = f"batter_card={batter_card_number} lineup={lineup_number}"
 
     return OverlayState(
         timestamp_seconds=timestamp_seconds,
@@ -137,6 +151,8 @@ def state_from_samples(timestamp_seconds: float, samples_by_field: Dict[str, OCR
         batter_number=batter_number,
         metadata={
             "batter_name": _sample_text(samples_by_field, "batter_card_name"),
+            "batter_number_source": batter_number_source,
+            "batter_number_disagreement": batter_number_disagreement,
             "fields": {
                 field_name: sample.normalized_text or sample.raw_text
                 for field_name, sample in sorted(samples_by_field.items())

@@ -45,6 +45,43 @@ class ReviewTests(unittest.TestCase):
 
         self.assertNotIn("ocr-number=28", text)
 
+    def test_render_event_review_flags_lineup_recovered_without_ocr_number_noise(self):
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="Amelia V. (#26)",
+                player_number="26",
+                player_name="Amelia V.",
+                metadata={
+                    "ocr_player_number": "28",
+                    "roster_match_source": "lineup_number",
+                    "batter_number_source": "lineup_strip",
+                },
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats")
+
+        self.assertIn("lineup-recovered", text)
+        self.assertNotIn("ocr-number=28", text)
+
+    def test_render_event_review_flags_card_and_lineup_disagreement(self):
+        events = [
+            Event(
+                event_type=EventType.AT_BAT_START,
+                timestamp_seconds=600,
+                label="Caroline M. (#15)",
+                player_number="15",
+                player_name="Caroline M.",
+                metadata={"batter_number_disagreement": "batter_card=15 lineup=18"},
+            ),
+        ]
+
+        text = render_event_review(events, kind="at-bats")
+
+        self.assertIn("card-vs-lineup=batter_card=15 lineup=18", text)
+
     def test_render_event_review_filters_chapters(self):
         events = [
             Event(EventType.HALF_INNING_START, 600, "Top 1"),

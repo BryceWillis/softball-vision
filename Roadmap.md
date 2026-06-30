@@ -547,7 +547,7 @@ Acceptance criteria:
 ### 21. Lineup Strip Fallback for Missing Batter Cards
 
 Source: Product backlog
-Status: Ready to implement
+Status: Done
 
 Use the SidelineHD top-header `batter_number` region as a secondary signal when
 the large batter card is missing, blank, or fails to parse.
@@ -913,6 +913,115 @@ Acceptance criteria:
   - `_has_half_inning_activity_signal()` returns `False` for a state with
     neither a batter number nor a plausible player name;
   - existing batter-number activity signal test still passes.
+
+### 27. Easier Roster Setup and Defaults
+
+Source: Product backlog
+Status: Needs Design Review
+
+Make roster creation feel like a guided first-run setup instead of a CSV/manual
+path-management task. The current `make-roster` command works, but users still
+need to create a text file, choose an output path, remember that path for every
+game, and trust that the parse was correct. Since roster quality now directly
+improves batting-half inference, OCR number correction, and lineup-strip
+fallback safety, roster setup should be one of the easiest parts of the tool.
+
+**Current working path:**
+
+```sh
+sidelinehd-extractor make-roster team-list.txt \
+  --team-name "Smash It Sports 12U" \
+  --output roster.csv
+```
+
+The existing paste format remains the preferred input format:
+
+```text
+#2 Emma B.
+#3 Olivia M.
+#10 Mia K.
+#26 Amelia V.
+```
+
+**Recommended v1: `setup-roster` command**
+
+Add an interactive CLI command:
+
+```sh
+sidelinehd-extractor setup-roster
+```
+
+The command should:
+- prompt for `team_name`;
+- accept pasted roster lines until EOF or a blank-line terminator;
+- parse with the existing `parse_team_list()` logic;
+- print a preview table with `number`, `full_name`, `display_name`, and
+  generated aliases;
+- warn clearly about duplicate jersey numbers, missing names, invalid lines,
+  or suspiciously small rosters;
+- write the CSV to `rosters/<team-slug>.csv` by default;
+- create the `rosters/` directory when needed;
+- print the exact `run-youtube --roster rosters/<team-slug>.csv` command to use
+  next.
+
+**Recommended v2: project default config**
+
+Add an optional local config file so repeat runs do not require `--roster`:
+
+```toml
+# .sidelinehd-extractor.toml
+default_roster = "rosters/smash-it-sports-12u.csv"
+team_name = "Smash It Sports 12U"
+```
+
+Run commands should load this file from the current working directory when
+present, while still allowing explicit CLI flags to override it:
+
+```sh
+sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
+  --template examples/sidelinehd_640x360_active.example.json
+```
+
+**Design notes for review:**
+
+- Reuse the existing `roster.py` parser/writer instead of adding another roster
+  format.
+- Keep CSV as the durable output because it is easy to inspect and edit.
+- Do not require a third-party prompt library; standard input and clear terminal
+  text are enough for v1.
+- Keep `make-roster` for scriptable/non-interactive usage.
+- Treat config loading as optional and local-first. Missing config should never
+  block a run.
+- The config file should not be required for published examples because users
+  can still pass `--roster` explicitly.
+- Consider adding `.sidelinehd-extractor.example.toml` if config support lands,
+  but do not commit a user-specific `.sidelinehd-extractor.toml`.
+
+**Open questions for review:**
+
+- Should `setup-roster` immediately write `.sidelinehd-extractor.toml`, or ask
+  first? Recommendation: ask first, default yes for local users.
+- Should pasted roster input end on EOF only, or also on a blank line?
+  Recommendation: support both.
+- Should duplicate jersey numbers fail hard or warn and refuse to write?
+  Recommendation: refuse to write until corrected.
+- Should invalid lines fail the whole roster or be skipped? Recommendation:
+  fail the whole roster and show the bad line numbers.
+
+Acceptance criteria:
+- `setup-roster` creates `rosters/<team-slug>.csv` from pasted `#N Name` lines.
+- The generated CSV round-trips through `load_roster()`.
+- The preview table shows every parsed player before writing.
+- Duplicate numbers and invalid lines produce clean, actionable errors.
+- `make-roster` continues to work unchanged.
+- Optional config support, if included in the same work item, lets `run-game`,
+  `run-youtube`, `process`, and `detect-events` use a default roster/team name
+  while allowing explicit CLI args to override config values.
+- README and `NEW_GAME_CHECKLIST.md` are updated only after the command/config
+  behavior exists.
+- Tests cover parser reuse, duplicate-number validation, default output path,
+  generated command text, and config override precedence if config support is
+  included.
 
 ## Discussion / Later Deliverables
 
