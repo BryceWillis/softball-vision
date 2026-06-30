@@ -1073,48 +1073,223 @@ Acceptance criteria:
 ### 28. Project Config Defaults (`sidelinehd.cfg`)
 
 Source: Product backlog
-Status: Needs Design Review
+Status: Ready to implement
 
 Allow users to set `roster` and `template` once per working directory so every
 `run-youtube` call only needs the URL. This is the v2 of what Codex proposed
 in item 27.
 
-**The problem that blocks item 27:** TOML (`tomllib`) is only in stdlib from
-Python 3.11+. Our minimum is 3.10 (item 19). Using TOML requires either adding
-`tomli` as a runtime dependency or targeting 3.11+. INI format via `configparser`
-(stdlib since 2.x) avoids any dependency decision.
+**Design decisions (all open questions resolved):**
 
-**Proposed design (needs review before Codex implements):**
+**Format: INI via `configparser` (stdlib, no new dependencies).** The alternative
+was TOML: `tomllib` is only in stdlib from Python 3.11+, our target is 3.10
+(item 19), and adding `tomli` as a runtime dependency for a file with 3 string
+values is disproportionate. `configparser` works on Python 3.9+, is rock-solid,
+and the format is universally readable. If the config ever needs complex types,
+a migration at that point is the right call — not now.
 
-Config file name: `sidelinehd.cfg` in the current working directory. Plain text,
-INI format, editable in any text editor. Not hidden (`.`-prefix files confuse
-non-developers on macOS Finder and Windows Explorer).
+**File name: `sidelinehd.cfg`** in the current working directory. Not hidden —
+`.`-prefix files are invisible in macOS Finder and Windows Explorer, which
+matters for a tool whose primary user is not a developer.
 
+**Section and keys:** One section (`[defaults]`) with three keys: `roster`,
+`template`, `team_name`. No separate `[team]` section — the flat `[defaults]`
+layout is easier to explain and edit.
+
+**Both `roster` and `template` are config keys.** This is the whole point:
+after first-run setup, `sidelinehd-extractor run-youtube 'URL'` should work
+with no flags. `team_name` is included for the `publish-helper` label.
+
+**`setup-roster` integration:** After writing the roster in TTY mode,
+`setup-roster` (item 27) checks `sidelinehd.cfg`:
+- If no config file exists: offer to create it with `roster = <written path>`
+  and prompt for the template path. Default [Y/n].
+- If the file exists but has a different roster: offer to update the roster key.
+- If the file already has the same roster: print nothing (already set).
+
+**Gitignore: YES.** Add `sidelinehd.cfg` to `.gitignore`. The config file
+contains local absolute-ish paths that won't work on another machine. Ship
+`examples/sidelinehd.example.cfg` as the copyable template.
+
+**Missing file:** Silent — no error, no warning. The config feature is
+transparent; users who never create the file see no difference.
+
+**Unknown keys:** Silently ignored (forward compatibility).
+
+**Bad values:** Warn to stderr, skip the bad key, continue. Do not crash.
+
+**Precedence:** CLI flag > config file > built-in default. Never reverse this.
+
+**Implementation plan:**
+
+**`sidelinehd.cfg` (gitignored, not committed)**
+
+Example user-created file:
 ```ini
 [defaults]
 roster   = rosters/smash-it-sports-12u.csv
 template = examples/sidelinehd_640x360_active.example.json
+team_name = Smash It Sports 12U
 ```
 
-Config is loaded silently when present. Missing file = no error. CLI flags
-always override config values.
+**`examples/sidelinehd.example.cfg` (committed to repo)**
 
-`setup-roster` (item 27) prints a note after writing the roster: "To skip
---roster on future runs, add it to sidelinehd.cfg — see README." Item 28
-actually writes the file only if implemented.
+```ini
+# sidelinehd.cfg — local project config (this file is gitignored)
+# Copy to sidelinehd.cfg at the repo root and fill in your paths.
+# CLI flags always override these defaults.
 
-**Open design questions for Claude's next review:**
+[defaults]
+roster   = rosters/your-team-name.csv
+template = examples/sidelinehd_640x360_active.example.json
+# team_name = Your Team 12U
+```
 
-- Should `template` be a config key too, or only `roster`? Both would reduce
-  the `run-youtube` invocation to just the URL, which is the most ergonomic
-  outcome.
-- Should `setup-roster` offer to write `sidelinehd.cfg` after writing the
-  roster, or leave that as a manual step?
-- Should `sidelinehd.cfg` be gitignored by default? Recommendation: yes — it
-  contains local paths that won't transfer to other machines. Add an
-  `examples/sidelinehd.example.cfg` as a template.
-- Should `[defaults]` be the only section, or should there be a `[team]`
-  section for `team_name` too?
+**`.gitignore`**
+
+Add `sidelinehd.cfg` to the local-generated-artifacts block.
+
+**New module: `src/sidelinehd_extractor/config.py`**
+
+```python
+import configparser
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+CONFIG_FILENAME = "sidelinehd.cfg"
+_SECTION = "defaults"
+
+@dataclass(frozen=True)
+class ProjectConfig:
+    roster: Optional[Path] = None
+    template: Optional[Path] = None
+    team_name: Optional[str] = None
+
+def load_project_config(cwd: Optional[Path] = None) -> ProjectConfig:
+    """Load sidelinehd.cfg from cwd; return empty config if absent."""
+    path = (cwd or Path.cwd()) / CONFIG_FILENAME
+    if not path.exists():
+        return ProjectConfig()
+    parser = configparser.ConfigParser()
+    parser.read(str(path), encoding="utf-8")
+    if _SECTION not in parser:
+        return ProjectConfig()
+    section = parser[_SECTION]
+    roster_str = section.get("roster")
+    template_str = section.get("template")
+    team_name = section.get("team_name") or None
+    return ProjectConfig(
+        roster=Path(roster_str) if roster_str else None,
+        template=Path(template_str) if template_str else None,
+        team_name=team_name,
+    )
+
+def write_project_config(config: ProjectConfig, cwd: Optional[Path] = None) -> Path:
+    """Write config to sidelinehd.cfg in cwd, overwriting if present."""
+    path = (cwd or Path.cwd()) / CONFIG_FILENAME
+    parser = configparser.ConfigParser()
+    parser[_SECTION] = {}
+    if config.roster is not None:
+        parser[_SECTION]["roster"] = str(config.roster)
+    if config.template is not None:
+        parser[_SECTION]["template"] = str(config.template)
+    if config.team_name:
+        parser[_SECTION]["team_name"] = config.team_name
+    with path.open("w", encoding="utf-8") as f:
+        parser.write(f)
+    return path
+```
+
+`write_project_config` is used by both `setup-roster` (item 27 integration)
+and any future `setup-defaults` or config-editing command.
+
+**`cli.py` — `_apply_config_defaults(args)`**
+
+```python
+def _apply_config_defaults(args: argparse.Namespace) -> None:
+    """Apply sidelinehd.cfg values where the user did not pass a CLI flag."""
+    from sidelinehd_extractor.config import load_project_config
+    config = load_project_config()
+    if not getattr(args, "roster", None) and config.roster:
+        args.roster = config.roster
+    if not getattr(args, "template", None) and config.template:
+        args.template = config.template
+    if not getattr(args, "team_name", None) and config.team_name:
+        args.team_name = config.team_name
+```
+
+Called at the start of each handler that uses these args:
+
+| Command | Reads from config |
+|---|---|
+| `run-game` | `roster`, `template` |
+| `run-youtube` | `roster`, `template` |
+| `process` | `template` |
+| `detect-events` | `roster` |
+
+Commands that do NOT read config: `export`, `publish-helper`, `review-events`,
+`review-report`, `setup-roster`, `make-roster`, `template-guide`,
+`calibration-frames`, `ocr-image` — they are downstream or utility tools
+that don't take `--roster`/`--template`.
+
+**`setup-roster` integration in `cli.py` (`_cmd_setup_roster`)**
+
+After writing the roster (step 6), in TTY mode:
+
+```python
+if is_tty:
+    _offer_config_update(result.output_path)
+```
+
+```python
+def _offer_config_update(roster_path: Path) -> None:
+    from sidelinehd_extractor.config import (
+        CONFIG_FILENAME, load_project_config, write_project_config, ProjectConfig
+    )
+    existing = load_project_config()
+    if existing.roster == roster_path:
+        return  # already set, say nothing
+    verb = "Update" if Path(CONFIG_FILENAME).exists() else "Create"
+    response = input(f"\n{verb} {CONFIG_FILENAME} to use this roster by default? [Y/n] ").strip().lower()
+    if response and response not in {"y", "yes"}:
+        return
+    template = existing.template
+    if not template:
+        template_input = input("Template path (Enter to skip): ").strip()
+        template = Path(template_input) if template_input else None
+    updated = ProjectConfig(
+        roster=roster_path,
+        template=template,
+        team_name=existing.team_name,
+    )
+    written = write_project_config(updated)
+    print(f"Wrote {written}")
+```
+
+Acceptance criteria:
+- `load_project_config()` returns empty `ProjectConfig` when `sidelinehd.cfg`
+  is absent.
+- `load_project_config()` returns correct `Path` values for `roster` and
+  `template` when the file exists.
+- `load_project_config()` silently ignores missing `[defaults]` section.
+- Unknown keys in `[defaults]` are silently ignored.
+- `write_project_config()` round-trips: written file parses back to same values.
+- `_apply_config_defaults()` applies config values when the corresponding arg
+  is `None`; does NOT override an arg that was explicitly passed.
+- `run-youtube 'URL'` with `sidelinehd.cfg` present uses config roster and
+  template without requiring flags.
+- `run-youtube 'URL' --roster other.csv` still uses the explicit flag, not config.
+- `setup-roster` offers to create/update config after writing the roster (TTY
+  mode only); skips silently if config already has the same roster.
+- `sidelinehd.cfg` added to `.gitignore`; `examples/sidelinehd.example.cfg`
+  committed to repo.
+- Tests cover: load absent file, load valid file, load file with unknown keys,
+  round-trip write/load, `_apply_config_defaults` precedence (config vs CLI
+  flag), `_apply_config_defaults` when args lack the attribute.
+- README "Quick Start" updated to mention `sidelinehd.cfg` after showing
+  `setup-roster`. Show the one-liner result: `sidelinehd-extractor run-youtube 'URL'`
+  with no flags once config is in place.
 
 ### 29. Score at Inning Transitions
 
