@@ -1566,6 +1566,8 @@ Once a likely batting order is established (e.g. `26 → 2 → 13 → 5 → 4 �
 
 **Design note:** The order is only observable after a full inning, so the validator must operate in a post-detection pass, not inline. This may require restructuring `detect_events()` or adding a correction step. Design the architecture before implementing.
 
+**Substitution constraint:** Substitutions are uncommon but valid — a player may replace an existing lineup slot or be inserted between two batters. The validator must treat continuity as a soft signal, not a hard rule. A player appearing out of the inferred order is not necessarily a false event; it may be a legitimate substitute. The practical implication: flag order breaks as `out-of-order-candidate` for human review rather than suppressing the event automatically.
+
 Acceptance criteria (to be filled in during design):
 - Observed batting order is derivable from confirmed roster-matched at-bats within a game.
 - A post-pass can correct or flag events that contradict the observed order.
