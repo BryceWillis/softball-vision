@@ -1540,52 +1540,266 @@ Notes:
 ### 31. Tiered At-Bat Spacing Gate by Signal Confidence
 
 Source: CR-24 follow-up
-Status: Ready to design
+Status: Ready to implement
 
-The current 45-second minimum spacing is calibrated for unconfirmed detections and can suppress legitimate short at-bats in fast innings. On the `7Caey7n-4jA` 2nd inning, four rostered at-bats were missed that occurred 30–50 seconds apart.
+The current 45-second minimum spacing is calibrated for unconfirmed detections and can suppress legitimate short at-bats in fast innings. On a real 2nd inning, four rostered at-bats were missed at 30–50 second spacing.
 
-**Design direction:** Apply shorter minimums when the candidate is strongly roster-confirmed:
-- Roster-name match (`roster_match_source == "name"`): allow ~20 seconds
-- Lineup-number roster match (`roster_match_source == "lineup_number"`): allow ~25 seconds
-- Unrostered/noisy number: keep 45 seconds or higher
+**Design decisions (all questions resolved):**
 
-Intersects item 22 (DetectionConfig). Do not expose new CLI flags until defaults are validated across at least two previously correct games to avoid trading missed at-bats for false positives.
+**How the tiers work:** `roster_match_source` is already computed at line 155 of `events.py` — before the spacing check at line 166. The tier is derivable from this value without any new state.
+
+Three tiers:
+- `"name"` — roster-name match from batter-card OCR: allow 20 seconds
+- `"lineup_number"` or `"number"` — rostered number match (card or lineup): allow 25 seconds
+- `None` or anything else — unrostered/noisy: keep 45 seconds (the current default)
+
+**New parameter:** Add `min_at_bat_spacing_roster_confirmed_seconds: float = 20.0` to `detect_events()` and `detect_events_file()`. This is the floor for both name-confirmed and number-confirmed tiers. A single param is enough: name-confirmed events are almost always also number-confirmed, so two sub-tiers add complexity without measurable benefit. The existing `min_at_bat_spacing_seconds` remains the unrostered floor.
+
+**Implementation plan:**
+
+**`events.py` — helper and `detect_events()` signature**
+
+```python
+def _at_bat_spacing_for_roster_match(
+    roster_match_source: Optional[str],
+    min_spacing_seconds: float,
+    min_spacing_roster_confirmed_seconds: float,
+) -> float:
+    if roster_match_source in {"name", "number", "lineup_number"}:
+        return min_spacing_roster_confirmed_seconds
+    return min_spacing_seconds
+```
+
+Add parameter to `detect_events()`:
+
+```python
+def detect_events(
+    states: Iterable[OverlayState],
+    roster: Optional[Roster] = None,
+    batting_half: Optional[HalfInning] = None,
+    min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    ...
+) -> List[Event]:
+```
+
+In the detection loop, replace the `_has_minimum_at_bat_spacing` call:
+
+```python
+spacing = _at_bat_spacing_for_roster_match(
+    roster_match_source,
+    min_at_bat_spacing_seconds,
+    min_at_bat_spacing_roster_confirmed_seconds,
+)
+and _has_minimum_at_bat_spacing(
+    state.timestamp_seconds,
+    last_at_bat_timestamp,
+    spacing,
+)
+```
+
+Note: `roster_match_source` is already computed before this check (line 155), so no reordering needed.
+
+**`detect_events_file()` — mirror the new parameter:**
+
+```python
+def detect_events_file(
+    ...,
+    min_at_bat_spacing_seconds: float = 45.0,
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+) -> EventDetectionResult:
+    ...
+    return detect_events(
+        ...,
+        min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
+        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+    )
+```
+
+**`cli.py` — new flag on `run-game`, `run-youtube`, `detect-events`**
+
+Add to the shared spacing argument block (near the existing `--min-at-bat-spacing`):
+
+```python
+parser.add_argument(
+    "--min-at-bat-spacing-roster-confirmed",
+    type=float,
+    default=20.0,
+    dest="min_at_bat_spacing_roster_confirmed",
+    metavar="SECONDS",
+    help=(
+        "Minimum seconds between at-bats when the new batter is roster-confirmed. "
+        "Default: 20."
+    ),
+)
+```
+
+Pass to detection:
+
+```python
+min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+```
+
+**Stored in `manifest.json`:** The existing manifest already stores `min_at_bat_spacing_seconds`. Add `min_at_bat_spacing_roster_confirmed_seconds` alongside it so runs are reproducible.
 
 Acceptance criteria:
-- `detect_events()` applies a shorter minimum spacing when the incoming candidate is roster-confirmed by name or lineup number.
-- Unrostered/weak-signal spacing is unchanged from the current 45-second default.
-- Previously validated games produce comparable or better at-bat lists.
-- Synthetic fixture reproducing the `7Caey7n-4jA` short-spacing case validates the fix.
+- `detect_events()` accepts `min_at_bat_spacing_roster_confirmed_seconds` (default 20.0).
+- Roster-confirmed candidates (`roster_match_source` in `{"name", "number", "lineup_number"}`) use the lower threshold; all others use `min_at_bat_spacing_seconds`.
+- `--min-at-bat-spacing-roster-confirmed` flag available on `run-game`, `run-youtube`, and `detect-events`.
+- Tests cover:
+  - Two at-bats 22 s apart, name-confirmed → both emitted.
+  - Two at-bats 22 s apart, unrostered → second suppressed.
+  - Two at-bats 22 s apart, name-confirmed, explicit `--min-at-bat-spacing-roster-confirmed 30` → second suppressed.
+  - `_at_bat_spacing_for_roster_match()` unit-tested for all three tier values.
+- Previously validated games produce comparable or better at-bat lists (manual regression check).
 
 ### 32. Batting-Order Continuity Validator
 
 Source: Product backlog (CR-24 observation)
-Status: Ready to design
+Status: Ready to implement
 
-Once a likely batting order is established (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), the expected next batter can be used to prefer or reject ambiguous candidates. This is the strongest possible signal for fast innings with OCR noise.
+Once a likely batting order is established from confirmed at-bats (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), out-of-order candidates can be flagged for human review without suppressing events automatically.
 
-**Design note:** The order is only observable after a full inning, so the validator must operate in a post-detection pass, not inline. This may require restructuring `detect_events()` or adding a correction step. Design the architecture before implementing.
+**Substitution constraint:** Substitutions are uncommon but valid. A player may replace an existing lineup slot or be inserted between two batters. The validator must treat continuity as a soft signal, not a hard gate — a player appearing out of the inferred order is not necessarily a false event; it may be a legitimate substitute. Out-of-order events are flagged as `out-of-order-candidate` in the review report; they are never suppressed automatically.
 
-**Substitution constraint:** Substitutions are uncommon but valid — a player may replace an existing lineup slot or be inserted between two batters. The validator must treat continuity as a soft signal, not a hard rule. A player appearing out of the inferred order is not necessarily a false event; it may be a legitimate substitute. The practical implication: flag order breaks as `out-of-order-candidate` for human review rather than suppressing the event automatically.
+**Design decisions (all questions resolved):**
 
-Acceptance criteria (to be filled in during design):
-- Observed batting order is derivable from confirmed roster-matched at-bats within a game.
-- A post-pass can correct or flag events that contradict the observed order.
-- Architecture document or Roadmap update captures the chosen approach.
+**Post-detection pass, not inline.** The batting order is only observable after at least one complete inning of confirmed at-bats. A post-detection pass avoids speculative look-ahead and keeps `detect_events()` free of order-tracking state.
+
+**Architecture — new functions in `events.py`:**
+
+```python
+def infer_batting_cycle(events: List[Event]) -> List[str]:
+    """Return ordered player numbers from the first qualifying seed inning."""
+```
+
+```python
+def validate_batting_order(events: List[Event]) -> List[Event]:
+    """Add out-of-order-candidate / possible-substitute flags to AT_BAT_START metadata."""
+```
+
+`validate_batting_order()`:
+1. Calls `infer_batting_cycle()` to get the ordered number list.
+2. If no cycle (fewer than 3 consecutive roster-matched at-bats in any half-inning), returns events unchanged.
+3. Tracks a position pointer (advances per confirmed at-bat). For each AT_BAT_START event:
+   - Player in cycle within ±2 positions of pointer: advance pointer, no flag.
+   - Player in cycle but > ±2 away: add `out-of-order-candidate` to `event.metadata["order_flags"]`.
+   - Player not in cycle: add `possible-substitute` to `event.metadata["order_flags"]`.
+4. Returns a new list with updated metadata; uses `dataclasses.replace` — original events are not mutated.
+
+**Seed-inning qualification:** A half-inning qualifies if it contributes ≥ 3 consecutive at-bat events with `roster_match_source` in `{"name", "number", "lineup_number"}`. The first qualifying half-inning defines the initial cycle. Later innings extend the cycle with newly seen players (up to roster size), accommodating batters who were absent earlier.
+
+**Cycle advance rule:** The pointer advances modularly (wraps after last position). A substitute (not in cycle) does not advance the pointer. Missing at-bats (e.g. a batter skipped by OCR) are handled by the ±2 tolerance window.
+
+**Order flags flow into `_review_flags()`:**
+
+```python
+for flag in (event.metadata.get("order_flags") or []):
+    flags_by_index[index].append(flag)
+```
+
+**Calling site — `detect_events_file()` and relevant CLI commands:**
+
+```python
+events = detect_events(states, roster=roster, ...)
+if roster is not None:
+    events = validate_batting_order(events)
+```
+
+Add `--no-order-validation` flag to `detect-events`, `run-game`, `run-youtube` for debugging.
+
+Acceptance criteria:
+- `infer_batting_cycle()` returns an ordered list of player numbers from the first half-inning with ≥ 3 consecutive roster-matched at-bats.
+- `validate_batting_order()` flags `out-of-order-candidate` for players in the cycle but > ±2 positions from expected.
+- `validate_batting_order()` flags `possible-substitute` for players not in the cycle.
+- No event is removed or suppressed — metadata only.
+- When no seed inning qualifies, no flags are added.
+- `validate_batting_order()` is called after `detect_events()` when roster is present; `--no-order-validation` skips it.
+- Review report renders `out-of-order-candidate` and `possible-substitute` in the flags column.
+- Tests cover: seed inference; in-order player at expected position → no flag; player within ±2 → no flag; player > ±2 → `out-of-order-candidate`; player not in cycle → `possible-substitute`; cycle wraps modularly; insufficient seed → no flags; `--no-order-validation` skips the pass.
 
 ### 33. Full Lineup-Strip Digit-Run Parsing
 
 Source: Product backlog (CR-24 observation)
-Status: Ready to design
+Status: Ready to implement
 
-The fixed `batter_number` crop (item 21) recovers single lineup-strip numbers as a fallback. When OCR returns a fused digit run like `265` or `426`, the current parser discards it as an invalid single number. Those runs are often two adjacent roster numbers.
+When the batter card is absent and the lineup-strip crop OCRs as a fused digit run like `265` or `426`, `_is_plausible_batter_state()` rejects it (jersey numbers longer than 2 digits are invalid). Those fused runs are often two adjacent roster numbers smeared by OCR. With a roster, the correct number can be extracted.
 
-**Design direction:** When `parse_jersey_number()` fails on a multi-digit string, attempt a roster-aware split. Prefer splits that maximize matched roster numbers (`265` → `26` + `5` if both are rostered, over `2` + `65`). Only apply when a roster is present; discard ambiguous splits where multiple interpretations score equally.
+**Root cause in `state.py`:**
+`state_from_samples()` calls `parse_jersey_number()` which extracts the first digit run via `re.search(r"\d+", value)`. For `"265"` it returns `"265"`. When this is the only source (`batter_card_number` absent), the state is emitted with `batter_number = "265"`, which `_is_plausible_batter_state()` then rejects because `len("265") > 2`.
 
-Acceptance criteria (to be filled in during design):
-- `parse_jersey_number()` or a new helper can attempt a roster-aware split of a multi-digit OCR string.
-- Split is used only when exactly one rostered number is unambiguously resolved.
-- Ambiguous splits (multiple valid candidates) are discarded, not guessed.
+**Design decisions (all questions resolved):**
+
+**Resolution happens in `detect_events()`, not `state_from_samples()`.** Roster is not available during state parsing. Rather than plumbing the roster through the parsing layer, add a pre-pass inside `detect_events()` that enriches states with resolved digit-run numbers before the detection loop runs.
+
+**New helper `_resolve_lineup_digit_run(text, roster) -> Optional[str]`** in `events.py`:
+
+```python
+def _resolve_lineup_digit_run(text: str, roster: Roster) -> Optional[str]:
+    """Find a single rostered number within a fused OCR digit run."""
+    import re
+    digits = re.sub(r"\D", "", text)
+    if len(digits) <= 2:
+        return None
+    candidates: set[str] = set()
+    for length in (1, 2):
+        for start in range(len(digits) - length + 1):
+            candidate = digits[start : start + length]
+            if candidate.lstrip("0") and roster.name_for_number(candidate):
+                candidates.add(candidate)
+    return candidates.pop() if len(candidates) == 1 else None
+```
+
+For `"265"`: checks `"2"`, `"26"`, `"6"`, `"65"`, `"5"`. If only `"26"` is rostered → returns `"26"`. If both `"2"` and `"26"` are rostered → ambiguous → returns `None`.
+
+**New pre-pass `_enrich_states_digit_runs(states, roster) -> List[OverlayState]`** in `events.py`:
+
+```python
+def _enrich_states_digit_runs(
+    states: List[OverlayState],
+    roster: Roster,
+) -> List[OverlayState]:
+    result = []
+    for state in states:
+        if (
+            state.metadata.get("batter_number_source") == "lineup_strip"
+            and state.batter_number
+            and len(state.batter_number) > 2
+        ):
+            resolved = _resolve_lineup_digit_run(state.batter_number, roster)
+            if resolved:
+                new_meta = dict(state.metadata)
+                new_meta["batter_number_digit_run_original"] = state.batter_number
+                state = dataclasses.replace(state, batter_number=resolved, metadata=new_meta)
+        result.append(state)
+    return result
+```
+
+Called at the top of `detect_events()`, after sorting, when roster is present:
+
+```python
+ordered_states = sorted(states, key=lambda s: s.timestamp_seconds)
+if roster is not None:
+    ordered_states = _enrich_states_digit_runs(ordered_states, roster)
+```
+
+After enrichment, `state.batter_number` is the resolved 1- or 2-digit number. `_is_plausible_batter_state()`, `player_name_for_state()`, and `roster_match_source_for_state()` all work normally. `roster_match_source_for_state()` will return `"lineup_number"` because the resolved number is in the roster and the source is still `"lineup_strip"`.
+
+**Review report:** No new flag needed — `lineup-recovered` already fires for lineup-strip source events. Optionally, if `batter_number_digit_run_original` is set in metadata, `_review_flags()` can add `digit-run-split=<original>` to make the resolution visible. Add this as a low-priority enhancement.
+
+**`manifest.json`:** No change needed. The pre-pass runs in-memory; the enriched state is never written to `states.jsonl`.
+
+Acceptance criteria:
+- `_resolve_lineup_digit_run("265", roster)` returns `"26"` when only `"26"` is rostered.
+- `_resolve_lineup_digit_run("265", roster)` returns `None` when both `"2"` and `"26"` are rostered (ambiguous).
+- `_resolve_lineup_digit_run("265", roster)` returns `None` when no roster number matches.
+- `_enrich_states_digit_runs()` replaces 3+-digit lineup-strip numbers with resolved 1- or 2-digit numbers when unambiguous.
+- `batter_number_digit_run_original` is stored in state metadata after resolution.
+- After enrichment, `_is_plausible_batter_state()` accepts the resolved number and the event is emitted.
+- `roster_match_source` on the emitted event is `"lineup_number"` (lineup strip source + rostered number).
+- Batter-card source states and already-valid lineup numbers are not affected by the pre-pass.
+- When roster is `None`, the pre-pass is skipped entirely.
+- Tests cover: fused run with one match → resolved; fused run with two matches → not resolved; fused run with no match → not resolved; ≤2-digit string → no-op; batter-card source state → untouched.
 
 ## Discussion / Later Deliverables
 

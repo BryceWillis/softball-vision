@@ -52,13 +52,97 @@ Add a test: unrostered batter-card number, no name match, roster present → eve
 **Status:** Open
 **File:** [review.py](src/sidelinehd_extractor/review.py)
 
-The existing `card-vs-lineup` flag captures source disagreement but not the underlying signal quality. Three new flags would make weak or noisy events visible without requiring raw `events.jsonl` inspection:
+The existing `card-vs-lineup` flag captures source disagreement but not the underlying signal quality. Three new flags would make weak or noisy events visible without requiring raw `events.jsonl` inspection.
 
-- `unrostered-card-number` — `batter_number_source == “batter_card”` and the number is not in the roster
-- `garbled-card-name` — `batter_card_name` metadata is set but contains no token of 3+ characters and the name did not match the roster (conservative: `”Jo”` is a valid short name; `” ad om val”` is clearly broken)
-- `lineup-had-rostered-candidate` — `batter_number_disagreement` is set and the lineup side of the disagreement resolves to a rostered number
+**New flags:**
 
-`_review_flags()` will need roster access to check membership for `unrostered-card-number` and `lineup-had-rostered-candidate`. Pass the roster in (already available at all call sites). Add tests for each new flag and for the suppression path (garbled name that is actually a valid short name).
+- `unrostered-card-number` — `batter_number_source == “batter_card”` and `ocr_player_number` is not in the roster.
+- `garbled-card-name` — `batter_card_name` metadata is set, the name did NOT match the roster (player_name resolved via name lookup is absent), and the name contains no alphabetic token of 3+ characters. The `_looks_like_player_name()` check in `events.py` uses the same letter-count heuristic (letters ≥ 3); mirror that here but only flag when also a non-match.
+- `lineup-had-rostered-candidate` — `batter_number_disagreement` is set (e.g. `”batter_card=7 lineup=265”`), and the lineup side of the disagreement contains a substring that is a rostered number. Extract the lineup value from the `batter_card=N lineup=M` format and check `roster.name_for_number(M)` (and, for digit runs, check substring splits the same way item 33's `_resolve_lineup_digit_run` does).
+
+**Implementation — `_review_flags()` signature change:**
+
+```python
+def _review_flags(
+    events: List[Event],
+    options: ReviewOptions,
+    roster: Optional[Roster] = None,
+) -> List[List[str]]:
+```
+
+Add roster to all call sites (already passed to `review_events_table()` and related functions — thread it through).
+
+**Logic additions inside `_review_flags()`, for each `AT_BAT_START` event:**
+
+```python
+# unrostered-card-number
+if (
+    roster is not None
+    and event.metadata.get(“batter_number_source”) == “batter_card”
+    and event.metadata.get(“ocr_player_number”)
+    and not roster.name_for_number(str(event.metadata[“ocr_player_number”]))
+):
+    flags_by_index[index].append(
+        f”unrostered-card-number={event.metadata['ocr_player_number']}”
+    )
+
+# garbled-card-name
+batter_card_name = event.metadata.get(“batter_card_name”) or “”
+if (
+    batter_card_name
+    and event.metadata.get(“roster_match_source”) != “name”
+    and not any(len(tok) >= 3 for tok in batter_card_name.split())
+):
+    flags_by_index[index].append(“garbled-card-name”)
+
+# lineup-had-rostered-candidate
+disagreement = event.metadata.get(“batter_number_disagreement”) or “”
+if disagreement and roster is not None:
+    match = re.search(r”lineup=(\S+)”, disagreement)
+    if match:
+        lineup_val = match.group(1)
+        if _lineup_has_rostered_candidate(lineup_val, roster):
+            flags_by_index[index].append(
+                f”lineup-had-rostered-candidate={lineup_val}”
+            )
+```
+
+**New helper `_lineup_has_rostered_candidate(text, roster)`** in `review.py`:
+
+```python
+def _lineup_has_rostered_candidate(text: str, roster: Roster) -> bool:
+    “””Return True if text is or contains a rostered number.”””
+    import re
+    digits = re.sub(r”\D”, “”, text)
+    for length in (1, 2):
+        for start in range(len(digits) - length + 1):
+            candidate = digits[start : start + length]
+            if candidate.lstrip(“0”) and roster.name_for_number(candidate):
+                return True
+    return False
+```
+
+Also store `batter_card_name` in event metadata when emitting AT_BAT_START events so `_review_flags()` can access it. Currently the batter card name is in `state.metadata[“batter_name”]`, not copied into the event. Add it:
+
+```python
+metadata={
+    ...
+    “batter_card_name”: state.metadata.get(“batter_name”),
+    ...
+}
+```
+
+in `detect_events()` (in `events.py`). This is a backward-compatible metadata addition.
+
+Acceptance criteria:
+- `batter_card_name` is stored in `AT_BAT_START` event metadata.
+- `_review_flags()` accepts `roster: Optional[Roster] = None`; all call sites pass it through.
+- `unrostered-card-number=N` flag appears when batter-card source and number not in roster.
+- `garbled-card-name` flag appears when card name has no 3+-char token and is not a name match.
+- `garbled-card-name` is NOT emitted for short-but-valid names like `”Jo”` that did match the roster.
+- `lineup-had-rostered-candidate=M` flag appears when the lineup side of a `batter_number_disagreement` is or contains a rostered number.
+- Tests cover each flag path and each suppression path.
+- `_lineup_has_rostered_candidate()` unit-tested: exact rostered number → True; digit run containing rostered number → True; no match → False.
 
 ## Resolved Items
 
