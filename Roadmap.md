@@ -15,6 +15,25 @@ not from code review use `Source: Product backlog`.
 3. Improve maintainability before adding larger product features.
 4. Keep public-release readiness visible, even while the tool is still personal-use first.
 
+## Implementation Queue
+
+**CODE-REVIEW.md open items always preempt this queue.** Check that file first; if anything is Open, implement it before picking up the next roadmap item.
+
+For items marked **Needs design**, Codex should stop and ask the architect (Claude) to write the full design before starting implementation.
+
+| # | Item | Status | Rationale |
+|---|------|--------|-----------|
+| 1 | **34** — True Game-Start Detection | Ready to implement | Smallest change (one function in `events.py`); fixes visible 0:00 chapter defect on every pregame stream. Fully designed. |
+| 2 | **32** — Batting-Order Continuity Validator | Ready to implement | Addresses missing-batter issues confirmed on Victor Vipers run. Fully designed. Implement after 34 so the chapter timestamps it relies on are correct. |
+| 3 | **35** — Final Scorebug Marker | Needs design | Architect must write full design before Codex starts. Ask Claude when 32 is done. |
+| 4 | **29** — Score at Inning Transitions | Ready to implement | Adds score context to chapter labels (`Top 3 (2-1)`). Self-contained, no dependencies on 32/34/35. |
+| 5 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
+| 6 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
+| 7 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
+| 8 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
+
+Items 22, 23, 24, 25 are deferred architectural notes — they stay in the backlog but have no implementation slot until a concrete trigger arises.
+
 ## Accepted Deliverables
 
 ### 1. Add Project License
