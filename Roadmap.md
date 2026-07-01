@@ -23,14 +23,12 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **34** — True Game-Start Detection | Ready to commit | CR-33 and CR-36 resolved (Pass 8). All tests pass (201). |
-| 2 | **32** — Batting-Order Continuity Validator | Ready to commit | CR-32, CR-34, CR-35, CR-37 resolved (Pass 8). All tests pass (201). |
-| 3 | **35** — Final Scorebug Marker | Needs design | Architect must write full design before Codex starts. Ask Claude when 32 is done. |
-| 4 | **29** — Score at Inning Transitions | Ready to implement | Adds score context to chapter labels (`Top 3 (2-1)`). Self-contained, no dependencies on 32/34/35. |
-| 5 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
-| 6 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
-| 7 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
-| 8 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
+| 1 | **35** — Final Scorebug Marker | Needs design | Architect must write full design before Codex starts. |
+| 2 | **29** — Score at Inning Transitions | Ready to implement | Adds score context to chapter labels (`Top 3 (2-1)`). Self-contained. |
+| 3 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
+| 4 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
+| 5 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
+| 6 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
 
 Items 22, 23, 24, 25 are deferred architectural notes — they stay in the backlog but have no implementation slot until a concrete trigger arises.
 
@@ -1677,7 +1675,7 @@ Acceptance criteria:
 ### 32. Batting-Order Continuity Validator
 
 Source: Product backlog (CR-24 observation)
-Status: Ready for review
+Status: Done (Pass 8, commit b33cc4b)
 
 Implementation note: `infer_batting_cycle()` and `validate_batting_order()` are
 implemented as a post-detection pass. The pass infers the first confirmed batting
@@ -2113,15 +2111,17 @@ Acceptance criteria:
 ### 34. True Game-Start Detection After Pregame Team-Side Changes
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready for review
+Status: Done (Pass 8, commit b33cc4b)
 
 Implementation note: first-half-inning confirmation now uses a window-based game-active
 signal when the stream starts at zero. A stable pregame scorebug no longer qualifies on
-a plausible batter number alone. The detector now waits for one of: a parsed non-zero
-count, a named batter card with a parsed count, or a trusted highlighted-lineup batter
-change. Subsequent half-inning transitions and non-zero-start clips keep the old
-confirmation behavior. Against the saved `9AaT4645z6s` states, chapters now begin with
-`0:00 Pregame` and `6:50 Top 1` instead of `0:00 Top 1`.
+a plausible batter number alone. The detector waits for one of: a non-zero count
+(`balls > 0 or strikes > 0`), a trusted batter change (highlight-confirmed lineup-strip,
+named batter card, or old-style lineup-number source). The `0-0` count path was removed
+in CR-36 to prevent pregame batter cards with a parsed count from bypassing the gate.
+Subsequent half-inning transitions and non-zero-start clips keep the old confirmation
+behavior. Against the saved `9AaT4645z6s` states, chapters begin with `0:00 Pregame`
+and `6:50 Top 1` instead of `0:00 Top 1`.
 
 Follow-up from the 2026-07-01 `9AaT4645z6s` rerun: restoring the legacy
 `lineup_number` source for CR-26 briefly allowed noisy pregame digit changes to qualify

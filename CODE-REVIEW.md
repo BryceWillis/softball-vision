@@ -1,7 +1,7 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-01
 **Review passes:** 8 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
