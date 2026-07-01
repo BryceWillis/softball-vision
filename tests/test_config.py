@@ -1,9 +1,17 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 
-from sidelinehd_extractor.config import load_overlay_template, load_roster
+from sidelinehd_extractor.config import (
+    ProjectConfig,
+    load_overlay_template,
+    load_project_config,
+    load_roster,
+    write_project_config,
+)
 
 
 class ConfigLoaderTests(unittest.TestCase):
@@ -46,6 +54,88 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(roster.number_for_name("Janie"), "7")
         self.assertEqual(roster.number_for_name("Jane S."), "7")
         self.assertEqual(roster.number_for_name("Jame Smith"), "7")
+
+    def test_load_project_config_returns_empty_when_absent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = load_project_config(cwd=Path(directory))
+
+        self.assertEqual(config, ProjectConfig())
+
+    def test_load_project_config_reads_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster = root / "roster.csv"
+            template = root / "template.json"
+            roster.write_text("number,full_name\n22,Maya R.\n", encoding="utf-8")
+            template.write_text('{"regions":{"inning":{"x":0,"y":0,"width":1,"height":1}}}', encoding="utf-8")
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = roster.csv\n"
+                "template = template.json\n"
+                "team_name = Stars\n",
+                encoding="utf-8",
+            )
+
+            config = load_project_config(cwd=root)
+
+        self.assertEqual(config.roster, Path("roster.csv"))
+        self.assertEqual(config.template, Path("template.json"))
+        self.assertEqual(config.team_name, "Stars")
+
+    def test_load_project_config_ignores_missing_section_and_unknown_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[other]\nunknown = value\n",
+                encoding="utf-8",
+            )
+
+            config = load_project_config(cwd=root)
+
+        self.assertEqual(config, ProjectConfig())
+
+    def test_write_project_config_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster = root / "roster.csv"
+            template = root / "template.json"
+            roster.write_text("number,full_name\n22,Maya R.\n", encoding="utf-8")
+            template.write_text('{"regions":{"inning":{"x":0,"y":0,"width":1,"height":1}}}', encoding="utf-8")
+
+            write_project_config(
+                ProjectConfig(
+                    roster=Path("roster.csv"),
+                    template=Path("template.json"),
+                    team_name="Stars",
+                ),
+                cwd=root,
+            )
+            config = load_project_config(cwd=root)
+
+        self.assertEqual(config.roster, Path("roster.csv"))
+        self.assertEqual(config.template, Path("template.json"))
+        self.assertEqual(config.team_name, "Stars")
+
+    def test_load_project_config_warns_and_skips_missing_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = missing-roster.csv\n"
+                "template = missing-template.json\n"
+                "team_name = Stars\n",
+                encoding="utf-8",
+            )
+            stderr = StringIO()
+
+            with redirect_stderr(stderr):
+                config = load_project_config(cwd=root)
+
+        self.assertIsNone(config.roster)
+        self.assertIsNone(config.template)
+        self.assertEqual(config.team_name, "Stars")
+        self.assertIn("missing-roster.csv", stderr.getvalue())
+        self.assertIn("missing-template.json", stderr.getvalue())
 
 
 if __name__ == "__main__":

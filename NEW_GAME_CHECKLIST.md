@@ -33,6 +33,15 @@ sidelinehd-extractor setup-roster
 - [ ] Press Enter twice to finish. The roster is written under `rosters/`, which
       is ignored by git.
 
+- [ ] If prompted, create/update `sidelinehd.cfg` and enter the template path:
+
+```text
+examples/sidelinehd_640x360_active.example.json
+```
+
+After `sidelinehd.cfg` exists, `run-youtube 'YOUTUBE_URL'` can use the saved
+roster and template defaults.
+
 - [ ] For scripted/non-interactive setup, use:
 
 ```sh
@@ -45,8 +54,6 @@ sidelinehd-extractor make-roster team-list.txt --output rosters/your_team.csv
 
 ```sh
 sidelinehd-extractor run-youtube 'YOUTUBE_URL' \
-  --template examples/sidelinehd_640x360_active.example.json \
-  --roster rosters/your_team.csv \
   --start 0:00 \
   --ocr tesseract
 ```

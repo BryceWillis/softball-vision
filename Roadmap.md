@@ -25,7 +25,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | 1 | **35** — Final Scorebug Marker | Ready to implement | Depends on item 29 (`_score_snapshot()`, `away_score`/`home_score`). Implement after item 29. |
 | 2 | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
-| 3 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
+| 3 | **28** — Project Config Defaults | Done | Approved Pass 10. |
 | 4 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
 | 5 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
 | 6 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
@@ -1090,7 +1090,7 @@ Acceptance criteria:
 ### 28. Project Config Defaults (`sidelinehd.cfg`)
 
 Source: Product backlog
-Status: Ready to implement
+Status: Ready for Review
 
 Allow users to set `roster` and `template` once per working directory so every
 `run-youtube` call only needs the URL. This is the v2 of what Codex proposed
@@ -1307,6 +1307,21 @@ Acceptance criteria:
 - README "Quick Start" updated to mention `sidelinehd.cfg` after showing
   `setup-roster`. Show the one-liner result: `sidelinehd-extractor run-youtube 'URL'`
   with no flags once config is in place.
+
+Implementation note:
+- Added `ProjectConfig`, `load_project_config()`, and `write_project_config()` to
+  `config.py`.
+- Added `sidelinehd.cfg` to `.gitignore` and committed
+  `examples/sidelinehd.example.cfg`.
+- Added `_apply_config_defaults()` and wired config defaults into `run-game`,
+  `run-youtube`, `process` (template only), and `detect-events` (roster only).
+- Interactive `setup-roster` now offers to create/update `sidelinehd.cfg` after
+  writing the roster.
+- README and `NEW_GAME_CHECKLIST.md` document the one-flagless
+  `run-youtube 'URL'` flow after setup.
+- Tests cover absent/valid/missing-section/bad-path config loads, round-trip
+  writes, CLI precedence, missing-attribute safety, run-youtube config usage, and
+  setup-roster config creation.
 
 ### 29. Score at Inning Transitions
 

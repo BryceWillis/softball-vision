@@ -62,6 +62,14 @@ Create a private roster from a pasted team list:
 sidelinehd-extractor setup-roster
 ```
 
+Interactive setup can also create `sidelinehd.cfg` in this directory with your
+roster and template defaults. Once that file exists, normal runs can be as short
+as:
+
+```sh
+sidelinehd-extractor run-youtube 'https://www.youtube.com/live/YOUR_VIDEO_ID'
+```
+
 For scripted use, `make-roster` still accepts a text file or stdin.
 
 Download a completed YouTube game, process it locally, and write both YouTube text
@@ -238,6 +246,11 @@ Paste lines in this format, then press Enter twice:
 
 This writes a private CSV under `rosters/`, which is ignored by git so real
 player names are not accidentally committed.
+
+In interactive mode, `setup-roster` also offers to create or update
+`sidelinehd.cfg`. That local file is ignored by git and can store your roster and
+template paths so `run-youtube 'URL'` works without repeating those flags.
+`examples/sidelinehd.example.cfg` is a copyable starting point.
 
 For scripted use, generate the CSV from a text file:
 

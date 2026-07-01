@@ -2,12 +2,101 @@
 
 from __future__ import annotations
 
+import configparser
 import csv
 import json
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from sidelinehd_extractor.models import OverlayTemplate, RegionFraction, Roster, RosterPlayer
+
+CONFIG_FILENAME = "sidelinehd.cfg"
+_PROJECT_CONFIG_SECTION = "defaults"
+
+
+@dataclass(frozen=True)
+class ProjectConfig:
+    """Project-local defaults loaded from ``sidelinehd.cfg``."""
+
+    roster: Optional[Path] = None
+    template: Optional[Path] = None
+    team_name: Optional[str] = None
+
+
+def load_project_config(cwd: Optional[Path] = None) -> ProjectConfig:
+    """Load project-local defaults, returning an empty config when absent."""
+
+    root = cwd or Path.cwd()
+    values = load_project_config_values(cwd=root)
+    return ProjectConfig(
+        roster=_project_config_path(values.get("roster"), root, "roster"),
+        template=_project_config_path(values.get("template"), root, "template"),
+        team_name=values.get("team_name"),
+    )
+
+
+def load_project_config_values(cwd: Optional[Path] = None) -> Dict[str, str]:
+    """Load raw project-local default strings without validating paths."""
+
+    root = cwd or Path.cwd()
+    path = root / CONFIG_FILENAME
+    if not path.exists():
+        return {}
+
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(path, encoding="utf-8")
+    except configparser.Error as exc:
+        print(f"Warning: could not read {CONFIG_FILENAME}: {exc}", file=sys.stderr)
+        return {}
+
+    if _PROJECT_CONFIG_SECTION not in parser:
+        return {}
+
+    section = parser[_PROJECT_CONFIG_SECTION]
+    values = {}
+    for key in ("roster", "template", "team_name"):
+        value = (section.get(key) or "").strip()
+        if value:
+            values[key] = value
+    return values
+
+
+def write_project_config(config: ProjectConfig, cwd: Optional[Path] = None) -> Path:
+    """Write project-local defaults to ``sidelinehd.cfg``."""
+
+    root = cwd or Path.cwd()
+    path = root / CONFIG_FILENAME
+    parser = configparser.ConfigParser()
+    parser[_PROJECT_CONFIG_SECTION] = {}
+    if config.roster is not None:
+        parser[_PROJECT_CONFIG_SECTION]["roster"] = str(config.roster)
+    if config.template is not None:
+        parser[_PROJECT_CONFIG_SECTION]["template"] = str(config.template)
+    if config.team_name:
+        parser[_PROJECT_CONFIG_SECTION]["team_name"] = config.team_name
+    with path.open("w", encoding="utf-8") as handle:
+        parser.write(handle)
+    return path
+
+
+def _project_config_path(value: Optional[str], root: Path, key: str) -> Optional[Path]:
+    if not value:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    path = Path(stripped).expanduser()
+    check_path = path if path.is_absolute() else root / path
+    if not check_path.exists():
+        print(
+            f"Warning: {CONFIG_FILENAME} {key} path does not exist: {path}",
+            file=sys.stderr,
+        )
+        return None
+    return path
 
 
 def _read_json(path: Path) -> Dict[str, Any]:

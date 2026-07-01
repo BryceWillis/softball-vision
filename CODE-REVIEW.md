@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-01
-**Review passes:** 9 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 ready for review)
+**Review passes:** 10 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -26,6 +26,14 @@ _No items ready for review._
 _No open items._
 
 ## Resolved Items
+
+#### CR-39 — `_offer_config_update` permanently drops template key when template path is absent at read time
+**File:** [cli.py](src/sidelinehd_extractor/cli.py) — `_offer_config_update`, [config.py](src/sidelinehd_extractor/config.py)
+**Resolved:** Pass 10
+
+`_project_config_path` returns `None` for paths that don't exist on disk at read time. `_offer_config_update` used the loaded `ProjectConfig` to decide what to preserve on rewrite — so if the template file was temporarily unavailable, `existing.template` was `None`, the user was prompted for a template, and pressing Enter silently erased the previously-configured key. The same mechanism caused a spurious "Update config?" prompt when the configured roster path was also absent at read time. Fixed by adding `load_project_config_values(cwd)` to `config.py`, which returns raw `Dict[str, str]` INI strings without any path-existence check. `_offer_config_update` now calls this instead of `load_project_config`, and uses a new `_config_path_value()` helper to convert raw strings to `Path` objects (no existence check). Two regression tests added: `test_offer_config_update_preserves_missing_template_key` and `test_offer_config_update_skips_prompt_when_raw_roster_matches`. 222 tests pass.
+
+---
 
 #### CR-38 — `_score_snapshot` returns score from wrong half-inning when current-half states all have `None` scores
 **File:** [events.py](src/sidelinehd_extractor/events.py) — `_score_snapshot`

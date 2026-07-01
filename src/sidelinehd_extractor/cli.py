@@ -15,7 +15,15 @@ from sidelinehd_extractor.calibration import (
     render_template_guide,
 )
 from sidelinehd_extractor.crops import extract_crop_from_video, save_crop
-from sidelinehd_extractor.config import load_overlay_template, load_roster
+from sidelinehd_extractor.config import (
+    CONFIG_FILENAME,
+    ProjectConfig,
+    load_overlay_template,
+    load_project_config,
+    load_project_config_values,
+    load_roster,
+    write_project_config,
+)
 from sidelinehd_extractor.corrections import apply_event_corrections, load_event_corrections
 from sidelinehd_extractor.events import detect_events_file, load_events
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
@@ -151,6 +159,23 @@ def _parse_field_list(values: List[str]) -> Optional[List[str]]:
     return fields or None
 
 
+def _apply_config_defaults(
+    args: argparse.Namespace,
+    use_roster: bool = False,
+    use_template: bool = False,
+    use_team_name: bool = True,
+) -> None:
+    """Apply ``sidelinehd.cfg`` values where the user did not pass CLI flags."""
+
+    config = load_project_config()
+    if use_roster and hasattr(args, "roster") and not getattr(args, "roster"):
+        args.roster = config.roster
+    if use_template and hasattr(args, "template") and not getattr(args, "template"):
+        args.template = config.template
+    if use_team_name and hasattr(args, "team_name") and not getattr(args, "team_name"):
+        args.team_name = config.team_name
+
+
 def _cmd_download(args: argparse.Namespace) -> int:
     result = download_youtube_video(
         url=args.url,
@@ -230,6 +255,7 @@ def _cmd_ocr_image(args: argparse.Namespace) -> int:
 
 
 def _cmd_process(args: argparse.Namespace) -> int:
+    _apply_config_defaults(args, use_template=True, use_team_name=False)
     template = load_overlay_template(args.template) if args.template else None
     roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
     ocr_backend = create_ocr_backend(args.ocr)
@@ -309,6 +335,7 @@ def _cmd_setup_roster(args: argparse.Namespace) -> int:
     result = write_roster_csv(roster, output_path)
     print(f"Wrote {result.player_count} players to {result.output_path}")
     if is_tty:
+        _offer_config_update(result.output_path, team_name=team_name)
         print("")
         print("Use your roster:")
         print(f"  {_format_roster_next_command(result.output_path)}")
@@ -367,7 +394,52 @@ def _format_roster_next_command(roster_path: Path) -> str:
     )
 
 
+def _offer_config_update(
+    roster_path: Path,
+    team_name: Optional[str] = None,
+    cwd: Optional[Path] = None,
+) -> None:
+    root = cwd or Path.cwd()
+    config_path = root / CONFIG_FILENAME
+    existing_values = load_project_config_values(cwd=root)
+    existing_roster = _config_path_value(existing_values.get("roster"))
+    if existing_roster == roster_path:
+        return
+
+    verb = "Update" if config_path.exists() else "Create"
+    response = (
+        input(f"\n{verb} {CONFIG_FILENAME} to use this roster by default? [Y/n] ")
+        .strip()
+        .lower()
+    )
+    if response and response not in {"y", "yes"}:
+        return
+
+    template = _config_path_value(existing_values.get("template"))
+    if template is None:
+        template_input = input("Template path (Enter to skip): ").strip()
+        template = Path(template_input) if template_input else None
+
+    written = write_project_config(
+        ProjectConfig(
+            roster=roster_path,
+            template=template,
+            team_name=existing_values.get("team_name") or team_name,
+        ),
+        cwd=root,
+    )
+    print(f"Wrote {written}")
+
+
+def _config_path_value(value: Optional[str]) -> Optional[Path]:
+    if not value:
+        return None
+    stripped = value.strip()
+    return Path(stripped) if stripped else None
+
+
 def _cmd_run_game(args: argparse.Namespace) -> int:
+    _apply_config_defaults(args, use_roster=True, use_template=True)
     template = load_overlay_template(args.template) if args.template else None
     roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
     ocr_backend = create_ocr_backend(args.ocr)
@@ -432,6 +504,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
 
 
 def _cmd_run_youtube(args: argparse.Namespace) -> int:
+    _apply_config_defaults(args, use_roster=True, use_template=True)
     template = load_overlay_template(args.template) if args.template else None
     roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
     ocr_backend = create_ocr_backend(args.ocr)
@@ -516,6 +589,7 @@ def _cmd_detect_events(args: argparse.Namespace) -> int:
     input_path = args.input_path
     if input_path.is_dir():
         input_path = input_path / "states.jsonl"
+    _apply_config_defaults(args, use_roster=True, use_template=False)
     roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
     result = detect_events_file(
         input_path,

@@ -13,6 +13,7 @@ runs/
 scratch/
 rosters/
 calibration_frames/
+sidelinehd.cfg
 
 # Packaging/build artifacts
 dist/

@@ -1,19 +1,32 @@
 import io
+import os
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from pathlib import Path
 
 from sidelinehd_extractor.cli import (
+    _apply_config_defaults,
     _default_run_fields,
     _format_roster_next_command,
+    _offer_config_update,
     _read_roster_lines_interactive,
     build_parser,
     main,
 )
-from sidelinehd_extractor.config import load_roster
+from sidelinehd_extractor.config import load_project_config, load_roster
+
+
+@contextmanager
+def _working_directory(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class CLITests(unittest.TestCase):
@@ -301,7 +314,7 @@ class CLITests(unittest.TestCase):
             output_path = Path(directory) / "stars.csv"
             stdout = io.StringIO()
             stderr = io.StringIO()
-            input_values = ["#22 Maya R.", "", "#26 Amelia V.", "", "", "y"]
+            input_values = ["#22 Maya R.", "", "#26 Amelia V.", "", "", "y", "n"]
 
             with (
                 patch("sys.stdin", FakeTTY()),
@@ -324,6 +337,146 @@ class CLITests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr.getvalue(), "")
         self.assertTrue(any(str(output_path.resolve()) in prompt for prompt in prompts))
+
+    def test_offer_config_update_creates_config_with_roster_and_template(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster = root / "stars.csv"
+            roster.write_text("number,full_name\n22,Maya R.\n", encoding="utf-8")
+            template = root / "template.json"
+            template.write_text('{"regions":{"inning":{"x":0,"y":0,"width":1,"height":1}}}', encoding="utf-8")
+            stdout = io.StringIO()
+
+            with (
+                patch("builtins.input", side_effect=["y", "template.json"]),
+                redirect_stdout(stdout),
+            ):
+                _offer_config_update(Path("stars.csv"), team_name="Stars", cwd=root)
+
+            config = load_project_config(cwd=root)
+
+        self.assertEqual(config.roster, Path("stars.csv"))
+        self.assertEqual(config.template, Path("template.json"))
+        self.assertEqual(config.team_name, "Stars")
+        self.assertIn("Wrote", stdout.getvalue())
+
+    def test_offer_config_update_preserves_missing_template_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = old-roster.csv\n"
+                "template = missing-template.json\n"
+                "team_name = Stars\n",
+                encoding="utf-8",
+            )
+
+            with patch("builtins.input", side_effect=["y"]):
+                _offer_config_update(Path("new-roster.csv"), team_name="New Stars", cwd=root)
+
+            text = (root / "sidelinehd.cfg").read_text(encoding="utf-8")
+
+        self.assertIn("roster = new-roster.csv", text)
+        self.assertIn("template = missing-template.json", text)
+        self.assertIn("team_name = Stars", text)
+
+    def test_offer_config_update_skips_prompt_when_raw_roster_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = stars.csv\n"
+                "template = missing-template.json\n",
+                encoding="utf-8",
+            )
+
+            with patch("builtins.input") as input_mock:
+                _offer_config_update(Path("stars.csv"), team_name="Stars", cwd=root)
+
+        input_mock.assert_not_called()
+
+    def test_apply_config_defaults_uses_config_without_overriding_cli_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_roster = root / "config-roster.csv"
+            config_template = root / "config-template.json"
+            config_roster.write_text("number,full_name\n22,Maya R.\n", encoding="utf-8")
+            config_template.write_text(
+                '{"regions":{"inning":{"x":0,"y":0,"width":1,"height":1}}}',
+                encoding="utf-8",
+            )
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = config-roster.csv\n"
+                "template = config-template.json\n"
+                "team_name = Config Stars\n",
+                encoding="utf-8",
+            )
+            args = build_parser().parse_args(
+                ["run-youtube", "https://youtu.be/example", "--roster", "cli-roster.csv"]
+            )
+
+            with _working_directory(root):
+                _apply_config_defaults(args, use_roster=True, use_template=True)
+
+        self.assertEqual(args.roster, Path("cli-roster.csv"))
+        self.assertEqual(args.template, Path("config-template.json"))
+        self.assertEqual(args.team_name, "Config Stars")
+
+    def test_apply_config_defaults_ignores_args_without_attribute(self):
+        args = build_parser().parse_args(["export", "runs/game"])
+
+        _apply_config_defaults(args, use_roster=True, use_template=True)
+
+        self.assertFalse(hasattr(args, "roster"))
+        self.assertFalse(hasattr(args, "template"))
+
+    def test_run_youtube_uses_project_config_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster = root / "roster.csv"
+            template = root / "template.json"
+            roster.write_text("number,full_name\n22,Maya R.\n", encoding="utf-8")
+            template.write_text(
+                '{"regions":{"inning":{"x":0,"y":0,"width":1,"height":1}}}',
+                encoding="utf-8",
+            )
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "roster = roster.csv\n"
+                "template = template.json\n"
+                "team_name = Stars\n",
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with (
+                _working_directory(root),
+                patch("sidelinehd_extractor.cli.run_youtube_game") as run_youtube,
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                run_youtube.return_value.run.run_dir = Path("runs/game")
+                run_youtube.return_value.run.manifest_path = Path("runs/game/manifest.json")
+                run_youtube.return_value.run.samples_path = Path("runs/game/samples.jsonl")
+                run_youtube.return_value.run.states_path = Path("runs/game/states.jsonl")
+                run_youtube.return_value.run.events_path = Path("runs/game/events.jsonl")
+                run_youtube.return_value.run.chapters_path = Path("runs/game/chapters.txt")
+                run_youtube.return_value.run.at_bats_path = Path("runs/game/at_bats.txt")
+                run_youtube.return_value.run.sample_count = 0
+                run_youtube.return_value.run.state_count = 0
+                run_youtube.return_value.run.event_count = 0
+                run_youtube.return_value.run.batting_half_inference = None
+                run_youtube.return_value.download = {}
+                exit_code = main(["run-youtube", "https://youtu.be/example", "--quiet"])
+
+            kwargs = run_youtube.call_args.kwargs
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(kwargs["roster"].name_for_number("22"), "Maya R.")
+        self.assertIn("inning", kwargs["template"].regions)
 
     def test_format_roster_next_command_mentions_roster_and_template(self):
         command = _format_roster_next_command(Path("rosters/stars.csv"))
