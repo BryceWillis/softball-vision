@@ -39,6 +39,7 @@ def export_youtube_chapters(
     include_intro: bool = True,
     intro_label: str = "Pregame",
     include_credit: bool = True,
+    include_score: bool = True,
 ) -> str:
     """Render inning and half-inning events as YouTube description chapters."""
 
@@ -48,7 +49,10 @@ def export_youtube_chapters(
         if event.event_type in {EventType.INNING_START, EventType.HALF_INNING_START}:
             if first_chapter_seconds is None:
                 first_chapter_seconds = event.timestamp_seconds
-            lines.append(f"{format_timestamp(event.timestamp_seconds)} {event.label}")
+            lines.append(
+                f"{format_timestamp(event.timestamp_seconds)} "
+                f"{_chapter_label(event, include_score=include_score)}"
+            )
 
     if include_intro and lines and first_chapter_seconds and first_chapter_seconds > 0:
         lines.insert(0, f"0:00 {intro_label}")
@@ -85,6 +89,16 @@ def format_inning_header(inning: Optional[int]) -> str:
     if inning is None:
         return "Unknown Inning"
     return f"{_ordinal(inning)} Inning"
+
+
+def _chapter_label(event: Event, include_score: bool = True) -> str:
+    label = event.label
+    if include_score and event.event_type == EventType.HALF_INNING_START:
+        away_score = event.metadata.get("away_score")
+        home_score = event.metadata.get("home_score")
+        if away_score is not None and home_score is not None:
+            label = f"{label} ({away_score}-{home_score})"
+    return label
 
 
 def _ordinal(value: int) -> str:

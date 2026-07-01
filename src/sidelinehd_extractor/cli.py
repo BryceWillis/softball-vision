@@ -106,6 +106,8 @@ def _default_run_fields(args: argparse.Namespace) -> List[str]:
     return _parse_field_list(args.field) or [
         "inning",
         "count",
+        "left_score",
+        "right_score",
         "lineup_strip",
         "batter_card_name",
         "batter_card_number",
@@ -388,6 +390,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         stage_progress=None if args.quiet else _build_stage_callback(),
         include_chapter_intro=not args.no_chapter_intro,
         chapter_intro_label=args.chapter_intro_label,
+        include_inning_score=not args.no_inning_score,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
         batting_half=_parse_batting_half(args.batting_half),
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
@@ -452,6 +455,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         stage_progress=None if args.quiet else _build_stage_callback(),
         include_chapter_intro=not args.no_chapter_intro,
         chapter_intro_label=args.chapter_intro_label,
+        include_inning_score=not args.no_inning_score,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
         batting_half=_parse_batting_half(args.batting_half),
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
@@ -564,6 +568,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             events,
             include_intro=not args.no_chapter_intro,
             intro_label=args.chapter_intro_label,
+            include_score=not args.no_inning_score,
         )
     else:
         text = export_at_bat_comment(
@@ -624,7 +629,8 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         default=[],
         help=(
             "Template field to process. Repeatable or comma-separated. Defaults to "
-            "inning,count,lineup_strip,batter_card_name,batter_card_number,batter_number."
+            "inning,count,left_score,right_score,lineup_strip,batter_card_name,"
+            "batter_card_number,batter_number."
         ),
     )
     parser.add_argument("--no-crops", action="store_true", help="Do not write crop image files.")
@@ -650,6 +656,11 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-chapter-intro",
         action="store_true",
         help="Do not prepend an automatic 0:00 chapter.",
+    )
+    parser.add_argument(
+        "--no-inning-score",
+        action="store_true",
+        help="Do not append score snapshots to inning chapter labels.",
     )
     parser.add_argument(
         "--no-at-bat-inning-headers",
@@ -979,6 +990,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-chapter-intro",
         action="store_true",
         help="Do not prepend an automatic 0:00 chapter when exporting chapters.",
+    )
+    export.add_argument(
+        "--no-inning-score",
+        action="store_true",
+        help="Do not append score snapshots to inning chapter labels.",
     )
     export.add_argument(
         "--no-at-bat-inning-headers",

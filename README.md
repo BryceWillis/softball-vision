@@ -153,7 +153,9 @@ writes `scratch/full_chapters.txt` and `scratch/full_at_bats.txt`. It prints
 progress while OCR is running and finishes with suggested review commands.
 Chapter exports automatically include `0:00 Pregame` when the first detected
 inning starts later in the video. Use `--chapter-intro-label Warmups` to rename
-that marker or `--no-chapter-intro` to disable it.
+that marker or `--no-chapter-intro` to disable it. When score OCR is available,
+half-inning chapters include the score as away-home, such as `10:00 Top 1 (2-0)`.
+Use `--no-inning-score` to export chapter labels without score snapshots.
 
 If `--output-prefix` is omitted, export files are written inside the run directory
 under a game-named folder such as:
@@ -350,8 +352,8 @@ YouTube requires description chapters to start at `0:00`. Chapter export adds
 
 ```text
 0:00 Pregame
-10:00 Top 1
-19:20 Top 2
+10:00 Top 1 (0-0)
+19:20 Top 2 (3-1)
 ```
 
 ## Corrections

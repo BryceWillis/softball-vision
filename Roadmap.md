@@ -23,8 +23,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **35** — Final Scorebug Marker | Needs design | Architect must write full design before Codex starts. |
-| 2 | **29** — Score at Inning Transitions | Ready to implement | Adds score context to chapter labels (`Top 3 (2-1)`). Self-contained. |
+| 1 | **35** — Final Scorebug Marker | Ready to implement | Depends on item 29 (`_score_snapshot()`, `away_score`/`home_score`). Implement after item 29. |
+| 2 | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
 | 3 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
 | 4 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
 | 5 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
@@ -1311,7 +1311,7 @@ Acceptance criteria:
 ### 29. Score at Inning Transitions
 
 Source: Product backlog
-Status: Ready to implement
+Status: Done (Pass 9, commit TBD)
 
 Record the score at each half-inning start and include it in chapter labels by
 default, so YouTube chapters read `10:00 Top 3 (2-1)` instead of `10:00 Top 3`.
@@ -1466,6 +1466,18 @@ Acceptance criteria:
   - `export_youtube_chapters()` appends score as `(away-home)` when present;
   - `export_youtube_chapters(include_score=False)` omits score;
   - score absent from all window states → no parenthetical in export.
+
+Implementation note:
+- Added score parsing and left/right score mapping in `state.py`.
+- Added `_score_snapshot()` and attached `away_score`/`home_score` metadata to
+  `HALF_INNING_START` events.
+- Chapter exports now append `(away-home)` by default when both scores are
+  available; `--no-inning-score` disables this for `run-game`, `run-youtube`,
+  and `export`.
+- Kept `lineup_strip` in the default run fields while adding `left_score` and
+  `right_score`, because recent at-bat detection depends on lineup-strip OCR.
+- Focused tests added for score parsing, state mapping, score snapshot selection,
+  event metadata, chapter export rendering/suppression, and CLI default fields.
 
 ### 30. Originality and Differentiation Audit vs. `jcspeegs/loups`
 
@@ -2339,25 +2351,212 @@ At the game start (~6:34), the first pitch changes the count to 0-1. When the tr
 ### 35. Final Scorebug Marker
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready to design
+Status: Ready to implement
 
 The current chapter export stops at the last detected half-inning. A useful publishing marker would be a final timestamp when the scorebug changes from inning/count display to `FINAL` in the middle/status area of the scorebug.
 
 Important template caveat: this applies to the current SidelineHD 640x360 active overlay style. Other SidelineHD templates may place `FINAL` in a different region or use different styling, so this should be modeled as an optional template region/field rather than hardcoded global coordinates.
 
-Design direction:
-- Add an optional overlay template region such as `scorebug_status` or `game_status`.
-- OCR that region only when configured.
-- Parse stable `FINAL` text over multiple samples before emitting a final event/chapter.
-- Export as a chapter line such as `1:36:00 Final` or another consistent label.
-- If the template has no status/final region, behavior is unchanged.
+**Dependency:** Item 29 (Score at Inning Transitions) must be implemented first. Item 35 uses `OverlayState.away_score` / `.home_score` and `_score_snapshot()` which are introduced in item 29.
+
+---
+
+**`models.py` — new `EventType` variant**
+
+Add `GAME_FINAL = "game_final"` to the `EventType` enum:
+
+```python
+class EventType(str, Enum):
+    GAME_START = "game_start"
+    HALF_INNING_START = "half_inning_start"
+    AT_BAT_START = "at_bat_start"
+    SCORE_CHANGE = "score_change"
+    GAME_FINAL = "game_final"    # new
+```
+
+---
+
+**`ocr.py` — `FIELD_CONFIGS` entry**
+
+Add a tuned OCR config for the `game_status` field:
+
+```python
+"game_status": OCRFieldConfig(psm=7, scale=4),
+```
+
+No whitelist — "FINAL" is a word, not a digit set; restricting whitelist risks rejecting characters like `I` or `L`. PSM 7 (single text line) is appropriate for a small isolated label.
+
+---
+
+**`cli.py` — default run fields**
+
+Add `"game_status"` to `_default_run_fields()` alongside the item 29 score fields:
+
+```python
+return _parse_field_list(args.field) or [
+    "inning",
+    "count",
+    "left_score",
+    "right_score",
+    "game_status",
+    "batter_card_name",
+    "batter_card_number",
+    "batter_number",
+]
+```
+
+Templates that do not define a `game_status` region silently skip this field (existing behavior for any field absent from the template).
+
+---
+
+**`state.py` — `_normalize_game_status()` and `state_from_samples()`**
+
+Add a normalizer alongside `parse_count()`, `parse_inning()`, and `parse_score()`:
+
+```python
+def _normalize_game_status(text: Optional[str]) -> Optional[str]:
+    if text and "final" in text.lower():
+        return "final"
+    return None
+```
+
+In `state_from_samples()`, extract and normalize the status field, then store it in metadata:
+
+```python
+game_status = _normalize_game_status(_sample_text(samples_by_field, "game_status"))
+```
+
+```python
+metadata={
+    ...
+    "game_status": game_status,
+    ...
+}
+```
+
+When `game_status` is not a configured template field, `_sample_text()` returns `None`, `_normalize_game_status(None)` returns `None`, and the metadata key is `None`. Zero cost and zero behavior change.
+
+---
+
+**`events.py` — `_detect_game_final()` and `detect_events()`**
+
+Add the detector after the existing helpers. Takes `ordered_states` (already sorted by timestamp) and `min_observations` — the minimum consecutive run of FINAL states required before firing:
+
+```python
+def _detect_game_final(
+    states: List[OverlayState],
+    min_observations: int = 3,
+) -> Optional[Event]:
+    """Return a GAME_FINAL event at the first stable run of 'final' status, or None."""
+    run_start: Optional[int] = None
+    run_length = 0
+    for index, state in enumerate(states):
+        if state.metadata.get("game_status") == "final":
+            if run_start is None:
+                run_start = index
+            run_length += 1
+            if run_length >= min_observations:
+                away_score, home_score = _score_snapshot(states, run_start, run_length)
+                return Event(
+                    event_type=EventType.GAME_FINAL,
+                    timestamp_seconds=states[run_start].timestamp_seconds,
+                    label="Final",
+                    metadata={"away_score": away_score, "home_score": home_score},
+                )
+        else:
+            run_start = None
+            run_length = 0
+    return None
+```
+
+The detector fires on the first consecutive run of `min_observations` states showing `game_status=="final"`. The timestamp is taken from the first state in the confirmed run (earliest reliable detection point). Score is drawn from `_score_snapshot()` over the same confirmed run window — no additional lookahead needed. A gap (OCR miss) resets the counter; the next clean run triggers instead.
+
+Expose `min_game_final_observations` in `detect_events()` for testability:
+
+```python
+def detect_events(
+    states: Iterable[OverlayState],
+    ...
+    min_game_final_observations: int = 3,
+) -> List[Event]:
+```
+
+After the main detection loop, call the detector and merge:
+
+```python
+    # after main loop:
+    game_final = _detect_game_final(ordered_states, min_observations=min_game_final_observations)
+    if game_final is not None:
+        events.append(game_final)
+        events.sort(key=lambda e: e.timestamp_seconds)
+
+    return events
+```
+
+`detect_events_file()` does not need to expose `min_game_final_observations`; the default of 3 is correct for production and tests call `detect_events()` directly.
+
+---
+
+**`exports.py` — `export_youtube_chapters()`**
+
+After item 29 is in place, the chapter loop already has `include_score` and appends `(away-home)` for `HALF_INNING_START`. Item 35 makes two targeted changes:
+
+1. Add `EventType.GAME_FINAL` to the event-type filter:
+
+```python
+if event.event_type in {EventType.INNING_START, EventType.HALF_INNING_START, EventType.GAME_FINAL}:
+```
+
+2. Extend the score-append block to cover `GAME_FINAL`:
+
+```python
+if include_score and event.event_type in {EventType.HALF_INNING_START, EventType.GAME_FINAL}:
+    away = event.metadata.get("away_score")
+    home = event.metadata.get("home_score")
+    if away is not None and home is not None:
+        label = f"{label} ({away}-{home})"
+```
+
+Example output: `1:36:00 Final (3-7)`
+
+The existing `0:00 Pregame` intro guard (`first_chapter_seconds > 0`) is unaffected — GAME_FINAL is never the first chapter. `--no-inning-score` (from item 29) also suppresses the score suffix on the Final line.
+
+---
+
+**Template field**
+
+`game_status` is an optional region in any template JSON:
+
+```json
+{
+  "fields": {
+    "game_status": {"x": 0, "y": 0, "width": 0, "height": 0}
+  }
+}
+```
+
+**Important:** Do not add `game_status` to the public example template (`examples/sidelinehd_640x360.json`) without confirmed pixel bounds derived from an actual FINAL frame. Inspect a real crop to determine coordinates before committing. The field should be omitted from the example template until coordinates are verified.
+
+---
 
 Acceptance criteria:
-- On overlays with a configured status region, stable `FINAL` OCR emits one final marker.
-- The final marker is not emitted from a single noisy OCR read.
-- Templates without the status region continue to run unchanged.
-- Documentation notes that the provided coordinates are for the current 640x360 active overlay style only.
-- Tests cover stable final detection, noisy single-frame final text, and no configured status region.
+- `GAME_FINAL` is a new `EventType` variant with value `"game_final"`.
+- `game_status` has a tuned entry in `FIELD_CONFIGS` (PSM 7, scale 4, no whitelist).
+- `"game_status"` is in the default field list in `cli.py`.
+- `_normalize_game_status()` returns `"final"` when text (case-insensitive) contains "final"; `None` otherwise.
+- `state_from_samples()` stores `"game_status"` in state metadata; `None` when field absent from template.
+- `_detect_game_final()` returns `None` when fewer than `min_observations` consecutive FINAL states are found.
+- `_detect_game_final()` returns `None` when no states have `game_status=="final"` (template has no field).
+- A gap (non-final state) between two short runs does not accumulate — each run is counted independently.
+- The emitted `GAME_FINAL` event has `label="Final"`, timestamp at the first confirmed state, and score in metadata (`None` when unavailable).
+- `export_youtube_chapters()` includes the GAME_FINAL line; score appended as `(away-home)` when both values are non-None.
+- `--no-inning-score` suppresses the score suffix on the Final chapter line.
+- Templates without `game_status` produce identical output to before this item (zero regression).
+- Tests cover:
+  - `_normalize_game_status()`: `"FINAL"` → `"final"`, `"Game Final"` → `"final"`, `"in play"` → `None`, `None` → `None`
+  - `_detect_game_final()`: stable run of 3+ → event at first timestamp; only 2 → `None`; no "final" states → `None`; gap resets counter, next clean run triggers
+  - `detect_events()`: `GAME_FINAL` in output when stable FINAL present; sorted after other events
+  - `export_youtube_chapters()`: GAME_FINAL line present; score appended when available; `include_score=False` omits score; `(None, None)` score → no parenthetical
 
 ### 36. Active Lineup-Strip Confidence and Order Recovery
 

@@ -154,6 +154,12 @@ def detect_events(
         ):
             inning, half = half_key
             chapter_timestamp_seconds = state.timestamp_seconds
+            away_score, home_score = _score_snapshot(
+                ordered_states,
+                index,
+                half_inning_confirmation_window,
+                half_key=half_key,
+            )
             if last_half_key is None and starts_at_zero:
                 active_timestamp_seconds = _game_active_timestamp(
                     ordered_states,
@@ -170,7 +176,11 @@ def detect_events(
                     label=format_half_inning_label(inning, half),
                     inning=inning,
                     half=half,
-                    metadata={"source": "state_change"},
+                    metadata={
+                        "source": "state_change",
+                        "away_score": away_score,
+                        "home_score": home_score,
+                    },
                 )
             )
             last_half_key = half_key
@@ -551,6 +561,22 @@ def _half_key(state: OverlayState) -> Optional[Tuple[int, HalfInning]]:
     if state.inning is None or state.half is None:
         return None
     return state.inning, state.half
+
+
+def _score_snapshot(
+    states: List[OverlayState],
+    start_index: int,
+    window: int,
+    half_key: Optional[Tuple[int, HalfInning]] = None,
+) -> Tuple[Optional[int], Optional[int]]:
+    """Return the first complete away/home score pair in the confirmation window."""
+
+    for state in states[start_index : start_index + window]:
+        if half_key is not None and _half_key(state) != half_key:
+            continue
+        if state.away_score is not None and state.home_score is not None:
+            return state.away_score, state.home_score
+    return None, None
 
 
 def _is_valid_half_inning_progression(

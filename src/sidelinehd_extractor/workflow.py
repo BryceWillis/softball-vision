@@ -73,6 +73,7 @@ def run_game(
     stage_progress: Optional[Callable[[str], None]] = None,
     include_chapter_intro: bool = True,
     chapter_intro_label: str = "Pregame",
+    include_inning_score: bool = True,
     include_at_bat_inning_headers: bool = True,
     batting_half: Optional[HalfInning] = None,
     auto_detect_batting_half: bool = False,
@@ -150,6 +151,7 @@ def run_game(
             events,
             include_intro=include_chapter_intro,
             intro_label=chapter_intro_label,
+            include_score=include_inning_score,
         ),
     )
     _write_text_export(
@@ -194,6 +196,7 @@ def run_youtube_game(
     stage_progress: Optional[Callable[[str], None]] = None,
     include_chapter_intro: bool = True,
     chapter_intro_label: str = "Pregame",
+    include_inning_score: bool = True,
     include_at_bat_inning_headers: bool = True,
     batting_half: Optional[HalfInning] = None,
     auto_detect_batting_half: bool = False,
@@ -240,6 +243,7 @@ def run_youtube_game(
         stage_progress=stage_progress,
         include_chapter_intro=include_chapter_intro,
         chapter_intro_label=chapter_intro_label,
+        include_inning_score=include_inning_score,
         include_at_bat_inning_headers=include_at_bat_inning_headers,
         batting_half=batting_half,
         auto_detect_batting_half=auto_detect_batting_half,

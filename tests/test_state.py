@@ -11,6 +11,7 @@ from sidelinehd_extractor.state import (
     parse_inning,
     parse_jersey_number,
     parse_samples_file,
+    parse_score,
     parse_states,
     smooth_states,
     state_from_samples,
@@ -25,6 +26,14 @@ class StateParsingTests(unittest.TestCase):
     def test_parse_jersey_number(self):
         self.assertEqual(parse_jersey_number("#22"), "22")
         self.assertIsNone(parse_jersey_number(""))
+
+    def test_parse_score(self):
+        self.assertEqual(parse_score("2"), 2)
+        self.assertEqual(parse_score("#12"), 12)
+        self.assertEqual(parse_score("Home 5"), 5)
+        self.assertIsNone(parse_score(""))
+        self.assertIsNone(parse_score(None))
+        self.assertIsNone(parse_score("noise"))
 
     def test_parse_inning_handles_noisy_top_first(self):
         self.assertEqual(parse_inning("o1"), (1, HalfInning.TOP))
@@ -97,6 +106,18 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(states[0].batter_number, "22")
         self.assertEqual(states[0].metadata["batter_name"], "Maya R.")
         self.assertEqual(states[0].metadata["batter_number_source"], "batter_card")
+
+    def test_state_from_samples_maps_left_and_right_scores(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "left_score": OCRSample(600.0, "left_score", "2", normalized_text="2"),
+                "right_score": OCRSample(600.0, "right_score", "1", normalized_text="1"),
+            },
+        )
+
+        self.assertEqual(state.away_score, 2)
+        self.assertEqual(state.home_score, 1)
 
     def test_state_from_samples_falls_back_to_lineup_batter_number(self):
         state = state_from_samples(

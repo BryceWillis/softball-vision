@@ -8,6 +8,7 @@ from sidelinehd_extractor.events import (
     _game_active_timestamp,
     _lineup_is_highlight_confirmed,
     _resolve_lineup_digit_run,
+    _score_snapshot,
     _window_has_game_active_signal,
     detect_events,
     detect_events_file,
@@ -1347,6 +1348,101 @@ class EventDetectionTests(unittest.TestCase):
             [event.label for event in events if event.event_type == EventType.HALF_INNING_START],
             ["Top 1", "Top 2"],
         )
+
+    def test_score_snapshot_returns_first_complete_pair_in_window(self):
+        states = [
+            OverlayState(600, inning=1, half=HalfInning.TOP, away_score=None, home_score=1),
+            OverlayState(605, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+            OverlayState(610, inning=1, half=HalfInning.TOP, away_score=3, home_score=1),
+        ]
+
+        self.assertEqual(_score_snapshot(states, 0, 2, half_key=(1, HalfInning.TOP)), (2, 1))
+
+    def test_score_snapshot_returns_empty_pair_when_window_has_no_complete_score(self):
+        states = [
+            OverlayState(600, inning=1, half=HalfInning.TOP, away_score=None, home_score=1),
+            OverlayState(605, inning=1, half=HalfInning.TOP, away_score=2, home_score=None),
+            OverlayState(610, inning=1, half=HalfInning.TOP, away_score=3, home_score=1),
+        ]
+
+        self.assertEqual(_score_snapshot(states, 0, 2), (None, None))
+
+    def test_score_snapshot_ignores_scores_from_different_half_inning(self):
+        states = [
+            OverlayState(600, inning=3, half=HalfInning.TOP),
+            OverlayState(605, inning=3, half=HalfInning.TOP),
+            OverlayState(610, inning=3, half=HalfInning.TOP),
+            OverlayState(615, inning=3, half=HalfInning.TOP),
+            OverlayState(620, inning=3, half=HalfInning.BOTTOM, away_score=4, home_score=2),
+            OverlayState(625, inning=3, half=HalfInning.BOTTOM, away_score=4, home_score=2),
+        ]
+
+        self.assertEqual(
+            _score_snapshot(states, 0, 6, half_key=(3, HalfInning.TOP)),
+            (None, None),
+        )
+
+    def test_detect_events_stores_score_snapshot_on_half_inning_start(self):
+        events = detect_events(
+            [
+                OverlayState(
+                    600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=None,
+                    home_score=0,
+                ),
+                OverlayState(
+                    605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=2,
+                    home_score=0,
+                ),
+                OverlayState(
+                    610,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=2,
+                    home_score=0,
+                ),
+                OverlayState(
+                    615,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=3,
+                    home_score=0,
+                ),
+            ]
+        )
+
+        chapter = next(event for event in events if event.event_type == EventType.HALF_INNING_START)
+        self.assertEqual(chapter.metadata["away_score"], 2)
+        self.assertEqual(chapter.metadata["home_score"], 0)
+
+    def test_detect_events_stores_empty_score_when_confirmation_window_has_no_pair(self):
+        events = detect_events(
+            [
+                OverlayState(
+                    600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=None,
+                    home_score=0,
+                ),
+                OverlayState(
+                    605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=1,
+                    home_score=None,
+                ),
+            ]
+        )
+
+        chapter = next(event for event in events if event.event_type == EventType.HALF_INNING_START)
+        self.assertIsNone(chapter.metadata["away_score"])
+        self.assertIsNone(chapter.metadata["home_score"])
 
     def test_detect_events_defers_first_chapter_to_game_active_timestamp_on_pregame_stream(
         self,

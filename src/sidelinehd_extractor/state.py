@@ -83,6 +83,17 @@ def parse_jersey_number(value: Optional[str]) -> Optional[str]:
     return match.group(0)
 
 
+def parse_score(value: Optional[str]) -> Optional[int]:
+    """Parse a score digit from OCR text."""
+
+    if not value:
+        return None
+    match = re.search(r"\d+", value)
+    if not match:
+        return None
+    return int(match.group(0))
+
+
 def parse_inning(value: Optional[str]) -> tuple:
     """Parse noisy inning OCR into inning number and a weak half-inning guess."""
 
@@ -132,6 +143,8 @@ def state_from_samples(
     count_text = _sample_text(samples_by_field, "count")
     balls, strikes = parse_count(count_text)
     inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
+    away_score = parse_score(_sample_text(samples_by_field, "left_score"))
+    home_score = parse_score(_sample_text(samples_by_field, "right_score"))
     batter_card_text = _sample_text(samples_by_field, "batter_card_number")
     lineup_strip_sample = samples_by_field.get("lineup_strip")
     lineup_strip_confidence = (
@@ -169,6 +182,8 @@ def state_from_samples(
         half=half,
         balls=balls,
         strikes=strikes,
+        away_score=away_score,
+        home_score=home_score,
         batter_number=batter_number,
         metadata={
             "batter_name": _sample_text(samples_by_field, "batter_card_name"),

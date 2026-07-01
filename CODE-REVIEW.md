@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-01
-**Review passes:** 8 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved)
+**Review passes:** 9 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 ready for review)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -26,6 +26,14 @@ _No items ready for review._
 _No open items._
 
 ## Resolved Items
+
+#### CR-38 — `_score_snapshot` returns score from wrong half-inning when current-half states all have `None` scores
+**File:** [events.py](src/sidelinehd_extractor/events.py) — `_score_snapshot`
+**Resolved:** Pass 9
+
+`_score_snapshot` had no `half_key` guard: when the 12-state confirmation window overlapped the next half-inning and all current-half states had `None` scores, it returned the next half's score and silently stamped it onto the current `HALF_INNING_START` event. Fixed by adding `half_key: Optional[Tuple[int, HalfInning]] = None` parameter — states whose `_half_key()` doesn't match are skipped. Call site in `detect_events()` passes `half_key=half_key`. New test `test_score_snapshot_ignores_scores_from_different_half_inning` covers the exact failure path; existing `test_score_snapshot_returns_first_complete_pair_in_window` updated to pass `half_key`. 112 tests pass.
+
+---
 
 #### CR-37 — Manifest recorded `order_validation: True` even when validation was skipped
 **File:** [workflow.py](src/sidelinehd_extractor/workflow.py)
