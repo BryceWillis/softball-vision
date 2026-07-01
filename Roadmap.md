@@ -1311,7 +1311,7 @@ Acceptance criteria:
 ### 29. Score at Inning Transitions
 
 Source: Product backlog
-Status: Done (Pass 9, commit TBD)
+Status: Done (Pass 9, commit d8b3b40)
 
 Record the score at each half-inning start and include it in chapter labels by
 default, so YouTube chapters read `10:00 Top 3 (2-1)` instead of `10:00 Top 3`.
