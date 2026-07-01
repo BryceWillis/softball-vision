@@ -5,12 +5,16 @@ from pathlib import Path
 from sidelinehd_extractor.events import (
     _at_bat_spacing_for_roster_match,
     _enrich_states_digit_runs,
+    _game_active_timestamp,
     _lineup_is_highlight_confirmed,
     _resolve_lineup_digit_run,
+    _window_has_game_active_signal,
     detect_events,
     detect_events_file,
     filter_at_bats_to_half,
+    infer_batting_cycle,
     infer_batting_half,
+    validate_batting_order,
 )
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.models import (
@@ -25,6 +29,41 @@ from sidelinehd_extractor.processing import write_jsonl
 
 
 class EventDetectionTests(unittest.TestCase):
+    def _chapter(
+        self,
+        timestamp: float,
+        inning: int = 1,
+        half: HalfInning = HalfInning.BOTTOM,
+    ) -> Event:
+        return Event(
+            EventType.HALF_INNING_START,
+            timestamp,
+            f"{'Bottom' if half == HalfInning.BOTTOM else 'Top'} {inning}",
+            inning=inning,
+            half=half,
+        )
+
+    def _at_bat(
+        self,
+        number: str,
+        timestamp: float,
+        inning: int = 1,
+        half: HalfInning = HalfInning.BOTTOM,
+        source: str = "name",
+        name=None,
+    ) -> Event:
+        player_name = name or f"Player {number}"
+        return Event(
+            EventType.AT_BAT_START,
+            timestamp,
+            f"{player_name} (#{number})",
+            inning=inning,
+            half=half,
+            player_number=number,
+            player_name=player_name,
+            metadata={"roster_match_source": source},
+        )
+
     def test_detect_events_emits_half_inning_and_first_at_bat(self):
         events = detect_events(
             [
@@ -137,6 +176,38 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(at_bat.metadata["batter_number_source"], "lineup_strip")
         self.assertEqual(at_bat.metadata["lineup_strip_confidence"], "lineup_highlight")
 
+    def test_detect_events_keeps_old_lineup_number_source_usable(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_number_source": "lineup_number"},
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="26",
+                    metadata={"batter_number_source": "lineup_number"},
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Amelia V.")
+        self.assertEqual(at_bat.player_number, "26")
+        self.assertEqual(at_bat.metadata["roster_match_source"], "lineup_number")
+        self.assertEqual(at_bat.metadata["batter_number_source"], "lineup_number")
+
     def test_lineup_is_highlight_confirmed_returns_true_for_lineup_highlight(self):
         state = OverlayState(
             600,
@@ -155,6 +226,283 @@ class EventDetectionTests(unittest.TestCase):
 
     def test_lineup_is_highlight_confirmed_returns_false_for_none(self):
         self.assertFalse(_lineup_is_highlight_confirmed(OverlayState(600)))
+
+    def test_window_has_game_active_signal_returns_false_for_pregame_zero_count_stable_batter(
+        self,
+    ):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="26",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
+                },
+            ),
+            OverlayState(
+                timestamp_seconds=5,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="26",
+            ),
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_ignores_untrusted_full_strip_pregame_noise(
+        self,
+    ):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="1",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_full_strip",
+                },
+            ),
+            OverlayState(
+                timestamp_seconds=55,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="7",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_full_strip",
+                },
+            ),
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_returns_true_on_nonzero_balls(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=1,
+                strikes=0,
+                batter_number="26",
+            )
+        ]
+
+        self.assertTrue(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_returns_true_on_nonzero_strikes(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=1,
+                batter_number="26",
+            )
+        ]
+
+        self.assertTrue(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_returns_true_on_batter_change(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="26",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
+                },
+            ),
+            OverlayState(
+                timestamp_seconds=5,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="2",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
+                },
+            ),
+        ]
+
+        self.assertTrue(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_ignores_states_with_wrong_half_key(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.BOTTOM,
+                balls=1,
+                strikes=0,
+                batter_number="26",
+            )
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_ignores_implausible_batter_states(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=1,
+                strikes=0,
+                batter_number="265",
+            )
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_window_has_game_active_signal_ignores_noisy_batter_card_number_changes(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=None,
+                strikes=None,
+                batter_number="3",
+                metadata={"batter_number_source": "batter_card", "batter_name": "non"},
+            ),
+            OverlayState(
+                timestamp_seconds=5,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=None,
+                strikes=None,
+                batter_number="1",
+                metadata={"batter_number_source": "batter_card", "batter_name": "TT |"},
+            ),
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
+    def test_game_active_timestamp_returns_first_nonzero_count_state(self):
+        states = [
+            OverlayState(0, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="26"),
+            OverlayState(5, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="26"),
+            OverlayState(10, inning=1, half=HalfInning.TOP, balls=0, strikes=1, batter_number="26"),
+        ]
+
+        self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 3), 10)
+
+    def test_game_active_timestamp_ignores_named_card_with_zero_count_state(self):
+        states = [
+            OverlayState(
+                0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="10",
+                metadata={
+                    "batter_name": "Teagan L.",
+                    "batter_number_source": "batter_card",
+                },
+            )
+        ]
+
+        self.assertIsNone(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 1))
+
+    def test_game_active_timestamp_returns_batter_card_change_without_count(self):
+        states = [
+            OverlayState(
+                0,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="10",
+                metadata={
+                    "batter_name": "Teagan L.",
+                    "batter_number_source": "batter_card",
+                },
+            ),
+            OverlayState(
+                5,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="12",
+                metadata={
+                    "batter_name": "Eliana D.",
+                    "batter_number_source": "batter_card",
+                },
+            ),
+        ]
+
+        self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 2), 5)
+
+    def test_game_active_timestamp_returns_old_lineup_number_change_without_count(self):
+        states = [
+            OverlayState(
+                0,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="26",
+                metadata={"batter_number_source": "lineup_number"},
+            ),
+            OverlayState(
+                5,
+                inning=1,
+                half=HalfInning.TOP,
+                batter_number="2",
+                metadata={"batter_number_source": "lineup_number"},
+            ),
+        ]
+
+        self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 2), 5)
+
+    def test_game_active_timestamp_returns_batter_change_timestamp_when_no_count(self):
+        states = [
+            OverlayState(
+                0,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="26",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
+                },
+            ),
+            OverlayState(
+                5,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="2",
+                metadata={
+                    "batter_number_source": "lineup_strip",
+                    "lineup_strip_confidence": "lineup_highlight",
+                },
+            ),
+        ]
+
+        self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 2), 5)
+
+    def test_game_active_timestamp_returns_none_when_no_signal_in_window(self):
+        states = [
+            OverlayState(0, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="26"),
+            OverlayState(5, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="26"),
+        ]
+
+        self.assertIsNone(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 2))
 
     def test_detect_events_suppresses_full_strip_lineup_event_even_when_rostered(self):
         roster = Roster(
@@ -420,7 +768,7 @@ class EventDetectionTests(unittest.TestCase):
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=2 lineup=15",
                         "lineup_strip_number": "15",
-                        "lineup_strip_confidence": "lineup_highlight",
+                        "lineup_strip_confidence": "lineup_full_strip",
                     },
                 ),
                 OverlayState(
@@ -433,7 +781,7 @@ class EventDetectionTests(unittest.TestCase):
                         "batter_number_source": "batter_card",
                         "batter_number_disagreement": "batter_card=2 lineup=15",
                         "lineup_strip_number": "15",
-                        "lineup_strip_confidence": "lineup_highlight",
+                        "lineup_strip_confidence": "lineup_full_strip",
                     },
                 ),
             ],
@@ -868,6 +1216,42 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(enriched[0].batter_number, "265")
         self.assertNotIn("batter_number_digit_run_original", enriched[0].metadata)
 
+    def test_confirmed_batter_identity_counts_unambiguous_full_strip_digit_run(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V.")],
+        )
+
+        events = detect_events(
+            [
+                OverlayState(
+                    timestamp_seconds=600,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="265",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_highlight",
+                    },
+                ),
+                OverlayState(
+                    timestamp_seconds=605,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="265",
+                    metadata={
+                        "batter_number_source": "lineup_strip",
+                        "lineup_strip_confidence": "lineup_full_strip",
+                    },
+                ),
+            ],
+            roster=roster,
+        )
+
+        at_bat = [event for event in events if event.event_type == EventType.AT_BAT_START][0]
+        self.assertEqual(at_bat.player_name, "Amelia V.")
+        self.assertEqual(at_bat.player_number, "26")
+
     def test_detect_events_file_writes_events_jsonl(self):
         with tempfile.TemporaryDirectory() as directory:
             states_path = Path(directory) / "states.jsonl"
@@ -964,7 +1348,9 @@ class EventDetectionTests(unittest.TestCase):
             ["Top 1", "Top 2"],
         )
 
-    def test_detect_events_does_not_start_top_first_at_zero_without_game_activity(self):
+    def test_detect_events_defers_first_chapter_to_game_active_timestamp_on_pregame_stream(
+        self,
+    ):
         states = [
             OverlayState(
                 timestamp_seconds=0,
@@ -998,14 +1384,18 @@ class EventDetectionTests(unittest.TestCase):
                 half=HalfInning.TOP,
                 balls=0,
                 strikes=0,
-                batter_number="4",
+                batter_number="10",
+                metadata={
+                    "batter_name": "Teagan L.",
+                    "batter_number_source": "batter_card",
+                },
             ),
             OverlayState(
-                timestamp_seconds=545,
+                timestamp_seconds=550,
                 inning=1,
                 half=HalfInning.TOP,
                 balls=0,
-                strikes=0,
+                strikes=1,
                 batter_number="4",
             ),
         ]
@@ -1014,11 +1404,66 @@ class EventDetectionTests(unittest.TestCase):
 
         chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
         self.assertEqual(
-            [(event.timestamp_seconds, event.label) for event in chapters], [(535, "Top 1")]
+            [(event.timestamp_seconds, event.label) for event in chapters], [(550, "Top 1")]
         )
         self.assertEqual(
             export_youtube_chapters(events, include_credit=False),
-            "0:00 Pregame\n8:55 Top 1",
+            "0:00 Pregame\n9:10 Top 1",
+        )
+
+    def test_detect_events_emits_first_chapter_at_zero_for_mid_game_stream_start(self):
+        events = detect_events(
+            [
+                OverlayState(
+                    0,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=1,
+                    strikes=0,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    5,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=1,
+                    strikes=0,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    10,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=1,
+                    strikes=0,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    15,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=1,
+                    strikes=0,
+                    batter_number="22",
+                ),
+            ]
+        )
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual([(event.timestamp_seconds, event.label) for event in chapters], [(0, "Top 1")])
+
+    def test_detect_events_skips_activity_signal_for_non_zero_starting_stream(self):
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="22"),
+                OverlayState(605, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="22"),
+            ]
+        )
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual(
+            [(event.timestamp_seconds, event.label) for event in chapters],
+            [(600, "Top 1")],
         )
 
     def test_detect_events_allows_short_confirmed_half_inning_inputs(self):
@@ -1135,10 +1580,38 @@ class EventDetectionTests(unittest.TestCase):
     def test_detect_events_can_filter_at_bats_to_one_half(self):
         events = detect_events(
             [
-                OverlayState(0, inning=1, half=HalfInning.TOP, batter_number="22"),
-                OverlayState(5, inning=1, half=HalfInning.TOP, batter_number="22"),
-                OverlayState(10, inning=1, half=HalfInning.TOP, batter_number="22"),
-                OverlayState(15, inning=1, half=HalfInning.TOP, batter_number="22"),
+                OverlayState(
+                    0,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=1,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    5,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=1,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    10,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=1,
+                    batter_number="22",
+                ),
+                OverlayState(
+                    15,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=1,
+                    batter_number="22",
+                ),
                 OverlayState(900, inning=1, half=HalfInning.BOTTOM, batter_number="10"),
                 OverlayState(905, inning=1, half=HalfInning.BOTTOM, batter_number="10"),
                 OverlayState(910, inning=1, half=HalfInning.BOTTOM, batter_number="10"),
@@ -1159,6 +1632,257 @@ class EventDetectionTests(unittest.TestCase):
             [event.player_number for event in events if event.event_type == EventType.AT_BAT_START],
             ["22", "24"],
         )
+
+    def test_detect_events_subsequent_half_innings_unaffected_by_activity_signal_change(self):
+        events = detect_events(
+            [
+                OverlayState(0, inning=1, half=HalfInning.TOP, balls=1, strikes=0, batter_number="22"),
+                OverlayState(5, inning=1, half=HalfInning.TOP, balls=1, strikes=0, batter_number="22"),
+                OverlayState(10, inning=1, half=HalfInning.TOP, balls=1, strikes=0, batter_number="22"),
+                OverlayState(15, inning=1, half=HalfInning.TOP, balls=1, strikes=0, batter_number="22"),
+                OverlayState(900, inning=1, half=HalfInning.BOTTOM, balls=0, strikes=0, batter_number="10"),
+                OverlayState(905, inning=1, half=HalfInning.BOTTOM, balls=0, strikes=0, batter_number="10"),
+                OverlayState(910, inning=1, half=HalfInning.BOTTOM, balls=0, strikes=0, batter_number="10"),
+                OverlayState(915, inning=1, half=HalfInning.BOTTOM, balls=0, strikes=0, batter_number="10"),
+            ]
+        )
+
+        self.assertEqual(
+            [
+                (event.timestamp_seconds, event.label)
+                for event in events
+                if event.event_type == EventType.HALF_INNING_START
+            ],
+            [(0, "Top 1"), (900, "Bottom 1")],
+        )
+
+    def test_infer_batting_cycle_returns_cycle_from_first_qualifying_half(self):
+        events = [
+            self._at_bat("8", 100, half=HalfInning.TOP),
+            self._at_bat("9", 160, half=HalfInning.TOP),
+            self._at_bat("26", 300),
+            self._at_bat("2", 360),
+            self._at_bat("13", 420),
+        ]
+
+        self.assertEqual(infer_batting_cycle(events), ["26", "2", "13"])
+
+    def test_infer_batting_cycle_sorts_top_before_bottom_in_same_inning(self):
+        events = [
+            self._at_bat("8", 100, half=HalfInning.TOP),
+            self._at_bat("9", 160, half=HalfInning.TOP),
+            self._at_bat("10", 220, half=HalfInning.TOP),
+            self._at_bat("26", 300),
+            self._at_bat("2", 360),
+            self._at_bat("13", 420),
+        ]
+
+        self.assertEqual(infer_batting_cycle(events), ["8", "9", "10"])
+
+    def test_infer_batting_cycle_returns_empty_when_insufficient_confirmed_events(self):
+        events = [
+            self._at_bat("26", 300),
+            self._at_bat("2", 360),
+        ]
+
+        self.assertEqual(infer_batting_cycle(events), [])
+
+    def test_infer_batting_cycle_ignores_unconfirmed_events(self):
+        events = [
+            self._at_bat("26", 300, source="batting_order"),
+            self._at_bat("2", 360, source=None),
+            self._at_bat("13", 420, source="lineup_number"),
+        ]
+
+        self.assertEqual(infer_batting_cycle(events), [])
+
+    def test_infer_batting_cycle_deduplicates_repeated_player(self):
+        events = [
+            self._at_bat("26", 300),
+            self._at_bat("2", 360),
+            self._at_bat("13", 420),
+            self._at_bat("26", 480),
+        ]
+
+        self.assertEqual(infer_batting_cycle(events), ["26", "2", "13"])
+
+    def test_validate_batting_order_synthesizes_inferred_event_for_one_skipped_batter(self):
+        events = [
+            self._chapter(90, inning=1),
+            self._at_bat("26", 100, inning=1),
+            self._at_bat("2", 160, inning=1),
+            self._at_bat("13", 220, inning=1),
+            self._chapter(290, inning=2),
+            self._at_bat("26", 300, inning=2),
+            self._at_bat("13", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        inferred = [
+            event
+            for event in validated
+            if event.metadata.get("order_flags") == ["inferred-missing"]
+        ]
+
+        self.assertEqual([(event.player_number, event.timestamp_seconds) for event in inferred], [("2", 330)])
+        self.assertEqual(inferred[0].metadata["roster_match_source"], "batting_order")
+        self.assertEqual(
+            [event.player_number for event in validated if event.event_type == EventType.AT_BAT_START],
+            ["26", "2", "13", "26", "2", "13"],
+        )
+
+    def test_validate_batting_order_synthesizes_two_inferred_events_for_two_skipped_batters(self):
+        events = [
+            self._chapter(90, inning=1),
+            self._at_bat("26", 100, inning=1),
+            self._at_bat("2", 160, inning=1),
+            self._at_bat("13", 220, inning=1),
+            self._chapter(290, inning=2),
+            self._at_bat("26", 300, inning=2),
+            self._at_bat("26", 390, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        inferred = [
+            event
+            for event in validated
+            if event.metadata.get("order_flags") == ["inferred-missing"]
+        ]
+
+        self.assertEqual(
+            [(event.player_number, event.timestamp_seconds) for event in inferred],
+            [("2", 330), ("13", 360)],
+        )
+
+    def test_validate_batting_order_flags_out_of_order_when_forward_skip_exceeds_tolerance(self):
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._at_bat("5", 280),
+            self._at_bat("4", 340),
+            self._chapter(390, inning=2),
+            self._at_bat("26", 400, inning=2),
+            self._at_bat("4", 460, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        flagged = [event for event in validated if event.player_number == "4" and event.inning == 2][0]
+
+        self.assertIn("out-of-order-candidate", flagged.metadata["order_flags"])
+
+    def test_validate_batting_order_flags_possible_substitute_for_unknown_player(self):
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(290, inning=2),
+            self._at_bat("99", 300, inning=2),
+            self._at_bat("26", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        substitute = [event for event in validated if event.player_number == "99"][0]
+
+        self.assertIn("possible-substitute", substitute.metadata["order_flags"])
+        self.assertFalse(
+            [
+                event
+                for event in validated
+                if event.metadata.get("order_flags") == ["inferred-missing"]
+            ]
+        )
+
+    def test_validate_batting_order_inferred_event_prefers_observed_name(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="2", full_name="Savanah P.", display_name="Savanah P.")],
+        )
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160, name="Bobby S."),
+            self._at_bat("13", 220),
+            self._at_bat("26", 300),
+            self._at_bat("13", 360),
+        ]
+
+        validated = validate_batting_order(events, roster=roster)
+        inferred = [
+            event
+            for event in validated
+            if event.metadata.get("order_flags") == ["inferred-missing"]
+        ][0]
+
+        self.assertEqual(inferred.player_name, "Bobby S.")
+        self.assertEqual(inferred.label, "Bobby S. (#2)")
+
+    def test_validate_batting_order_inferred_event_uses_roster_name_as_fallback(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="2", full_name="Savanah P.", display_name="Savanah P.")],
+        )
+        events = [
+            self._at_bat("26", 100),
+            Event(
+                EventType.AT_BAT_START,
+                160,
+                "#2",
+                inning=1,
+                half=HalfInning.BOTTOM,
+                player_number="2",
+                metadata={"roster_match_source": "number"},
+            ),
+            self._at_bat("13", 220),
+            self._at_bat("26", 300),
+            self._at_bat("13", 360),
+        ]
+
+        validated = validate_batting_order(events, roster=roster)
+        inferred = [
+            event
+            for event in validated
+            if event.metadata.get("order_flags") == ["inferred-missing"]
+        ][0]
+
+        self.assertEqual(inferred.player_name, "Savanah P.")
+        self.assertEqual(inferred.label, "Savanah P. (#2)")
+
+    def test_validate_batting_order_does_not_infer_missing_events_across_inning_boundary(self):
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(300, inning=2),
+            self._at_bat("13", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        inferred = [
+            event
+            for event in validated
+            if event.metadata.get("order_flags") == ["inferred-missing"]
+        ]
+
+        self.assertEqual(inferred, [])
+
+    def test_validate_batting_order_opposite_half_events_pass_through(self):
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._at_bat("8", 300, inning=1, half=HalfInning.TOP),
+        ]
+
+        validated = validate_batting_order(events)
+        top_event = [event for event in validated if event.half == HalfInning.TOP][0]
+
+        self.assertEqual(top_event.player_number, "8")
+        self.assertNotIn("order_flags", top_event.metadata)
+
+    def test_validate_batting_order_no_cycle_returns_events_unchanged(self):
+        events = [self._at_bat("26", 100), self._at_bat("2", 160)]
+
+        self.assertEqual(validate_batting_order(events), events)
 
     def test_infer_batting_half_uses_roster_name_match_counts(self):
         roster = Roster(

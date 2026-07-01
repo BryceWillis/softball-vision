@@ -96,6 +96,7 @@ class WorkflowTests(unittest.TestCase):
                 batting_half=None,
                 min_at_bat_spacing_seconds=45.0,
                 min_at_bat_spacing_roster_confirmed_seconds=20.0,
+                order_validation=True,
             )
             self.assertEqual(stages, ["process", "parse-states", "detect-events", "export"])
             self.assertEqual(result.event_count, 2)
@@ -109,6 +110,14 @@ class WorkflowTests(unittest.TestCase):
             )
             self.assertIn(
                 '"min_at_bat_spacing_roster_confirmed_seconds": 20.0',
+                process_result.manifest_path.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                '"order_validation_requested": true',
+                process_result.manifest_path.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                '"order_validation_ran": false',
                 process_result.manifest_path.read_text(encoding="utf-8"),
             )
 

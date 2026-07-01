@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
+from sidelinehd_extractor.constants import (
+    BATTER_SOURCE_BATTER_CARD,
+    BATTER_SOURCE_LINEUP_NUMBER,
+    BATTER_SOURCE_LINEUP_STRIP,
+    LINEUP_SOURCE_HIGHLIGHT,
+    LINEUP_STRIP_CONFIDENCE_KEY,
+)
 from sidelinehd_extractor.models import Event, EventType, HalfInning, OverlayState, Roster
 from sidelinehd_extractor.processing import write_jsonl
+
+CONFIRMED_ORDER_SOURCES = frozenset({"name", "number", "lineup_number"})
+MIN_BATTING_ORDER_SEED = 3
 
 
 @dataclass(frozen=True)
@@ -142,10 +153,20 @@ def detect_events(
             )
         ):
             inning, half = half_key
+            chapter_timestamp_seconds = state.timestamp_seconds
+            if last_half_key is None and starts_at_zero:
+                active_timestamp_seconds = _game_active_timestamp(
+                    ordered_states,
+                    index,
+                    half_key,
+                    half_inning_confirmation_window,
+                )
+                if active_timestamp_seconds is not None:
+                    chapter_timestamp_seconds = active_timestamp_seconds
             events.append(
                 Event(
                     event_type=EventType.HALF_INNING_START,
-                    timestamp_seconds=state.timestamp_seconds,
+                    timestamp_seconds=chapter_timestamp_seconds,
                     label=format_half_inning_label(inning, half),
                     inning=inning,
                     half=half,
@@ -207,8 +228,8 @@ def detect_events(
                         "batter_card_name": state.metadata.get("batter_name"),
                         "roster_match_source": roster_match_source,
                         "batter_number_source": state.metadata.get("batter_number_source"),
-                        "lineup_strip_confidence": state.metadata.get(
-                            "lineup_strip_confidence"
+                        LINEUP_STRIP_CONFIDENCE_KEY: state.metadata.get(
+                            LINEUP_STRIP_CONFIDENCE_KEY
                         ),
                         "batter_number_disagreement": state.metadata.get(
                             "batter_number_disagreement"
@@ -232,6 +253,7 @@ def detect_events_file(
     batting_half: Optional[HalfInning] = None,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    order_validation: bool = True,
 ) -> EventDetectionResult:
     """Detect events from a states JSONL file and write events JSONL."""
 
@@ -244,8 +266,148 @@ def detect_events_file(
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
     )
+    if roster is not None and order_validation:
+        events = validate_batting_order(events, roster=roster)
     write_jsonl(destination, events)
     return EventDetectionResult(input_path=source, output_path=destination, event_count=len(events))
+
+
+def infer_batting_cycle(events: List[Event]) -> List[str]:
+    """Return ordered player numbers from the first qualifying seed half-inning."""
+
+    cycle, _seed_half = _infer_seed_info(events)
+    return cycle
+
+
+def validate_batting_order(
+    events: List[Event],
+    roster: Optional[Roster] = None,
+    tolerance: int = 2,
+) -> List[Event]:
+    """Flag batting-order anomalies and synthesize reviewable inferred events."""
+
+    cycle, seed_half = _infer_seed_info(events)
+    if len(cycle) < MIN_BATTING_ORDER_SEED or seed_half is None:
+        return list(events)
+
+    cycle_len = len(cycle)
+    number_to_name = _player_name_lookup(events, roster, cycle)
+    cycle_pos = 0
+    prev_ts: Optional[float] = None
+    at_seed_half_start = False
+    result: List[Event] = []
+
+    for event in events:
+        if event.event_type == EventType.HALF_INNING_START and event.half == seed_half:
+            prev_ts = event.timestamp_seconds
+            at_seed_half_start = True
+            result.append(event)
+            continue
+
+        if (
+            event.event_type != EventType.AT_BAT_START
+            or event.half != seed_half
+            or not event.player_number
+        ):
+            result.append(event)
+            continue
+
+        player_number = event.player_number
+        if player_number not in cycle:
+            result.append(_with_order_flag(event, "possible-substitute"))
+            prev_ts = event.timestamp_seconds
+            at_seed_half_start = False
+            continue
+
+        actual_pos = cycle.index(player_number)
+        forward_skip = (actual_pos - cycle_pos) % cycle_len
+        if forward_skip <= tolerance:
+            if forward_skip > 0 and prev_ts is not None and not at_seed_half_start:
+                gap = event.timestamp_seconds - prev_ts
+                for index in range(forward_skip):
+                    skipped_pos = (cycle_pos + index) % cycle_len
+                    skipped_number = cycle[skipped_pos]
+                    timestamp_seconds = prev_ts + gap * (index + 1) / (forward_skip + 1)
+                    result.append(
+                        Event(
+                            event_type=EventType.AT_BAT_START,
+                            timestamp_seconds=timestamp_seconds,
+                            label=format_at_bat_label(
+                                skipped_number,
+                                number_to_name.get(skipped_number),
+                            ),
+                            inning=event.inning,
+                            half=event.half,
+                            player_number=skipped_number,
+                            player_name=number_to_name.get(skipped_number),
+                            metadata={
+                                "source": "batting_order",
+                                "roster_match_source": "batting_order",
+                                "order_flags": ["inferred-missing"],
+                            },
+                        )
+                    )
+            result.append(event)
+            cycle_pos = (actual_pos + 1) % cycle_len
+        else:
+            result.append(_with_order_flag(event, "out-of-order-candidate"))
+            cycle_pos = (actual_pos + 1) % cycle_len
+        prev_ts = event.timestamp_seconds
+        at_seed_half_start = False
+
+    return sorted(result, key=lambda item: item.timestamp_seconds)
+
+
+def _infer_seed_info(events: List[Event]) -> Tuple[List[str], Optional[HalfInning]]:
+    """Return the inferred batting cycle and the half that supplied it."""
+
+    groups: Dict[Tuple[int, HalfInning], List[str]] = defaultdict(list)
+    for event in events:
+        if (
+            event.event_type == EventType.AT_BAT_START
+            and event.inning is not None
+            and event.half is not None
+            and event.player_number
+            and event.metadata.get("roster_match_source") in CONFIRMED_ORDER_SOURCES
+        ):
+            groups[(event.inning, event.half)].append(event.player_number)
+
+    for key in sorted(groups.keys(), key=_half_inning_sort_key):
+        players = list(dict.fromkeys(groups[key]))
+        if len(players) >= MIN_BATTING_ORDER_SEED:
+            return players, key[1]
+    return [], None
+
+
+def _half_inning_sort_key(key: Tuple[int, HalfInning]) -> Tuple[int, int]:
+    inning, half = key
+    half_index = 0 if half == HalfInning.TOP else 1
+    return inning, half_index
+
+
+def _player_name_lookup(
+    events: List[Event],
+    roster: Optional[Roster],
+    cycle: List[str],
+) -> Dict[str, str]:
+    number_to_name: Dict[str, str] = {}
+    for event in events:
+        if event.event_type == EventType.AT_BAT_START and event.player_number and event.player_name:
+            number_to_name[event.player_number] = event.player_name
+    if roster is not None:
+        for number in cycle:
+            if number not in number_to_name:
+                roster_name = roster.name_for_number(number)
+                if roster_name:
+                    number_to_name[number] = roster_name
+    return number_to_name
+
+
+def _with_order_flag(event: Event, flag: str) -> Event:
+    flags = list(event.metadata.get("order_flags") or [])
+    if flag not in flags:
+        flags.append(flag)
+    return replace(event, metadata={**event.metadata, "order_flags": flags})
 
 
 def infer_batting_half(
@@ -379,7 +541,9 @@ def roster_match_source_for_state(
         return "lineup_number"
     if state.batter_number and roster.name_for_number(state.batter_number):
         source = state.metadata.get("batter_number_source")
-        return "lineup_number" if source == "lineup_strip" else "number"
+        if source in {BATTER_SOURCE_LINEUP_NUMBER, BATTER_SOURCE_LINEUP_STRIP}:
+            return "lineup_number"
+        return "number"
     return None
 
 
@@ -449,13 +613,13 @@ def _is_plausible_batter_source(
     """Reject weak unrostered batter sources when a roster is present."""
 
     source = state.metadata.get("batter_number_source")
-    if source == "lineup_strip":
+    if source == BATTER_SOURCE_LINEUP_STRIP:
         if not _lineup_is_highlight_confirmed(state):
             return False
         if roster is None:
             return True
         return _has_roster_match_for_state(state, roster)
-    if source == "batter_card" and roster is not None:
+    if source == BATTER_SOURCE_BATTER_CARD and roster is not None:
         if state.batter_number and not _has_roster_match_for_state(state, roster):
             return False
     if roster is None:
@@ -486,7 +650,13 @@ def _has_roster_match_for_state(state: OverlayState, roster: Roster) -> bool:
 def _lineup_is_highlight_confirmed(state: OverlayState) -> bool:
     """Return true when lineup-strip OCR came from the highlighted chip."""
 
-    return state.metadata.get("lineup_strip_confidence") == "lineup_highlight"
+    return _metadata_is_highlight_confirmed(state.metadata)
+
+
+def _metadata_is_highlight_confirmed(metadata: dict) -> bool:
+    """Return true when metadata says lineup OCR came from the highlighted chip."""
+
+    return metadata.get(LINEUP_STRIP_CONFIDENCE_KEY) == LINEUP_SOURCE_HIGHLIGHT
 
 
 def _preferred_lineup_number_for_state(
@@ -496,12 +666,12 @@ def _preferred_lineup_number_for_state(
     """Return active lineup number when it should override a weak card number."""
 
     source = state.metadata.get("batter_number_source")
-    lineup_number = _highlight_lineup_number_for_state(state, roster)
+    lineup_number = _active_lineup_number_for_state(state, roster)
     if not lineup_number:
         return None
-    if source == "lineup_strip":
+    if source == BATTER_SOURCE_LINEUP_STRIP:
         return lineup_number
-    if source != "batter_card":
+    if source != BATTER_SOURCE_BATTER_CARD:
         return None
     batter_name = state.metadata.get("batter_name")
     if batter_name and roster.number_for_name(str(batter_name)):
@@ -509,17 +679,6 @@ def _preferred_lineup_number_for_state(
     if batter_name and _jersey_number_from_text(str(batter_name)):
         return None
     return lineup_number
-
-
-def _highlight_lineup_number_for_state(
-    state: OverlayState,
-    roster: Roster,
-) -> Optional[str]:
-    """Return a rostered lineup number only from highlight-confirmed OCR."""
-
-    if not _lineup_is_highlight_confirmed(state):
-        return None
-    return _active_lineup_number_for_state(state, roster)
 
 
 def _active_lineup_number_for_state(
@@ -569,7 +728,7 @@ def _enrich_states_digit_runs(
     enriched = []
     for state in states:
         if (
-            state.metadata.get("batter_number_source") == "lineup_strip"
+            state.metadata.get("batter_number_source") == BATTER_SOURCE_LINEUP_STRIP
             and _lineup_is_highlight_confirmed(state)
             and state.batter_number
             and len(state.batter_number) > 2
@@ -671,14 +830,29 @@ def _confirmed_batter_identity(
     observations = 0
     for state in states[start_index : start_index + window]:
         observed_name = player_name_for_state(state, roster)
+        identity_state = state
         observed_number = _effective_batter_number(
             player_number_for_state(state, observed_name, roster),
             observed_name,
             name_to_number,
         )
         if (
+            observed_number != effective_batter_number
+            and roster is not None
+            and state.batter_number
+            and len(state.batter_number) > 2
+        ):
+            resolved_number = _resolve_lineup_digit_run(state.batter_number, roster)
+            if resolved_number:
+                observed_number = _effective_batter_number(
+                    resolved_number,
+                    observed_name,
+                    name_to_number,
+                )
+                identity_state = replace(state, batter_number=resolved_number)
+        if (
             observed_number == effective_batter_number
-            and _is_plausible_batter_identity(state, observed_number, observed_name)
+            and _is_plausible_batter_identity(identity_state, observed_number, observed_name)
             and (
                 not player_name
                 or not observed_name
@@ -697,28 +871,75 @@ def _confirmed_half_key(
     minimum: int,
     require_activity_signal: bool = False,
 ) -> bool:
-    if require_activity_signal and not _has_half_inning_activity_signal(states[start_index]):
-        return False
-
     observations = 0
     window_states = states[start_index : start_index + window]
     for state in window_states:
         if _half_key(state) == half_key:
             observations += 1
     if len(window_states) < minimum:
-        return len(window_states) >= 2 and observations == len(window_states)
-    return observations >= minimum
+        confirmed = len(window_states) >= 2 and observations == len(window_states)
+    else:
+        confirmed = observations >= minimum
+    if not confirmed:
+        return False
+    if require_activity_signal:
+        return _window_has_game_active_signal(window_states, half_key)
+    return True
 
 
-def _has_half_inning_activity_signal(state: OverlayState) -> bool:
-    """Return true once the scorebug looks game-active, not merely present.
+def _window_has_game_active_signal(
+    window_states: List[OverlayState],
+    half_key: Tuple[int, HalfInning],
+) -> bool:
+    """Return true when a stable half-inning window shows real game activity."""
 
-    SidelineHD pregame overlays can OCR as a stable ``Top 1`` before the game
-    has actually started. A plausible batter card is the strongest local signal
-    that the inning state is no longer just pregame scorebug noise.
-    """
+    return _game_active_timestamp(window_states, 0, half_key, len(window_states)) is not None
 
-    return _is_plausible_batter_state(state)
+
+def _game_active_timestamp(
+    states: List[OverlayState],
+    start_index: int,
+    half_key: Tuple[int, HalfInning],
+    window: int,
+) -> Optional[float]:
+    """Return the first timestamp with a pitch count change or batter change."""
+
+    previous_batter_number: Optional[str] = None
+    for state in states[start_index : start_index + window]:
+        if _half_key(state) != half_key:
+            continue
+        if not _is_plausible_batter_state(state):
+            continue
+        if (
+            state.balls is not None
+            and state.strikes is not None
+            and (state.balls > 0 or state.strikes > 0)
+        ):
+            return state.timestamp_seconds
+        if (
+            previous_batter_number is not None
+            and state.batter_number
+            and state.batter_number != previous_batter_number
+            and _has_batter_change_activity_signal(state)
+        ):
+            return state.timestamp_seconds
+        if state.batter_number and _has_batter_change_activity_signal(state):
+            previous_batter_number = state.batter_number
+    return None
+
+
+def _has_batter_change_activity_signal(state: OverlayState) -> bool:
+    """Return true when a batter number is reliable enough for game-start gating."""
+
+    source = state.metadata.get("batter_number_source")
+    if source == BATTER_SOURCE_LINEUP_STRIP:
+        return _lineup_is_highlight_confirmed(state)
+    if source == BATTER_SOURCE_LINEUP_NUMBER:
+        return True
+    if source == BATTER_SOURCE_BATTER_CARD:
+        batter_name = state.metadata.get("batter_name")
+        return bool(batter_name and _looks_like_player_name(str(batter_name)))
+    return False
 
 
 def _event_has_roster_name_match(event: Event) -> bool:

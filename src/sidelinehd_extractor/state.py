@@ -9,6 +9,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from sidelinehd_extractor.constants import (
+    BATTER_SOURCE_BATTER_CARD,
+    BATTER_SOURCE_LINEUP_NUMBER,
+    BATTER_SOURCE_LINEUP_STRIP,
+    LINEUP_STRIP_CONFIDENCE_KEY,
+)
 from sidelinehd_extractor.models import HalfInning, OCRSample, OverlayState
 from sidelinehd_extractor.processing import write_jsonl
 
@@ -140,10 +146,13 @@ def state_from_samples(
 
     if batter_card_number:
         batter_number = batter_card_number
-        batter_number_source = "batter_card"
-    elif active_lineup_number:
-        batter_number = active_lineup_number
-        batter_number_source = "lineup_strip"
+        batter_number_source = BATTER_SOURCE_BATTER_CARD
+    elif lineup_strip_number:
+        batter_number = lineup_strip_number
+        batter_number_source = BATTER_SOURCE_LINEUP_STRIP
+    elif lineup_number:
+        batter_number = lineup_number
+        batter_number_source = BATTER_SOURCE_LINEUP_NUMBER
     else:
         batter_number = None
         batter_number_source = None
@@ -167,7 +176,7 @@ def state_from_samples(
             "batter_number_disagreement": batter_number_disagreement,
             "lineup_strip_number": lineup_strip_number,
             "lineup_batter_number": lineup_number,
-            "lineup_strip_confidence": lineup_strip_confidence,
+            LINEUP_STRIP_CONFIDENCE_KEY: lineup_strip_confidence,
             "fields": {
                 field_name: sample.normalized_text or sample.raw_text
                 for field_name, sample in sorted(samples_by_field.items())

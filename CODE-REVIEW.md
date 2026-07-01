@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-06-30
-**Review passes:** 7 (Pass 7: item 36 — lineup-strip confidence split)
+**Review passes:** 8 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -13,71 +13,115 @@ This document is the running record of architectural observations, bugs, and imp
 - **Resolved**: reviewer/user has confirmed the implementation and moved the item to the Resolved section.
 - **Deferred**: valid finding, but intentionally postponed.
 
-Codex may update an Open item to **Ready for Review** after implementing it and should include a short implementation note. The reviewer/user owns moving items from Open to Resolved after reviewing the diff and behavior.
+Codex may update an Open item to **Ready for Review** after implementing it and should include a short implementation note. The architect (Claude) owns moving items from Ready for Review to Resolved after verifying the diff and behavior. **Approval is signalled by a git commit** — the architect stages and commits all reviewed changes as the final step of a successful review pass. If findings require fixes, no commit is made until all open items are resolved.
 
 ---
+
+## Ready for Review Items
+
+_No items ready for review._
 
 ## Open Items
 
-#### CR-26 — `batter_number_source` hardcoded to `"lineup_strip"` when number came from old `batter_number` OCR field
-**File:** [state.py](src/sidelinehd_extractor/state.py) ~line 143
-**Pass:** 7
-
-`state_from_samples` sets `batter_number_source = "lineup_strip"` whenever `active_lineup_number` is non-None, even when the value came from the `lineup_number` variable (sourced from the old `batter_number` OCR field) rather than from `lineup_strip_number` (sourced from the `lineup_strip` field). When only the `batter_number` field is present (old-style template without `lineup_strip`), `lineup_strip_sample` is None, `lineup_strip_confidence` is None, and `_lineup_is_highlight_confirmed` always returns False. `_is_plausible_batter_source` then rejects every lineup-derived state, silently dropping all lineup-sourced at-bats with no error or warning.
-
-Fix: track which field actually contributed — set `batter_number_source = "lineup_strip"` only when `active_lineup_number` came from `lineup_strip_number`; use a different source value (e.g., `"lineup_number"`) when it came from `lineup_number`. The highlight-confidence gate in `_is_plausible_batter_source` should only apply to the `"lineup_strip"` source, not to the older `"lineup_number"` path.
-
----
-
-#### CR-27 — `_preferred_lineup_number_for_state` over-broadly blocks full-strip lineup from correcting wrong batter-card numbers
-**File:** [events.py](src/sidelinehd_extractor/events.py) ~line 509
-**Pass:** 7
-
-Item 36 changed `_preferred_lineup_number_for_state` to call `_highlight_lineup_number_for_state` instead of `_active_lineup_number_for_state`. This was correct for the AT_BAT_START emit path, but it also silently blocked the *correction* path: for a state with `batter_number_source="batter_card"`, if the card OCR misreads the number (e.g., reads "8" instead of "6") and the lineup strip shows the correct rostered number ("6") but with `lineup_full_strip` confidence, `_preferred_lineup_number_for_state` now returns None and `player_number_for_state` emits the wrong card number. The item 36 design's Layer 5 commentary only discussed blocking AT_BAT_START emission paths; the correction-path regression is unacknowledged.
-
-Fix: `_preferred_lineup_number_for_state` should continue to call `_active_lineup_number_for_state` (not the highlight-gated variant) so that full-strip lineup reads can still correct batter-card misattributions. The highlight gate belongs exclusively in `_is_plausible_batter_source`, which governs AT_BAT_START emission.
-
----
-
-#### CR-28 — Fused-digit full-strip window states drop below `min_batter_observations`, silently suppressing real at-bats
-**File:** [events.py](src/sidelinehd_extractor/events.py) — `_confirmed_batter_identity`
-**Pass:** 7
-
-When the trigger state is highlight-confirmed and `_enrich_states_digit_runs` resolves its batter number from "265" to "26" (effective_batter_number = "26"), window states with `lineup_full_strip` confidence are not enriched (item 36 added the highlight-confirmation guard to `_enrich_states_digit_runs`). Those window states carry raw `batter_number="265"`. `_confirmed_batter_identity` calls `player_number_for_state` on window states, which now returns "265" (lineup override blocked for full-strip). "265" != "26" fails the equality check; `len("265") > 2` also fails `_is_plausible_batter_identity`. With `min_batter_observations=2`, a trigger where only 1 in 4 window states is highlight-confirmed produces 1 observation — below threshold — and the at-bat is silently dropped.
-
-Fix: `_confirmed_batter_identity` should check `state.batter_number` directly (or use a separate unenriched-number comparison) for window states rather than relying on `player_number_for_state`, which now applies the highlight gate. Alternatively, run digit-run enrichment on full-strip states when the roster match is unambiguous, but only for the purposes of window confirmation (not for AT_BAT_START sourcing).
-
----
-
-#### CR-29 — String literals `"lineup_highlight"`, `"lineup_full_strip"`, `"lineup_strip_confidence"` scattered across 4 files with no shared constant
-**Files:** [ocr.py](src/sidelinehd_extractor/ocr.py), [events.py](src/sidelinehd_extractor/events.py), [review.py](src/sidelinehd_extractor/review.py), [state.py](src/sidelinehd_extractor/state.py)
-**Pass:** 7
-
-`"lineup_highlight"` is written in `ocr.py` and compared in `events.py` and `review.py`. `"lineup_full_strip"` is written in `ocr.py`. `"lineup_strip_confidence"` is written in `state.py` and read in `events.py` and `review.py`. No shared constant or enum exists. A rename at any one site causes a silent miss — `.get()` returns `None` rather than raising, so the gate silently returns False (blocking at-bats) or the flag silently never fires.
-
-Fix: Define module-level constants in a shared location (e.g., `models.py` or a new `constants.py`): `LINEUP_SOURCE_HIGHLIGHT = "lineup_highlight"`, `LINEUP_SOURCE_FULL_STRIP = "lineup_full_strip"`, `LINEUP_STRIP_CONFIDENCE_KEY = "lineup_strip_confidence"`. Import and use them in all four files.
-
----
-
-#### CR-30 — `lineup-unconfirmed` review flag is dead code for newly processed games
-**File:** [review.py](src/sidelinehd_extractor/review.py) lines 99–103
-**Pass:** 7
-
-After item 36, `_is_plausible_batter_source` hard-blocks any AT_BAT_START event with `batter_number_source="lineup_strip"` and non-highlight confidence. Such events can never reach `_review_flags`, so the `lineup-unconfirmed` (and `lineup-recovered`) flags on lines 101–102 are unreachable for any game processed with the new code. When the highlight chip detection misses a real batter (low contrast, unusual color), the suppression is invisible to the reviewer — the event simply vanishes with no flag.
-
-Fix: Either (a) emit a lightweight AT_BAT_CANDIDATE event type (or add a metadata entry in a debug/diagnostic pass) for full-strip reads that were blocked, so reviewers can see what was suppressed; or (b) acknowledge this as a deliberate design trade-off and remove the dead flag code with a comment explaining why it was removed.
-
----
-
-#### CR-31 — `review.py` inline duplicates the `_lineup_is_highlight_confirmed` logic; a `dict`-based helper would unify both call sites
-**File:** [review.py](src/sidelinehd_extractor/review.py) line 101
-**Pass:** 7
-
-`_lineup_is_highlight_confirmed(state: OverlayState)` takes an `OverlayState` and cannot be called from `_review_flags` (which has `Event` objects). `review.py` therefore duplicates the comparison inline: `event.metadata.get("lineup_strip_confidence") != "lineup_highlight"`. If the key or value is renamed, both the `events.py` helper and the `review.py` inline must be updated independently; the type system does not enforce consistency.
-
-Fix: Extract a `_metadata_is_highlight_confirmed(metadata: dict) -> bool` helper (e.g., in `events.py`) that takes a plain `dict`. `_lineup_is_highlight_confirmed` becomes a one-line wrapper calling it with `state.metadata`, and `_review_flags` calls the same helper with `event.metadata`. This is a small refactor that eliminates the raw string duplication without requiring any type changes.
+_No open items._
 
 ## Resolved Items
+
+#### CR-37 — Manifest recorded `order_validation: True` even when validation was skipped
+**File:** [workflow.py](src/sidelinehd_extractor/workflow.py)
+**Resolved:** Pass 8
+
+Manifest now records `order_validation_requested` and `order_validation_ran` as separate fields. `order_validation_ran` is computed from the actual execution path: True when detect_events_file ran validation (non-auto path with roster), or True when the auto-half path ran validation at line 127. Manifest write is deferred until after the conditional validation block so it accurately reflects what executed. 201 tests pass.
+
+---
+
+#### CR-36 — `_has_named_batter_card_with_count_signal` fired on explicit `0-0` count, bypassing the item 34 pregame gate
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 8
+
+`_has_named_batter_card_with_count_signal` removed entirely. `_game_active_timestamp` now has two activity signal paths only: (1) non-zero count (`balls > 0 or strikes > 0`), (2) batter change via `_has_batter_change_activity_signal`. A named batter card at 0-0 no longer passes the gate. 201 tests pass.
+
+---
+
+#### CR-35 — Missed detection at end of inning N generated false `inferred-missing` events at start of inning N+1
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 8
+
+`validate_batting_order` now tracks `at_seed_half_start` (set True on each HALF_INNING_START, cleared on each AT_BAT_START). Inference is suppressed when `at_seed_half_start` is True — the first detected batter of each half never triggers cross-inning inference, regardless of `forward_skip`. Same-inning gap inference (batters 2+ in the half) is unaffected. 201 tests pass.
+
+---
+
+#### CR-34 — `_player_name_lookup` overwrote event-observed names with roster display names
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 8
+
+Roster loop now guards with `if number not in number_to_name:` — observed event names take priority and roster names fill in only when no observed name exists. Inferred and detected events for the same jersey number now use consistent names. 201 tests pass.
+
+---
+
+#### CR-33 — `_has_batter_change_activity_signal` returned `False` for all non-lineup-strip sources; batter-card-only and old-style-template t=0 streams emitted no first chapter
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 8
+
+`_has_batter_change_activity_signal` now returns `True` for `BATTER_SOURCE_LINEUP_NUMBER` unconditionally (old-style template, already roster-confirmed), and `True` for `BATTER_SOURCE_BATTER_CARD` when `batter_name` looks like a player name (`_looks_like_player_name`). Full-strip lineup_strip remains untrusted (requires highlight confirmation). Old-style and batter-card-only t=0 streams can now trigger activity via batter change, restoring first-chapter emission without regressing the item 34 pregame fix. 201 tests pass.
+
+---
+
+#### CR-32 — `_infer_seed_info` alphabetical sort picked `"bottom"` before `"top"` when both halves qualified
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 8
+
+`_half_inning_sort_key(key)` helper added: maps TOP to index 0, BOTTOM to index 1. `_infer_seed_info` now passes this as the sort key, ensuring TOP always precedes BOTTOM within the same inning when both halves qualify. 201 tests pass.
+
+---
+
+#### CR-31 — `review.py` inline duplicated the `_lineup_is_highlight_confirmed` logic
+**File:** [review.py](src/sidelinehd_extractor/review.py), [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 7
+
+`_metadata_is_highlight_confirmed(metadata: dict)` helper added to `events.py`; `_lineup_is_highlight_confirmed` now delegates to it. Because CR-30 removed the dead review-side confidence comparison, `review.py` no longer has any duplication to resolve. 183 tests pass.
+
+---
+
+#### CR-30 — `lineup-unconfirmed` review flag was dead code for newly processed games
+**File:** [review.py](src/sidelinehd_extractor/review.py)
+**Resolved:** Pass 7
+
+Chose fix option (b): removed the dead `lineup-unconfirmed` flag path and added a comment explaining that non-highlight lineup-strip reads are blocked before event emission. `lineup-recovered` flag remains for accepted highlight-confirmed lineup-strip at-bats. 183 tests pass.
+
+---
+
+#### CR-29 — String literals for lineup source/confidence scattered across 4 files with no shared constant
+**Files:** [constants.py](src/sidelinehd_extractor/constants.py), [ocr.py](src/sidelinehd_extractor/ocr.py), [events.py](src/sidelinehd_extractor/events.py), [review.py](src/sidelinehd_extractor/review.py), [state.py](src/sidelinehd_extractor/state.py)
+**Resolved:** Pass 7
+
+New `constants.py` defines `LINEUP_SOURCE_HIGHLIGHT`, `LINEUP_SOURCE_FULL_STRIP`, `LINEUP_STRIP_CONFIDENCE_KEY`, `BATTER_SOURCE_BATTER_CARD`, `BATTER_SOURCE_LINEUP_STRIP`, and `BATTER_SOURCE_LINEUP_NUMBER`. All four consumer files import and use these constants. 183 tests pass.
+
+---
+
+#### CR-28 — Fused-digit full-strip window states dropped below `min_batter_observations`, silently suppressing real at-bats
+**File:** [events.py](src/sidelinehd_extractor/events.py) — `_confirmed_batter_identity`
+**Resolved:** Pass 7
+
+`_confirmed_batter_identity()` now resolves unambiguous fused digit runs from window states inline (via `_resolve_lineup_digit_run`) for confirmation counting only. Full-strip window states with e.g. `batter_number="265"` that unambiguously resolve to a rostered `"26"` now count toward the observation minimum. Regression test covers the exact failure scenario: highlight trigger plus full-strip `"265"` window resolving to `#26`. 183 tests pass.
+
+---
+
+#### CR-27 — `_preferred_lineup_number_for_state` over-broadly blocked full-strip lineup from correcting wrong batter-card numbers
+**File:** [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 7
+
+`_preferred_lineup_number_for_state()` restored to use `_active_lineup_number_for_state()` (not `_highlight_lineup_number_for_state`). Full-strip reads can again correct batter-card misreads; the highlight gate remains exclusively in `_is_plausible_batter_source()` governing AT_BAT_START emission. 183 tests pass.
+
+---
+
+#### CR-26 — `batter_number_source` hardcoded to `"lineup_strip"` when number came from old `batter_number` OCR field
+**File:** [state.py](src/sidelinehd_extractor/state.py)
+**Resolved:** Pass 7
+
+`state_from_samples()` now uses a proper if/elif cascade: `batter_number_source` is `"batter_card"` when the card OCR contributed, `"lineup_strip"` when `lineup_strip_number` contributed, and `"lineup_number"` when the old `batter_number` field contributed. The highlight-confidence gate in `_is_plausible_batter_source` only applies to the `"lineup_strip"` source. Old-style templates without a `lineup_strip` field continue to emit at-bats. 183 tests pass.
+
+---
 
 #### CR-25 — Review report lacks flags for unrostered card numbers and garbled card names
 **File:** [review.py](src/sidelinehd_extractor/review.py)

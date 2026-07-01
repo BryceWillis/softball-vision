@@ -393,6 +393,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+        order_validation=not args.no_order_validation,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -456,6 +457,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+        order_validation=not args.no_order_validation,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -518,6 +520,7 @@ def _cmd_detect_events(args: argparse.Namespace) -> int:
         batting_half=_parse_batting_half(args.batting_half),
         min_at_bat_spacing_seconds=args.min_at_bat_spacing,
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+        order_validation=not args.no_order_validation,
     )
     print(_to_json(result))
     return 0
@@ -675,6 +678,11 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         dest="min_at_bat_spacing_roster_confirmed",
         metavar="SECONDS",
         help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
+    )
+    parser.add_argument(
+        "--no-order-validation",
+        action="store_true",
+        help="Skip batting-order continuity validation after event detection.",
     )
 
 
@@ -915,6 +923,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="min_at_bat_spacing_roster_confirmed",
         metavar="SECONDS",
         help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
+    )
+    detect_events.add_argument(
+        "--no-order-validation",
+        action="store_true",
+        help="Skip batting-order continuity validation after event detection.",
     )
     detect_events.set_defaults(func=_cmd_detect_events)
 

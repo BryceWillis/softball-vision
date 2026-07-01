@@ -58,6 +58,7 @@ class CLITests(unittest.TestCase):
                 "60",
                 "--min-at-bat-spacing-roster-confirmed",
                 "25",
+                "--no-order-validation",
             ]
         )
         run_youtube = parser.parse_args(
@@ -99,6 +100,7 @@ class CLITests(unittest.TestCase):
                 "60",
                 "--min-at-bat-spacing-roster-confirmed",
                 "25",
+                "--no-order-validation",
             ]
         )
 
@@ -124,6 +126,7 @@ class CLITests(unittest.TestCase):
             "batting_half",
             "min_at_bat_spacing",
             "min_at_bat_spacing_roster_confirmed",
+            "no_order_validation",
         ]
         for attribute in shared_attributes:
             with self.subTest(attribute=attribute):
@@ -141,6 +144,9 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_game.batting_half, "auto")
         self.assertEqual(run_youtube.batting_half, "auto")
         self.assertEqual(detect_events.batting_half, "both")
+        self.assertFalse(run_game.no_order_validation)
+        self.assertFalse(run_youtube.no_order_validation)
+        self.assertFalse(detect_events.no_order_validation)
 
     def test_default_run_fields_include_lineup_batter_number(self):
         parser = build_parser()

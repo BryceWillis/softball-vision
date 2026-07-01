@@ -11,6 +11,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
+from sidelinehd_extractor.constants import LINEUP_SOURCE_FULL_STRIP, LINEUP_SOURCE_HIGHLIGHT
+
 
 @dataclass(frozen=True)
 class OCRBackendResult:
@@ -156,13 +158,13 @@ def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
                 field_name,
             )
             if highlighted_result.normalized_text:
-                return replace(highlighted_result, source_detail="lineup_highlight")
+                return replace(highlighted_result, source_detail=LINEUP_SOURCE_HIGHLIGHT)
 
     processed = preprocess_for_ocr(image, field_name)
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
     result = _tesseract_ocr_preprocessed_image(processed, config, field_name)
     if field_name == "lineup_strip":
-        return replace(result, source_detail="lineup_full_strip")
+        return replace(result, source_detail=LINEUP_SOURCE_FULL_STRIP)
     return result
 
 

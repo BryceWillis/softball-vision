@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+from sidelinehd_extractor.constants import BATTER_SOURCE_BATTER_CARD, BATTER_SOURCE_LINEUP_STRIP
 from sidelinehd_extractor.exports import format_timestamp
 from sidelinehd_extractor.models import Event, EventType, Roster
 
@@ -96,11 +97,10 @@ def _review_flags(
         if event.event_type == EventType.AT_BAT_START:
             if not event.player_name or not event.player_number:
                 flags_by_index[index].append("missing-player")
-            if event.metadata.get("batter_number_source") == "lineup_strip":
+            if event.metadata.get("batter_number_source") == BATTER_SOURCE_LINEUP_STRIP:
+                # Non-highlight lineup-strip reads are blocked before event emission;
+                # this flag therefore only marks accepted lineup-recovered at-bats.
                 flags_by_index[index].append("lineup-recovered")
-                if event.metadata.get("lineup_strip_confidence") != "lineup_highlight":
-                    confidence = event.metadata.get("lineup_strip_confidence") or "unknown"
-                    flags_by_index[index].append(f"lineup-unconfirmed={confidence}")
             disagreement = event.metadata.get("batter_number_disagreement")
             if disagreement:
                 flags_by_index[index].append(f"card-vs-lineup={disagreement}")
@@ -110,7 +110,7 @@ def _review_flags(
             ocr_player_number = event.metadata.get("ocr_player_number")
             if (
                 roster is not None
-                and event.metadata.get("batter_number_source") == "batter_card"
+                and event.metadata.get("batter_number_source") == BATTER_SOURCE_BATTER_CARD
                 and ocr_player_number
                 and not roster.name_for_number(str(ocr_player_number))
             ):
@@ -129,6 +129,8 @@ def _review_flags(
                 and not _has_roster_number_match(event)
             ):
                 flags_by_index[index].append(f"ocr-number={ocr_player_number}")
+            for flag in event.metadata.get("order_flags") or []:
+                flags_by_index[index].append(str(flag))
             if previous_at_bat is not None:
                 delta = event.timestamp_seconds - previous_at_bat.timestamp_seconds
                 if delta < options.min_at_bat_gap_seconds:

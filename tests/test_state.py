@@ -107,7 +107,7 @@ class StateParsingTests(unittest.TestCase):
         )
 
         self.assertEqual(state.batter_number, "26")
-        self.assertEqual(state.metadata["batter_number_source"], "lineup_strip")
+        self.assertEqual(state.metadata["batter_number_source"], "lineup_number")
 
     def test_state_from_samples_prefers_active_lineup_strip_over_static_batter_number(self):
         state = state_from_samples(

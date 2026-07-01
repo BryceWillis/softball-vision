@@ -23,8 +23,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **34** — True Game-Start Detection | Ready to implement | Smallest change (one function in `events.py`); fixes visible 0:00 chapter defect on every pregame stream. Fully designed. |
-| 2 | **32** — Batting-Order Continuity Validator | Ready to implement | Addresses missing-batter issues confirmed on Victor Vipers run. Fully designed. Implement after 34 so the chapter timestamps it relies on are correct. |
+| 1 | **34** — True Game-Start Detection | Ready to commit | CR-33 and CR-36 resolved (Pass 8). All tests pass (201). |
+| 2 | **32** — Batting-Order Continuity Validator | Ready to commit | CR-32, CR-34, CR-35, CR-37 resolved (Pass 8). All tests pass (201). |
 | 3 | **35** — Final Scorebug Marker | Needs design | Architect must write full design before Codex starts. Ask Claude when 32 is done. |
 | 4 | **29** — Score at Inning Transitions | Ready to implement | Adds score context to chapter labels (`Top 3 (2-1)`). Self-contained, no dependencies on 32/34/35. |
 | 5 | **28** — Project Config Defaults | Ready to implement | Reduces per-run friction (`roster` and `template` set once). Self-contained. |
@@ -1677,7 +1677,23 @@ Acceptance criteria:
 ### 32. Batting-Order Continuity Validator
 
 Source: Product backlog (CR-24 observation)
-Status: Ready to implement
+Status: Ready for review
+
+Implementation note: `infer_batting_cycle()` and `validate_batting_order()` are
+implemented as a post-detection pass. The pass infers the first confirmed batting
+cycle, synthesizes flagged `inferred-missing` events for 1-2 batter gaps within that
+cycle, and flags `possible-substitute` / `out-of-order-candidate` without suppressing
+any original OCR-detected events. `detect-events`, `run-game`, and `run-youtube` run
+the pass by default when a roster is present; `--no-order-validation` disables it.
+For `--batting-half auto`, validation runs after half inference/filtering so the
+opponent half cannot seed the cycle. Review output and review reports now pass through
+`order_flags`.
+
+2026-07-01 Victor Vipers rerun note: the pass correctly surfaces the second-inning
+lineup-substitution area as review work (`possible-substitute`, `out-of-order-candidate`,
+close-at-bat flags). Because `#24` was a real substitution inserted after `#4`, the
+validator does not suppress or rewrite those at-bats; it leaves the paste output stable
+and makes the questionable area visible for human review.
 
 Once a likely batting order is established from confirmed at-bats (e.g. `26 → 2 → 13 → 5 → 4 → 24 → 15 → 3`), the validator has two jobs:
 
@@ -2097,7 +2113,22 @@ Acceptance criteria:
 ### 34. True Game-Start Detection After Pregame Team-Side Changes
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready to implement
+Status: Ready for review
+
+Implementation note: first-half-inning confirmation now uses a window-based game-active
+signal when the stream starts at zero. A stable pregame scorebug no longer qualifies on
+a plausible batter number alone. The detector now waits for one of: a parsed non-zero
+count, a named batter card with a parsed count, or a trusted highlighted-lineup batter
+change. Subsequent half-inning transitions and non-zero-start clips keep the old
+confirmation behavior. Against the saved `9AaT4645z6s` states, chapters now begin with
+`0:00 Pregame` and `6:50 Top 1` instead of `0:00 Top 1`.
+
+Follow-up from the 2026-07-01 `9AaT4645z6s` rerun: restoring the legacy
+`lineup_number` source for CR-26 briefly allowed noisy pregame digit changes to qualify
+as batter-change activity, producing `0:55 Top 1`. The game-start gate now treats only
+highlight-confirmed lineup-strip changes as trusted batter-change activity. Legacy
+`lineup_number` remains valid for at-bat detection but no longer starts the first
+chapter during pregame.
 
 The Victor Vipers game exposed an assumption around pregame setup: the scoring app initially had Smash It Sports configured as away and Victor Vipers as home, but after the coin toss the teams were swapped before the real game state began. The exported chapters currently start `Top 1` at `0:00`, even though the visible in-game overlay does not show the real first-inning game state until about `6:34`.
 
@@ -2548,20 +2579,21 @@ A full-strip read that OCRs as a fused `"265"` is not safe to resolve — we don
 
 ---
 
-#### Layer 6 — `review.py`: add `lineup-unconfirmed` flag
+#### Layer 6 — `review.py`: flag accepted lineup-recovered events
+
+Accepted at-bats that came from a highlight-confirmed lineup strip should be
+visible in review output:
 
 ```python
-# lineup-unconfirmed
-if (
-    event.metadata.get("batter_number_source") == "lineup_strip"
-    and event.metadata.get("lineup_strip_confidence") != "lineup_highlight"
-):
-    flags_by_index[index].append(
-        f"lineup-unconfirmed={event.metadata.get('lineup_strip_confidence') or 'unknown'}"
-    )
+if event.metadata.get("batter_number_source") == "lineup_strip":
+    flags_by_index[index].append("lineup-recovered")
 ```
 
-This fires when a `lineup_strip` event slipped through despite non-highlight confidence (e.g., no-roster run, or older data where `lineup_strip_confidence` is absent). It makes these visible for correction.
+The earlier `lineup-unconfirmed` idea was removed during review. Non-highlight
+lineup-strip reads are blocked before event emission, so they cannot appear in
+event-review output without adding a separate candidate/diagnostic event stream.
+That diagnostic stream may be useful later, but it is intentionally outside item
+36's false-positive suppression fix.
 
 ---
 
@@ -2585,8 +2617,8 @@ Existing `samples.jsonl` files produced before this change have no `source_detai
 - A state with `lineup_strip_confidence="lineup_highlight"` and a rostered number DOES emit an `AT_BAT_START` (regression: item 33 FLX behavior preserved).
 - A state with `lineup_strip_confidence="lineup_highlight"` and a 3-digit fused string has the digit run resolved via `_resolve_lineup_digit_run()`.
 - A state with `lineup_strip_confidence="lineup_full_strip"` and a 3-digit fused string is NOT digit-run resolved (the `len > 2` state will be rejected by `_is_plausible_batter_state()` as usual).
-- `lineup-unconfirmed` review flag appears on events where `batter_number_source == "lineup_strip"` and confidence is not `"lineup_highlight"`.
-- `lineup-unconfirmed` does NOT appear on events whose source is `"batter_card"` or `None`.
+- `lineup-recovered` review flag appears on accepted events where `batter_number_source == "lineup_strip"`.
+- `lineup-unconfirmed` is not emitted; non-highlight lineup-strip reads are intentionally blocked before event emission.
 - On `9AaT4645z6s`, the `19:20 Riley S. (#15)` event is suppressed (it was a full-strip read; #15 was visible in the strip but not highlighted).
 - On the FLX regression run, the confirmed 2nd-inning batter sequence is unchanged.
 
@@ -2600,6 +2632,7 @@ Existing `samples.jsonl` files produced before this change have no `source_detai
 - `test_detect_events_emits_at_bat_from_lineup_highlight_without_roster`
 - `test_detect_events_suppresses_full_strip_event_without_roster` (no roster → still suppressed)
 - `test_enrich_states_digit_runs_skips_full_strip_states`
+- `test_render_event_review_flags_lineup_recovered`
 - `test_enrich_states_digit_runs_resolves_highlight_confirmed_states`
 - `test_lineup_unconfirmed_flag_appears_for_full_strip_event`
 - `test_lineup_unconfirmed_flag_not_appears_for_batter_card_event`

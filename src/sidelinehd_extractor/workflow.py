@@ -14,6 +14,7 @@ from sidelinehd_extractor.events import (
     filter_at_bats_to_half,
     infer_batting_half,
     load_events,
+    validate_batting_order,
 )
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.models import HalfInning, OverlayTemplate, Roster
@@ -77,6 +78,7 @@ def run_game(
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
 ) -> RunGameResult:
     """Process video, detect events, and write both YouTube text exports."""
@@ -105,17 +107,9 @@ def run_game(
         batting_half=None if auto_detect_batting_half else batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+        order_validation=order_validation and not auto_detect_batting_half,
     )
-    _update_manifest_detection_config(
-        process_result.manifest_path,
-        {
-            "min_at_bat_spacing_seconds": min_at_bat_spacing_seconds,
-            "min_at_bat_spacing_roster_confirmed_seconds": (
-                min_at_bat_spacing_roster_confirmed_seconds
-            ),
-            "batting_half": "auto" if auto_detect_batting_half else _half_value(batting_half),
-        },
-    )
+    order_validation_ran = bool(roster is not None and order_validation and not auto_detect_batting_half)
 
     _stage(stage_progress, "export")
     events = load_events(event_result.output_path)
@@ -125,7 +119,26 @@ def run_game(
         if batting_half_inference_progress is not None:
             batting_half_inference_progress(batting_half_inference)
         events = filter_at_bats_to_half(events, batting_half_inference.inferred_half)
+        if (
+            roster is not None
+            and order_validation
+            and batting_half_inference.inferred_half is not None
+        ):
+            events = validate_batting_order(events, roster=roster)
+            order_validation_ran = True
         write_jsonl(event_result.output_path, events)
+    _update_manifest_detection_config(
+        process_result.manifest_path,
+        {
+            "min_at_bat_spacing_seconds": min_at_bat_spacing_seconds,
+            "min_at_bat_spacing_roster_confirmed_seconds": (
+                min_at_bat_spacing_roster_confirmed_seconds
+            ),
+            "batting_half": "auto" if auto_detect_batting_half else _half_value(batting_half),
+            "order_validation_requested": order_validation,
+            "order_validation_ran": order_validation_ran,
+        },
+    )
     event_count = len(events)
     if corrections is not None:
         events = apply_event_corrections(events, corrections)
@@ -186,6 +199,7 @@ def run_youtube_game(
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     merge_output_format: str = "mp4",
@@ -231,6 +245,7 @@ def run_youtube_game(
         auto_detect_batting_half=auto_detect_batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+        order_validation=order_validation,
         batting_half_inference_progress=batting_half_inference_progress,
     )
     return RunYoutubeGameResult(download=download, run=run)
