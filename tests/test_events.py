@@ -4,6 +4,7 @@ from pathlib import Path
 
 from sidelinehd_extractor.events import (
     _at_bat_spacing_for_roster_match,
+    _detect_game_final,
     _enrich_states_digit_runs,
     _game_active_timestamp,
     _lineup_is_highlight_confirmed,
@@ -107,6 +108,22 @@ class EventDetectionTests(unittest.TestCase):
         )
         self.assertEqual(events[0].label, "Top 1")
         self.assertEqual(events[1].label, "Maya R. (#22)")
+
+    def test_detect_events_includes_stable_final_marker(self):
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP),
+                OverlayState(605, inning=1, half=HalfInning.TOP),
+                OverlayState(900, metadata={"game_status": "final"}),
+                OverlayState(905, metadata={"game_status": "final"}),
+                OverlayState(910, metadata={"game_status": "final"}),
+            ],
+            min_game_final_observations=3,
+        )
+
+        self.assertEqual(events[-1].event_type, EventType.GAME_FINAL)
+        self.assertEqual(events[-1].timestamp_seconds, 900)
+        self.assertEqual(events[-1].label, "Final")
 
     def test_detect_events_uses_roster_name(self):
         roster = Roster(
@@ -227,6 +244,51 @@ class EventDetectionTests(unittest.TestCase):
 
     def test_lineup_is_highlight_confirmed_returns_false_for_none(self):
         self.assertFalse(_lineup_is_highlight_confirmed(OverlayState(600)))
+
+    def test_detect_game_final_uses_first_timestamp_of_stable_run(self):
+        event = _detect_game_final(
+            [
+                OverlayState(900, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(905, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(910, away_score=4, home_score=3, metadata={"game_status": "final"}),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.event_type, EventType.GAME_FINAL)
+        self.assertEqual(event.timestamp_seconds, 900)
+        self.assertEqual(event.metadata["away_score"], 4)
+        self.assertEqual(event.metadata["home_score"], 3)
+
+    def test_detect_game_final_requires_stable_run(self):
+        event = _detect_game_final(
+            [
+                OverlayState(900, metadata={"game_status": "final"}),
+                OverlayState(905, metadata={"game_status": "final"}),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNone(event)
+
+    def test_detect_game_final_returns_none_without_final_states(self):
+        self.assertIsNone(_detect_game_final([OverlayState(900), OverlayState(905)]))
+
+    def test_detect_game_final_resets_after_gap(self):
+        event = _detect_game_final(
+            [
+                OverlayState(900, metadata={"game_status": "final"}),
+                OverlayState(905),
+                OverlayState(910, metadata={"game_status": "final"}),
+                OverlayState(915, metadata={"game_status": "final"}),
+                OverlayState(920, metadata={"game_status": "final"}),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.timestamp_seconds, 910)
 
     def test_window_has_game_active_signal_returns_false_for_pregame_zero_count_stable_batter(
         self,
@@ -1268,6 +1330,22 @@ class EventDetectionTests(unittest.TestCase):
 
             self.assertEqual(result.event_count, 2)
             self.assertTrue(result.output_path.exists())
+
+    def test_detect_events_file_forwards_min_game_final_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            states_path = Path(directory) / "states.jsonl"
+            write_jsonl(
+                states_path,
+                [
+                    OverlayState(900, metadata={"game_status": "final"}),
+                    OverlayState(905, metadata={"game_status": "final"}),
+                ],
+            )
+
+            result = detect_events_file(states_path, min_game_final_observations=2)
+
+            self.assertEqual(result.event_count, 1)
+            self.assertIn('"event_type": "game_final"', result.output_path.read_text())
 
     def test_export_text_from_detected_events(self):
         events = detect_events(

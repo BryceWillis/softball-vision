@@ -6,6 +6,7 @@ from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
     OCRBackendResult,
     OCRFieldConfig,
+    FIELD_CONFIGS,
     _extract_highlighted_lineup_crop,
     _tesseract_install_hint,
     _tesseract_command,
@@ -25,6 +26,9 @@ class OCRTests(unittest.TestCase):
 
     def test_normalize_number_fields_extracts_jersey_number(self):
         self.assertEqual(normalize_ocr_text(" #22\n", "batter_card_number"), "#22")
+
+    def test_game_status_field_config_is_optional(self):
+        self.assertTrue(FIELD_CONFIGS["game_status"].optional)
 
     def test_create_none_backend(self):
         backend = create_ocr_backend("none")

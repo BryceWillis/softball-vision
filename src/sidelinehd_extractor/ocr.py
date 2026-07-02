@@ -32,6 +32,7 @@ class OCRFieldConfig:
     psm: int = 7
     whitelist: Optional[str] = None
     scale: int = 4
+    optional: bool = False
 
 
 OCRCallable = Callable[[object, str], OCRBackendResult]
@@ -48,6 +49,7 @@ FIELD_CONFIGS: Dict[str, OCRFieldConfig] = {
     "count": OCRFieldConfig(psm=7, whitelist="0123456789- ", scale=6),
     "left_score": OCRFieldConfig(psm=10, whitelist="0123456789", scale=6),
     "right_score": OCRFieldConfig(psm=10, whitelist="0123456789", scale=6),
+    "game_status": OCRFieldConfig(psm=7, scale=4, optional=True),
     "batter_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
     "on_deck_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
     "batter_card_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),

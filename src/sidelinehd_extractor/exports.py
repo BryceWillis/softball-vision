@@ -46,7 +46,11 @@ def export_youtube_chapters(
     lines = []
     first_chapter_seconds = None
     for event in events:
-        if event.event_type in {EventType.INNING_START, EventType.HALF_INNING_START}:
+        if event.event_type in {
+            EventType.INNING_START,
+            EventType.HALF_INNING_START,
+            EventType.GAME_FINAL,
+        }:
             if first_chapter_seconds is None:
                 first_chapter_seconds = event.timestamp_seconds
             lines.append(
@@ -93,7 +97,10 @@ def format_inning_header(inning: Optional[int]) -> str:
 
 def _chapter_label(event: Event, include_score: bool = True) -> str:
     label = event.label
-    if include_score and event.event_type == EventType.HALF_INNING_START:
+    if include_score and event.event_type in {
+        EventType.HALF_INNING_START,
+        EventType.GAME_FINAL,
+    }:
         away_score = event.metadata.get("away_score")
         home_score = event.metadata.get("home_score")
         if away_score is not None and home_score is not None:

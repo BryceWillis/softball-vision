@@ -123,6 +123,7 @@ def detect_events(
     min_batter_observations: int = 2,
     half_inning_confirmation_window: int = 12,
     min_half_inning_observations: int = 4,
+    min_game_final_observations: int = 3,
 ) -> List[Event]:
     """Detect half-inning and at-bat starts from parsed overlay states."""
 
@@ -253,7 +254,11 @@ def detect_events(
             if player_name and effective_batter_number:
                 name_to_number[_normalize_name(player_name)] = effective_batter_number
 
-    return events
+    final_event = _detect_game_final(ordered_states, min_game_final_observations)
+    if final_event is not None:
+        events.append(final_event)
+
+    return sorted(events, key=lambda item: item.timestamp_seconds)
 
 
 def detect_events_file(
@@ -263,6 +268,7 @@ def detect_events_file(
     batting_half: Optional[HalfInning] = None,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    min_game_final_observations: int = 3,
     order_validation: bool = True,
 ) -> EventDetectionResult:
     """Detect events from a states JSONL file and write events JSONL."""
@@ -275,6 +281,7 @@ def detect_events_file(
         batting_half=batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+        min_game_final_observations=min_game_final_observations,
     )
     if roster is not None and order_validation:
         events = validate_batting_order(events, roster=roster)
@@ -577,6 +584,38 @@ def _score_snapshot(
         if state.away_score is not None and state.home_score is not None:
             return state.away_score, state.home_score
     return None, None
+
+
+def _detect_game_final(
+    states: List[OverlayState],
+    min_observations: int = 3,
+) -> Optional[Event]:
+    """Return a final marker after a stable run of FINAL scorebug reads."""
+
+    run_start_index = None
+    run_length = 0
+    for index, state in enumerate(states):
+        if state.metadata.get("game_status") == "final":
+            if run_start_index is None:
+                run_start_index = index
+            run_length += 1
+            if run_length >= min_observations:
+                run_start = states[run_start_index]
+                away_score, home_score = _score_snapshot(states, run_start_index, run_length)
+                return Event(
+                    event_type=EventType.GAME_FINAL,
+                    timestamp_seconds=run_start.timestamp_seconds,
+                    label="Final",
+                    metadata={
+                        "source": "game_status",
+                        "away_score": away_score,
+                        "home_score": home_score,
+                    },
+                )
+        else:
+            run_start_index = None
+            run_length = 0
+    return None
 
 
 def _is_valid_half_inning_progression(

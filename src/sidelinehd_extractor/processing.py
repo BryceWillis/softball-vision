@@ -12,7 +12,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 from sidelinehd_extractor.config import default_overlay_template
 from sidelinehd_extractor.crops import crop_frame, save_crop
 from sidelinehd_extractor.models import OCRSample, OverlayTemplate, Roster
-from sidelinehd_extractor.ocr import OCRCallable, no_ocr
+from sidelinehd_extractor.ocr import FIELD_CONFIGS, OCRCallable, no_ocr
 from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.video import probe_video, read_frames_at
 
@@ -69,10 +69,16 @@ def select_template_regions(
         return dict(template.regions)
 
     missing = [field for field in fields if field not in template.regions]
-    if missing:
-        raise ValueError(f"template does not include field(s): {', '.join(missing)}")
+    missing_required = [field for field in missing if not _is_optional_template_field(field)]
+    if missing_required:
+        raise ValueError(f"template does not include field(s): {', '.join(missing_required)}")
 
-    return {field: template.regions[field] for field in fields}
+    return {field: template.regions[field] for field in fields if field in template.regions}
+
+
+def _is_optional_template_field(field_name: str) -> bool:
+    config = FIELD_CONFIGS.get(field_name)
+    return bool(config and config.optional)
 
 
 def create_run_dir(output_dir: Path, video_path: Path, created_at: Optional[datetime] = None) -> Path:

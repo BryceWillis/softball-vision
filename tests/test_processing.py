@@ -44,6 +44,16 @@ class ProcessingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_template_regions(template, ["missing"])
 
+    def test_select_template_regions_skips_missing_optional_game_status(self):
+        template = OverlayTemplate(
+            name="test",
+            regions={"inning": RegionFraction(0.1, 0, 0.1, 0.1)},
+        )
+
+        selected = select_template_regions(template, ["inning", "game_status"])
+
+        self.assertEqual(list(selected.keys()), ["inning"])
+
     def test_progress_callback_shape_for_process_video(self):
         # The callback contract is intentionally plain so the CLI can print status
         # without coupling process_video to terminal output.

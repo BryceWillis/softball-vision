@@ -108,6 +108,53 @@ class FormatTimestampTests(unittest.TestCase):
 
         self.assertEqual(text, "0:00 Pregame\n10:00 Top 1")
 
+    def test_export_youtube_chapters_includes_final_marker_with_score(self):
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 0, "Top 1"),
+                Event(
+                    EventType.GAME_FINAL,
+                    3600,
+                    "Final",
+                    metadata={"away_score": 8, "home_score": 6},
+                ),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Top 1\n1:00:00 Final (8-6)")
+
+    def test_export_youtube_chapters_can_omit_final_score(self):
+        text = export_youtube_chapters(
+            [
+                Event(
+                    EventType.GAME_FINAL,
+                    3600,
+                    "Final",
+                    metadata={"away_score": 8, "home_score": 6},
+                )
+            ],
+            include_score=False,
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n1:00:00 Final")
+
+    def test_export_youtube_chapters_omits_incomplete_final_score(self):
+        text = export_youtube_chapters(
+            [
+                Event(
+                    EventType.GAME_FINAL,
+                    3600,
+                    "Final",
+                    metadata={"away_score": None, "home_score": None},
+                )
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n1:00:00 Final")
+
     def test_export_at_bat_comment_groups_by_inning(self):
         text = export_at_bat_comment([
             Event(EventType.HALF_INNING_START, 590, "Top 1", inning=1),

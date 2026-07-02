@@ -96,6 +96,7 @@ class WorkflowTests(unittest.TestCase):
                 batting_half=None,
                 min_at_bat_spacing_seconds=45.0,
                 min_at_bat_spacing_roster_confirmed_seconds=20.0,
+                min_game_final_observations=3,
                 order_validation=True,
             )
             self.assertEqual(stages, ["process", "parse-states", "detect-events", "export"])
@@ -110,6 +111,10 @@ class WorkflowTests(unittest.TestCase):
             )
             self.assertIn(
                 '"min_at_bat_spacing_roster_confirmed_seconds": 20.0',
+                process_result.manifest_path.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                '"min_game_final_observations": 3',
                 process_result.manifest_path.read_text(encoding="utf-8"),
             )
             self.assertIn(
@@ -162,6 +167,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["video_path"], Path("videos/game.mp4"))
         self.assertEqual(run.call_args.kwargs["output_prefix"], Path("scratch/full"))
         self.assertTrue(run.call_args.kwargs["compute_video_hash"])
+        self.assertEqual(run.call_args.kwargs["min_game_final_observations"], 3)
         self.assertEqual(result.download, download)
         self.assertEqual(result.run, run_result)
         self.assertEqual(stages, ["download"])

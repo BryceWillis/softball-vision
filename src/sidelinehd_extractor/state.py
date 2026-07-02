@@ -94,6 +94,16 @@ def parse_score(value: Optional[str]) -> Optional[int]:
     return int(match.group(0))
 
 
+def _normalize_game_status(value: Optional[str]) -> Optional[str]:
+    """Normalize recognized scorebug status labels."""
+
+    if not value:
+        return None
+    if "final" in value.lower():
+        return "final"
+    return None
+
+
 def parse_inning(value: Optional[str]) -> tuple:
     """Parse noisy inning OCR into inning number and a weak half-inning guess."""
 
@@ -145,6 +155,7 @@ def state_from_samples(
     inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
     away_score = parse_score(_sample_text(samples_by_field, "left_score"))
     home_score = parse_score(_sample_text(samples_by_field, "right_score"))
+    game_status = _normalize_game_status(_sample_text(samples_by_field, "game_status"))
     batter_card_text = _sample_text(samples_by_field, "batter_card_number")
     lineup_strip_sample = samples_by_field.get("lineup_strip")
     lineup_strip_confidence = (
@@ -191,6 +202,7 @@ def state_from_samples(
             "batter_number_disagreement": batter_number_disagreement,
             "lineup_strip_number": lineup_strip_number,
             "lineup_batter_number": lineup_number,
+            "game_status": game_status,
             LINEUP_STRIP_CONFIDENCE_KEY: lineup_strip_confidence,
             "fields": {
                 field_name: sample.normalized_text or sample.raw_text

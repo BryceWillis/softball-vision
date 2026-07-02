@@ -6,6 +6,7 @@ from pathlib import Path
 from sidelinehd_extractor.models import HalfInning, OCRSample, OverlayState
 from sidelinehd_extractor.processing import write_jsonl
 from sidelinehd_extractor.state import (
+    _normalize_game_status,
     load_ocr_samples,
     parse_count,
     parse_inning,
@@ -34,6 +35,12 @@ class StateParsingTests(unittest.TestCase):
         self.assertIsNone(parse_score(""))
         self.assertIsNone(parse_score(None))
         self.assertIsNone(parse_score("noise"))
+
+    def test_normalize_game_status_detects_final(self):
+        self.assertEqual(_normalize_game_status("FINAL"), "final")
+        self.assertEqual(_normalize_game_status("Game Final"), "final")
+        self.assertIsNone(_normalize_game_status("in play"))
+        self.assertIsNone(_normalize_game_status(None))
 
     def test_parse_inning_handles_noisy_top_first(self):
         self.assertEqual(parse_inning("o1"), (1, HalfInning.TOP))
@@ -118,6 +125,21 @@ class StateParsingTests(unittest.TestCase):
 
         self.assertEqual(state.away_score, 2)
         self.assertEqual(state.home_score, 1)
+
+    def test_state_from_samples_stores_game_status(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "game_status": OCRSample(
+                    600.0,
+                    "game_status",
+                    "FINAL",
+                    normalized_text="FINAL",
+                ),
+            },
+        )
+
+        self.assertEqual(state.metadata["game_status"], "final")
 
     def test_state_from_samples_falls_back_to_lineup_batter_number(self):
         state = state_from_samples(

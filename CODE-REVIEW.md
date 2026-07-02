@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-01
-**Review passes:** 10 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved)
+**Review passes:** 11 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -26,6 +26,22 @@ _No items ready for review._
 _No open items._
 
 ## Resolved Items
+
+#### CR-41 — `OPTIONAL_TEMPLATE_FIELDS` in `processing.py` splits field optionality from field definitions in `ocr.py`
+**File:** [processing.py](src/sidelinehd_extractor/processing.py), [ocr.py](src/sidelinehd_extractor/ocr.py)
+**Resolved:** Pass 11
+
+`optional: bool = False` added to `OCRFieldConfig`; `FIELD_CONFIGS["game_status"]` now carries `optional=True`, co-locating optionality with the field's OCR settings. `OPTIONAL_TEMPLATE_FIELDS` removed entirely (verified no dangling references in src/ or tests/). `select_template_regions` now derives optionality via the new `_is_optional_template_field()` helper, which reads `FIELD_CONFIGS[field].optional`. A future optional field is now a single-location change in `ocr.py`. Tests `test_game_status_field_config_is_optional` and `test_select_template_regions_skips_missing_optional_game_status` cover the config flag and the missing-optional selection path. 236 tests pass.
+
+---
+
+#### CR-40 — `detect_events_file` never forwarded `min_game_final_observations`; parameter was dead at CLI and workflow layer
+**File:** [events.py](src/sidelinehd_extractor/events.py), [workflow.py](src/sidelinehd_extractor/workflow.py), [cli.py](src/sidelinehd_extractor/cli.py)
+**Resolved:** Pass 11
+
+`min_game_final_observations` added to `detect_events_file()` and forwarded to `detect_events()`; added to `run_game()` and `run_youtube_game()` in `workflow.py`, forwarded through the detection call, and recorded in the run manifest detection config. CLI flag `--min-game-final-observations` added to `run-game`, `run-youtube` (via `_add_run_processing_arguments`), and `detect-events`, and threaded through `_cmd_run_game`, `_cmd_run_youtube`, and `_cmd_detect_events`. Regression test `test_detect_events_file_forwards_min_game_final_observations` proves the fix: it passes `min_game_final_observations=2` with exactly 2 FINAL states and asserts one `game_final` event is emitted — which is impossible under the old hardcoded default of 3, so the test genuinely exercises the forwarded path. Workflow test asserts the manifest records the value and that `run_youtube_game` forwards it; CLI test asserts `--min-game-final-observations 2` parses. 236 tests pass.
+
+---
 
 #### CR-39 — `_offer_config_update` permanently drops template key when template path is absent at read time
 **File:** [cli.py](src/sidelinehd_extractor/cli.py) — `_offer_config_update`, [config.py](src/sidelinehd_extractor/config.py)

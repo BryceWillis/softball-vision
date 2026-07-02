@@ -72,6 +72,8 @@ class CLITests(unittest.TestCase):
                 "60",
                 "--min-at-bat-spacing-roster-confirmed",
                 "25",
+                "--min-game-final-observations",
+                "4",
                 "--no-order-validation",
             ]
         )
@@ -115,6 +117,8 @@ class CLITests(unittest.TestCase):
                 "60",
                 "--min-at-bat-spacing-roster-confirmed",
                 "25",
+                "--min-game-final-observations",
+                "4",
                 "--no-order-validation",
             ]
         )
@@ -142,6 +146,7 @@ class CLITests(unittest.TestCase):
             "batting_half",
             "min_at_bat_spacing",
             "min_at_bat_spacing_roster_confirmed",
+            "min_game_final_observations",
             "no_order_validation",
         ]
         for attribute in shared_attributes:
@@ -163,6 +168,22 @@ class CLITests(unittest.TestCase):
         self.assertFalse(run_game.no_order_validation)
         self.assertFalse(run_youtube.no_order_validation)
         self.assertFalse(detect_events.no_order_validation)
+        self.assertEqual(run_game.min_game_final_observations, 3)
+        self.assertEqual(run_youtube.min_game_final_observations, 3)
+        self.assertEqual(detect_events.min_game_final_observations, 3)
+
+    def test_detect_events_accepts_min_game_final_observations(self):
+        parser = build_parser()
+        detect_events = parser.parse_args(
+            [
+                "detect-events",
+                "runs/game",
+                "--min-game-final-observations",
+                "2",
+            ]
+        )
+
+        self.assertEqual(detect_events.min_game_final_observations, 2)
 
     def test_default_run_fields_include_lineup_batter_number(self):
         parser = build_parser()
@@ -175,6 +196,7 @@ class CLITests(unittest.TestCase):
                 "count",
                 "left_score",
                 "right_score",
+                "game_status",
                 "lineup_strip",
                 "batter_card_name",
                 "batter_card_number",

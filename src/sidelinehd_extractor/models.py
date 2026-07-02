@@ -29,6 +29,7 @@ class EventType(str, Enum):
     HALF_INNING_START = "half_inning_start"
     AT_BAT_START = "at_bat_start"
     SCORE_CHANGE = "score_change"
+    GAME_FINAL = "game_final"
     UNKNOWN = "unknown"
 
 

@@ -23,12 +23,12 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **35** — Final Scorebug Marker | Ready to implement | Depends on item 29 (`_score_snapshot()`, `away_score`/`home_score`). Implement after item 29. |
-| 2 | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
-| 3 | **28** — Project Config Defaults | Done | Approved Pass 10. |
-| 4 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
-| 5 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
-| 6 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
+| 1 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
+| 2 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
+| 3 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
+| — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
+| — | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
+| — | **28** — Project Config Defaults | Done | Approved Pass 10. |
 
 Items 22, 23, 24, 25 are deferred architectural notes — they stay in the backlog but have no implementation slot until a concrete trigger arises.
 
@@ -2366,7 +2366,13 @@ At the game start (~6:34), the first pitch changes the count to 0-1. When the tr
 ### 35. Final Scorebug Marker
 
 Source: Product QA from `9AaT4645z6s` / Victor Vipers run
-Status: Ready to implement
+Status: Done (Pass 11)
+
+Implementation note:
+- Added `EventType.GAME_FINAL`, `game_status` OCR configuration, state metadata normalization, stable-run final detection, and chapter export support with optional score suffix.
+- Added `game_status` to default run fields while treating it as an optional template field, so existing templates that omit the crop continue to run.
+- Added targeted tests for final status normalization, final event detection, final chapter export, default fields, and optional-template behavior.
+- Pass 11 CR fixes (resolved): CR-40 threads `min_game_final_observations` through the CLI/workflow/event-file paths; CR-41 moves optional template-field metadata onto `OCRFieldConfig.optional`.
 
 The current chapter export stops at the last detected half-inning. A useful publishing marker would be a final timestamp when the scorebug changes from inning/count display to `FINAL` in the middle/status area of the scorebug.
 

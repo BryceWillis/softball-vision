@@ -79,6 +79,7 @@ def run_game(
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    min_game_final_observations: int = 3,
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
 ) -> RunGameResult:
@@ -108,6 +109,7 @@ def run_game(
         batting_half=None if auto_detect_batting_half else batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+        min_game_final_observations=min_game_final_observations,
         order_validation=order_validation and not auto_detect_batting_half,
     )
     order_validation_ran = bool(roster is not None and order_validation and not auto_detect_batting_half)
@@ -135,6 +137,7 @@ def run_game(
             "min_at_bat_spacing_roster_confirmed_seconds": (
                 min_at_bat_spacing_roster_confirmed_seconds
             ),
+            "min_game_final_observations": min_game_final_observations,
             "batting_half": "auto" if auto_detect_batting_half else _half_value(batting_half),
             "order_validation_requested": order_validation,
             "order_validation_ran": order_validation_ran,
@@ -202,6 +205,7 @@ def run_youtube_game(
     auto_detect_batting_half: bool = False,
     min_at_bat_spacing_seconds: float = 45.0,
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
+    min_game_final_observations: int = 3,
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
@@ -249,6 +253,7 @@ def run_youtube_game(
         auto_detect_batting_half=auto_detect_batting_half,
         min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
         min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
+        min_game_final_observations=min_game_final_observations,
         order_validation=order_validation,
         batting_half_inference_progress=batting_half_inference_progress,
     )
