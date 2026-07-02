@@ -122,6 +122,51 @@ class CLITests(unittest.TestCase):
                 "--no-order-validation",
             ]
         )
+        run_playlist = parser.parse_args(
+            [
+                "run-playlist",
+                "https://youtube.com/playlist?list=example",
+                "--template",
+                "template.json",
+                "--roster",
+                "roster.csv",
+                "--team-name",
+                "Smash It",
+                "--sample-every",
+                "2.5",
+                "--start",
+                "1:00",
+                "--end",
+                "2:00",
+                "--ocr",
+                "none",
+                "--progress-every",
+                "10",
+                "--quiet",
+                "--field",
+                "inning,count",
+                "--no-crops",
+                "--hash-video",
+                "--output-prefix",
+                "scratch/full",
+                "--corrections",
+                "corrections.csv",
+                "--chapter-intro-label",
+                "Warmups",
+                "--no-chapter-intro",
+                "--no-inning-score",
+                "--no-at-bat-inning-headers",
+                "--batting-half",
+                "top",
+                "--min-at-bat-spacing",
+                "60",
+                "--min-at-bat-spacing-roster-confirmed",
+                "25",
+                "--min-game-final-observations",
+                "4",
+                "--no-order-validation",
+            ]
+        )
 
         shared_attributes = [
             "output_dir",
@@ -152,25 +197,52 @@ class CLITests(unittest.TestCase):
         for attribute in shared_attributes:
             with self.subTest(attribute=attribute):
                 self.assertEqual(getattr(run_game, attribute), getattr(run_youtube, attribute))
+                self.assertEqual(getattr(run_game, attribute), getattr(run_playlist, attribute))
 
         self.assertEqual(run_game.video_path, Path("game.mp4"))
         self.assertEqual(run_youtube.url, "https://youtu.be/example")
+        self.assertEqual(run_playlist.url, "https://youtube.com/playlist?list=example")
 
     def test_run_commands_default_batting_half_to_auto(self):
         parser = build_parser()
         run_game = parser.parse_args(["run-game", "game.mp4"])
         run_youtube = parser.parse_args(["run-youtube", "https://youtu.be/example"])
+        run_playlist = parser.parse_args(["run-playlist", "https://youtube.com/playlist"])
         detect_events = parser.parse_args(["detect-events", "runs/game"])
 
         self.assertEqual(run_game.batting_half, "auto")
         self.assertEqual(run_youtube.batting_half, "auto")
+        self.assertEqual(run_playlist.batting_half, "auto")
         self.assertEqual(detect_events.batting_half, "both")
         self.assertFalse(run_game.no_order_validation)
         self.assertFalse(run_youtube.no_order_validation)
+        self.assertFalse(run_playlist.no_order_validation)
         self.assertFalse(detect_events.no_order_validation)
         self.assertEqual(run_game.min_game_final_observations, 3)
         self.assertEqual(run_youtube.min_game_final_observations, 3)
+        self.assertEqual(run_playlist.min_game_final_observations, 3)
         self.assertEqual(detect_events.min_game_final_observations, 3)
+
+    def test_run_playlist_accepts_batch_controls(self):
+        parser = build_parser()
+        run_playlist = parser.parse_args(
+            [
+                "run-playlist",
+                "https://youtube.com/playlist",
+                "--force",
+                "--limit",
+                "3",
+                "--start-index",
+                "2",
+                "--retries",
+                "4",
+            ]
+        )
+
+        self.assertTrue(run_playlist.force)
+        self.assertEqual(run_playlist.limit, 3)
+        self.assertEqual(run_playlist.start_index, 2)
+        self.assertEqual(run_playlist.retries, 4)
 
     def test_detect_events_accepts_min_game_final_observations(self):
         parser = build_parser()

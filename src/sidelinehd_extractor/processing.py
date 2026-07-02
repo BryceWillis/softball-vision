@@ -117,6 +117,41 @@ def write_jsonl(path: Path, values: Iterable[object]) -> int:
     return count
 
 
+def write_jsonl_atomic(path: Path, values: Iterable[object]) -> int:
+    """Atomically replace a JSONL file and return the number of records written."""
+
+    destination = path.expanduser()
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    count = write_jsonl(temporary, values)
+    temporary.replace(destination)
+    return count
+
+
+def read_jsonl(path: Path) -> List[object]:
+    """Read a JSONL file into plain Python rows."""
+
+    rows = []
+    with path.expanduser().open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def update_manifest_section(manifest_path: Path, section_name: str, values: dict) -> None:
+    """Merge values into a named manifest section if the manifest exists."""
+
+    if not manifest_path.exists():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    section = manifest.get(section_name)
+    if not isinstance(section, dict):
+        section = {}
+    section.update(values)
+    manifest[section_name] = section
+    write_json(manifest_path, manifest)
+
+
 def process_video(
     video_path: Path,
     output_dir: Path,

@@ -23,9 +23,16 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Must complete before broader release. |
-| 2 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort; tackle after QA fixes and pre-release hygiene are done. |
-| 3 | **19** — Full Windows Support | Ready to implement | Important for future distribution; lowest urgency given current user base is Mac-only. |
+| 1 | **41** — OCR Pipeline Performance | Ready to implement | Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
+| 2 | **40** — OCR Confidence Capture | Ready to implement | Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
+| 3 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
+| 4 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
+| 5 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 6 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. Depends on items 37, 38, 20. Cloud is a later seam. |
+| 7 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
+| 8 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort. |
+| 9 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. |
+| — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
 | — | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
 | — | **28** — Project Config Defaults | Done | Approved Pass 10. |
@@ -296,7 +303,14 @@ Acceptance criteria:
 ### 19. Full Windows Support
 
 Source: Product backlog
-Status: Ready to implement
+Status: Ready for Review
+
+Implementation note for review:
+- Added `PlaylistEntry` plus flat-playlist yt-dlp enumeration in `youtube.py`.
+- Added reusable `batch.py` orchestration with JSONL state, `batch_summary.md`, skip-on-complete, `--force`, `--limit`, `--start-index`, retry isolation, per-entry result summaries, and per-run YouTube metadata in `manifest.json`.
+- Added `run-playlist` CLI command sharing the existing run-processing arguments and YouTube download options.
+- Documented playlist usage in `README.md` and added tests for enumeration, batch ordering, resume/skip, force, retry failure isolation, slicing, and CLI parsing.
+- Pass 12 CR fixes are Ready for Review in `CODE-REVIEW.md`: retries are scoped to `YTDLPError`, skip validates existing outputs, state is compacted atomically, manifest/JSONL helpers are shared, and the batch internals were tidied.
 
 Make the tool fully usable on Windows with accurate documentation and a CI
 matrix that catches regressions on both platforms.
@@ -758,7 +772,7 @@ Acceptance criteria:
 ### 26. Multi-Layout Template Support
 
 Source: Product backlog
-Status: Ready to implement
+Status: Ready for Review
 
 Support all 10 SidelineHD stream styling combinations via named template files,
 plus a small code fix so Minimal-style layouts (name badge only, no batter
@@ -2861,17 +2875,318 @@ Existing `samples.jsonl` files produced before this change have no `source_detai
 - `test_load_ocr_samples_defaults_source_detail_to_none_for_old_rows`
 - `test_state_from_samples_stores_lineup_strip_confidence_in_metadata`
 
+### 37. YouTube Playlist Batch Queue (CLI)
+
+Source: Product backlog
+Status: Done (Pass 12, CR-42–46 resolved; CR-47 deferred to item 22)
+
+Process an entire YouTube playlist of game recordings in one command: enumerate
+the playlist, then run the existing single-game pipeline over each video in a
+resumable, failure-isolated queue. This is the top near-term priority.
+
+**Why this first:** beyond the immediate workflow win, the batch orchestrator is
+the prototype of the local web app's background job runner (item 39). Building
+the queue abstraction cleanly here — a list of game-processing jobs, run
+sequentially, each isolated, each resumable, with per-job and batch-level status
+— means the web layer later reuses this machinery with an HTTP face instead of
+throwaway work. Keep the orchestration in a library function (in `workflow.py`
+or a new `batch.py`) that the CLI and the future web layer both call.
+
+**Command:** `sidelinehd-extractor run-playlist PLAYLIST_URL [options]`
+
+- Shares the run-processing arguments with `run-youtube` via
+  `_add_run_processing_arguments` (template, roster, spacing knobs,
+  `--min-game-final-observations`, order validation, etc.).
+- Adds `--force` (reprocess videos already completed), `--limit N` (cap how many
+  to process this invocation), and `--start-index N` (skip the first N entries).
+
+**Enumeration (cheap, no download):** new function in `youtube.py`:
+`list_playlist_videos(playlist_url) -> List[PlaylistEntry]`, backed by yt-dlp's
+flat-playlist mode (`--flat-playlist`, or the Python API with
+`extract_flat=True`). `PlaylistEntry` carries `video_id`, `url`, `title`, and
+`index`. No frames are downloaded during enumeration.
+
+**Sequential processing:** for each entry, call the existing
+`run_youtube_game()`. OCR is CPU/IO-heavy, so process one game at a time —
+parallelism buys little on a single machine and complicates status. Print batch
+progress (`[3/12] Processing "<title>"…`) and reuse each game's existing
+per-video progress callbacks, prefixed with the batch position.
+
+**Resumability / idempotency:** maintain a batch state file
+(`playlist_state.jsonl` or a batch manifest) in the playlist output directory
+that maps `video_id → {status: done|failed|skipped, run_dir, export_paths}`. On
+re-run, entries already marked `done` are skipped unless `--force`. Persist the
+`youtube_video_id` in each run manifest so batch state can be reconstructed if
+the state file is lost.
+
+**Failure isolation and retries:** wrap each `run_youtube_game()` in try/except.
+Transient download failures (yt-dlp rate limits, network blips) get a small
+number of retries with backoff before the entry is marked `failed`. A private,
+deleted, or persistently unreadable video records a `failed` entry with the
+error and the batch continues to the next game — one bad video never aborts the
+run. `--retries N` (default 2) controls the attempt count.
+
+**Batch summary:** emit JSON to stdout (consistent with other commands)
+summarizing counts (processed / skipped / failed). **Each per-game entry must
+carry the source video's `title` and `url` alongside its `run_dir`, `status`, and
+export paths** — a human posting N games needs to route each game's chapters and
+at-bats to the correct YouTube video without cross-referencing bare video IDs.
+Also write a **human-readable batch index** (`batch_summary.md` in the playlist
+output dir) that lists, per game, the title, URL, and the paths to the chapters
+file and at-bats file — this is the artifact a videographer actually works from
+when pasting into YouTube, and it is the CLI precursor to the web app's
+multi-game paste view (item 39b). Close with a one-line human summary to stdout.
+
+**Explicitly out of scope (future items):**
+- **Channel ingestion + "is this video a game?" classifier.** The elegant
+  version reuses our scorebug detection — sample a few frames, check for a
+  SidelineHD overlay — but that means partially downloading every candidate,
+  which is expensive. Deferred; playlist-URL (pre-curated) ships first.
+- **Parallel processing.** Sequential is correct for a single machine.
+
+**Testing:** mock `list_playlist_videos` and `run_youtube_game`; assert
+sequential invocation order, skip-on-already-done, `--force` reprocess, error
+isolation (one entry raises, batch still completes and records the failure), and
+batch-manifest shape. Cover `--limit` and `--start-index` slicing.
+
+### 38. Feedback Log — Capture, Sanitize, Export
+
+Source: Product backlog
+Status: Ready to implement (after item 37)
+
+Produce a sanitized, portable **Markdown** log from a completed run that a
+videographer can attach to a GitHub issue or email and send to us. We feed that
+log into Claude/Codex to infer issues and generate new work or tests. Because
+each videographer runs entirely locally (item 39), this log is the **only** data
+that ever crosses a machine boundary — so sanitization is mandatory, and the
+user must be able to preview exactly what it contains before sending.
+
+**Why Markdown, not JSON:** it is LLM-native (Claude/Codex parse it directly)
+and simultaneously human-readable, so a single artifact serves both the
+machine-analysis purpose and the "review before you send it" requirement.
+Structured sections with fenced blocks keep it machine-parseable.
+
+**Why CLI-first:** the sanitizer is the most privacy-critical component in the
+whole system. Build and harden it in the CLI — where its output can be eyeballed
+and pinned with fixtures — before any web "Send feedback" button (item 39e) ever
+exposes it.
+
+**Command:** `sidelinehd-extractor feedback RUN_DIR [--note "..."] [--output feedback.md]`
+
+Reads a completed run (`states.jsonl`, `events.jsonl`, review output, manifest,
+and the roster used) and writes a sanitized Markdown log. The tool makes **no
+network calls** — it writes a file the user opens, reads, and attaches manually.
+
+**Content kept (non-PII, diagnostically useful):**
+- Environment: tool version, Tesseract version, platform, template name,
+  detection parameters (from the manifest).
+- Every review flag that fired, with structured detail — flag type, timestamp,
+  **jersey numbers involved**, OCR raw-vs-normalized text for the failing field,
+  and confidence scores.
+- Event-sequence summary (types, timestamps, inning/half), names redacted.
+- Optional freeform `--note` shown verbatim (the user owns its content and sees
+  it in the previewable output).
+
+**Sanitization rule — the core contract:**
+- **Jersey numbers: kept.** Not identifying on their own, and essential for
+  OCR-disagreement diagnosis (e.g. "`batter_number_disagreement`: lineup=12 vs
+  card=72 at t=634").
+- **Player names: always redacted** → stable per-log pseudonyms (`Player A`,
+  `Player B`) built from a name→pseudonym map (from the roster plus any observed
+  names) and applied to every string field, so cross-references stay coherent
+  within a log while no real name leaves the machine.
+- **Team names: redacted** (`Home Team` / `Away Team`).
+- **Video URL/ID: dropped** by default.
+- **Raw frames/crops: excluded** by default (they contain faces and names). No
+  opt-in in v1; a future blurred-crop attachment is a separate, larger item.
+
+**Sanitizer as a hardened library function:**
+`sanitize_feedback(run_data, name_map) -> FeedbackLog`, rendered to Markdown by a
+separate formatter. This is the privacy boundary; test it as one.
+
+**Testing:** build a fixture run using sanitized placeholder names (per the
+security constraint) and assert consistent pseudonymization, preserved jersey
+numbers, and no team/name leakage in the rendered log. Add a **guard test** that
+feeds a deliberately name-laden run and asserts none of those name tokens survive
+in the output — a property check that every roster name is absent from the
+rendered Markdown.
+
+### 39. Local Web App (Epic)
+
+Source: Product backlog
+Status: Epic — phases promoted to standalone numbered items with full designs when scheduled
+
+A local-first, single-user web interface each videographer runs on their own
+machine at `localhost`, wrapping the existing pipeline. **No auth, no shared
+server, no multi-tenancy** — every install is one person on one machine. Built
+with a clean seam for eventual cloud hosting. Player data never leaves the
+machine except through the sanitized feedback log (item 38).
+
+**Recommended stack:** FastAPI + server-rendered HTML + HTMX; a lightweight
+in-process background job runner (reusing the batch orchestrator from item 37);
+a small SQLite index for job status and feedback, with the JSONL run artifacts
+in `runs/` remaining the source of truth. The CLI is preserved; the web layer
+calls the same `workflow` / `exports` / `roster` / `events` / `corrections`
+functions. HTMX (not a React SPA) keeps a single-user local tool low-complexity;
+revisit only if this ever becomes a hosted product.
+
+**Phases** (each becomes its own item with a full design when picked up):
+- **39a — Web skeleton + job runner.** FastAPI app; submit a single video URL or
+  a playlist; background job runner reusing item 37's batch orchestrator; live
+  status via HTMX polling. Proves the hardest new plumbing.
+- **39b — Results + multi-game paste kits.** Render chapter and at-bat exports
+  for every game in a batch on a single page — multiple copy-kit blocks stacked,
+  one per game, each with one-click copy. Reuses item 20's HTML paste-kit
+  machinery.
+- **39c — Exception review UI.** Surface `review.py` flags, resolve them into
+  `corrections.py`, and re-export — a friendly front-end for the corrections
+  workflow that today is hand-edited CSV.
+- **39d — Roster management UI.** CRUD over the roster CSVs (`roster.py`).
+- **39e — Send-feedback UI.** Wraps item 38's sanitizer: preview the Markdown log
+  in-browser, then hand off to a GitHub-issue or email flow. No new sanitization
+  logic in the web layer.
+
+**Cross-cutting — packaging/install (with item 19):** the per-device install
+model puts smooth "install and run" ergonomics for non-developers (Mac and
+Windows) on the critical path for this epic.
+
+**Dependencies:** 39a → item 37; 39b → item 20; 39c → `corrections.py`; 39e →
+item 38.
+
+### 40. OCR Confidence Capture
+
+Source: Architect review 2026-07-02 / accuracy
+Status: Ready to implement (precede item 38)
+
+**Problem:** [`_tesseract_ocr_preprocessed_image`](src/sidelinehd_extractor/ocr.py)
+hardcodes `confidence=None`. `OCRSample.confidence`, the review flags, and the
+tiered at-bat spacing gate (item 31) are all built to consume a confidence value
+that never arrives — the accuracy machinery is half-wired and inert.
+
+**Design:**
+- Switch the Tesseract call from plain text (`tesseract input stdout`) to TSV
+  output so per-word confidence (`conf` column) is captured. Reconstruct the
+  text by joining the `text` tokens in row order (preserving the existing
+  plain-text result), and compute an aggregate confidence.
+- **Aggregation policy**, in a helper keyed on field type:
+  - Numeric single-token fields (`left_score`, `right_score`, `count`,
+    `batter_number`, `batter_card_number`, `on_deck_number`): use the **minimum**
+    word confidence — the weakest digit governs correctness.
+  - Multi-word text (`batter_card_name`, `lineup_strip`, team fields): use the
+    **length-weighted mean** of positive-confidence tokens.
+- Populate `OCRBackendResult.confidence` on a **0–1 scale** (normalize Tesseract's
+  0–100), and document the scale so future backends match it.
+- Surface the value where the review/gate logic reads it (verify current wiring
+  in `state.py` and item 31's gate; thread it through if a gap exists).
+- **Backward compatibility:** TSV headers differ between Tesseract 4 and 5. If the
+  TSV can't be parsed, degrade to `confidence=None` and still return the text —
+  never crash on a version mismatch.
+
+**Testing:** TSV fixtures with known `conf` values → assert the reconstructed text
+matches the old plain-text path and the aggregate matches the numeric-min vs
+text-mean policy; malformed TSV → `confidence=None`, text preserved; existing OCR
+tests still pass with the new command.
+
+**Value:** unblocks item 31 (tiered gate), sharpens review flags, and roughly
+doubles the diagnostic value of the feedback log (item 38) — hence "precede 38."
+
+### 41. OCR Pipeline Performance
+
+Source: Architect review 2026-07-02 / performance
+Status: Ready to implement (pair with item 37)
+
+**Problem:** the pipeline spawns one `tesseract` subprocess and writes one temp
+PNG **per crop** ([ocr.py](src/sidelinehd_extractor/ocr.py) `_tesseract_ocr_preprocessed_image`;
+loop at [processing.py](src/sidelinehd_extractor/processing.py) `process_video`).
+A 2-hour game at 5s sampling × ~10 fields ≈ **14,000 subprocess spawns and temp
+files**, with Tesseract reloading its LSTM model every call. That fork/exec +
+model-load overhead is the dominant cost, it multiplies across a playlist (item
+37), and a fork-storm competes with the web job runner (item 39).
+
+**Design — two independent wins, ship #1 first:**
+
+1. **Parallelize per-crop OCR across a worker pool.** The per-field OCR calls are
+   independent and the subprocess releases the GIL, so a `ThreadPoolExecutor`
+   yields near-linear speedup. Collect results keyed by `(timestamp, field)` and
+   **reassemble samples in the original order** so `samples.jsonl` stays stable
+   and diffable. Progress reporting stays monotonic (report by completed count).
+   Add `--ocr-workers N` (default `os.cpu_count()`; `1` = serial for debugging).
+
+2. **In-process Tesseract backend.** Add a backend via `tesserocr` that holds one
+   initialized `PyTessBaseAPI`, sets the image directly from the numpy array (no
+   temp file), and reuses the engine across crops — model loads once.
+   `create_ocr_backend` gains the new name; the dependency goes in a pyproject
+   extra; **fall back to the subprocess backend when `tesserocr` isn't installed.**
+   A `PyTessBaseAPI` instance is not thread-safe, so combine with #1 as one API
+   per worker thread (or a small pool of APIs).
+
+Also in scope: **flip `save_crops` to default `False`** for `run-game`/
+`run-playlist` (an opt-in `--save-crops` stays for debugging) — otherwise every
+run litters ~14k PNGs.
+
+**Testing:** the parallel path must produce a **byte-identical `samples.jsonl`** to
+the serial path (ordering guarantee); `--ocr-workers 1` vs `N` equivalence; the
+tesserocr backend behind an import guard that skips when unavailable; assert the
+new `save_crops` default.
+
+### 42. Tesseract Version Capture and Compatibility Check
+
+Source: Architect review 2026-07-02 / support
+Status: Ready to implement (precede item 38)
+
+**Problem:** [`ensure_tesseract_available`](src/sidelinehd_extractor/ocr.py) checks
+only that the binary exists. OCR output differs meaningfully between Tesseract 4
+and 5, and the per-device install model (item 39) makes version drift the most
+likely "works on my machine" support issue.
+
+**Design:**
+- Add `tesseract_version() -> Optional[str]` (parse the first line of
+  `tesseract --version`).
+- Capture the version at backend creation / process start; record it in the run
+  manifest and expose it for the feedback log (item 38).
+- If the version is below a defined `MIN_SUPPORTED` (e.g. 4.1) or unrecognized,
+  print a **non-fatal** stderr warning. Never hard-fail on version alone.
+
+**Testing:** mock `--version` output for 4.x and 5.x → parsed correctly;
+garbled/absent → returns `None` and warns; manifest records the version.
+
+### 43. OCR Accuracy Follow-ons — Multi-PSM Voting and Per-Field Preprocessing
+
+Source: Architect review 2026-07-02 / accuracy
+Status: Ready to implement (depends on item 40)
+
+Depends on confidence being available (item 40); measure every change against
+confidence deltas on a small fixture set before committing thresholds.
+
+**Design:**
+1. **Multi-PSM voting for critical numeric fields** (`left_score`, `right_score`,
+   `count`, `batter_number`, `batter_card_number`, `on_deck_number`): run psm 7
+   and psm 10, keep the higher-confidence normalized result; on a tie prefer the
+   whitelist-valid candidate. Gate behind field membership so text fields are
+   never double-run.
+2. **Per-field preprocessing strategy:** extend `OCRFieldConfig` with a
+   `preprocess` variant (e.g. `"default"`, `"numeric_hard_threshold"`,
+   `"text_adaptive"`); `preprocess_for_ocr` dispatches on it. Numeric fields get a
+   strategy tuned for isolated glyphs; name/strip fields keep an adaptive
+   threshold. Strategies stay in config so they're tunable per template.
+
+**Testing:** voting picks the higher-confidence variant on fixtures and leaves
+text fields untouched; each preprocess strategy is exercised; a small
+before/after confidence comparison confirms no regression on the numeric fields.
+
 ## Discussion / Later Deliverables
 
 ### 22. Detection Configuration Object
 
-Source: Architectural note / Product backlog
+Source: Architectural note / Product backlog / CR-47
 
 `detect_events` is accumulating parameters. A `DetectionConfig` dataclass would make defaults and per-game tuning easier.
 
 Reason to defer:
 - Current parameter count is still manageable.
 - This is more valuable after one or two more detection knobs are proven necessary.
+
+**Update (Pass 12, CR-47):** item 37's `run_playlist_batch` → `_run_playlist_entry` → `run_youtube_game` now re-declares ~30 of these knobs at each hop, so the "still manageable" rationale has weakened materially. When this item is picked up, scope it to a `DetectionConfig` (or `RunConfig`) dataclass threaded through `run_game`/`run_youtube_game`/`run_playlist_batch` so a new knob is a one-line change instead of a four-signature edit.
 
 ### 23. Correction Log Format
 

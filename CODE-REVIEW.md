@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-01
-**Review passes:** 11 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved)
+**Review passes:** 12 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -25,7 +25,55 @@ _No items ready for review._
 
 _No open items._
 
+## Deferred Items
+
+#### CR-47 — 30-parameter passthrough fan-out should bundle into the planned `DetectionConfig`
+**File:** [batch.py](src/sidelinehd_extractor/batch.py) — `run_playlist_batch` / `_run_playlist_entry` signatures
+**Pass:** 12 — altitude (deferred to item 22)
+
+`run_playlist_batch` → `_run_playlist_entry` → `run_youtube` re-declares ~30 detection/tuning knobs at each hop with no transformation. Adding one new knob now means editing four parallel signatures, and a missed hop silently passes a stale default (batch runs would diverge from single-game runs). This materially weakens the deferral rationale for **item 22 (Detection Configuration Object)** — the fan-out just tripled. Not blocking item 37; folded into item 22's scope, which should now bundle these knobs into a `DetectionConfig` dataclass threaded through `run_game`/`run_youtube_game`/`run_playlist_batch`.
+
 ## Resolved Items
+
+#### CR-42 — Playlist batch retried deterministic failures, re-running full download + OCR up to `retries+1` times
+**File:** [batch.py](src/sidelinehd_extractor/batch.py) — `_run_playlist_entry`
+**Resolved:** Pass 12
+
+Retry is now scoped to `except YTDLPError` (the transient download stage); a generic `except Exception` returns a `failed` result on the first attempt, so deterministic processing/config/OCR errors no longer re-run the full download + whole-video OCR pipeline. Verified against the two regression tests: `test_run_playlist_batch_does_not_retry_deterministic_failures` raises `RuntimeError` and asserts the URL is called exactly once (`attempts == 1`, batch continues to the next entry), while `test_run_playlist_batch_retries_ytdlp_failures` raises `YTDLPError` and asserts the URL is called twice (`attempts == 2`, `retries=1`). The pair precisely exercises the transient-vs-deterministic distinction. 247 tests pass.
+
+---
+
+#### CR-43 — Skip path trusted prior state without verifying the run outputs still exist on disk
+**File:** [batch.py](src/sidelinehd_extractor/batch.py) — `_is_complete_prior_result`
+**Resolved:** Pass 12
+
+New `_is_complete_prior_result(prior)` gates the skip branch: it requires `status == "done"` **and** `run_dir`, `chapters_path`, `at_bats_path` all non-None and `path.exists()`. A prior `done` record whose outputs were deleted now reprocesses instead of reporting a false skip with dead paths. Covered by `test_run_playlist_batch_reprocesses_done_entry_when_outputs_are_missing`. 247 tests pass.
+
+---
+
+#### CR-44 — Batch state file was append-only and grew unbounded; last-write status drifted
+**File:** [batch.py](src/sidelinehd_extractor/batch.py), [processing.py](src/sidelinehd_extractor/processing.py)
+**Resolved:** Pass 12
+
+State is now an in-memory keyed snapshot (`state_snapshot`) rewritten atomically via the new `write_jsonl_atomic()` as one record per `video_id`, sorted by `(index, video_id)`. Skips no longer mutate the snapshot, so a `done` record keeps its status rather than drifting to `skipped`. `test_run_playlist_batch_compacts_state_to_one_record_per_entry` runs the batch twice over the same playlist and asserts the state file holds exactly two lines, both `done` — proving compaction, no drift, and correct skip-on-existing-outputs. Legacy append-only state files still load (last row per id wins) and are compacted on the next write. 247 tests pass.
+
+---
+
+#### CR-45 — `batch.py` re-implemented manifest-update and JSONL I/O that already existed
+**File:** [batch.py](src/sidelinehd_extractor/batch.py), [workflow.py](src/sidelinehd_extractor/workflow.py), [processing.py](src/sidelinehd_extractor/processing.py)
+**Resolved:** Pass 12
+
+Shared `update_manifest_section(path, section_name, values)`, `write_jsonl_atomic()`, and `read_jsonl()` added to `processing.py`. `workflow._update_manifest_detection_config` now delegates to `update_manifest_section(..., "detection", ...)` and batch's `_record_youtube_video_id` uses it with the `"youtube"` section; batch state I/O uses the shared JSONL helpers instead of hand-rolled loops. The manifest write goes through `write_json` in both callers, so on-disk format stays consistent (indent=2, trailing newline). 247 tests pass.
+
+---
+
+#### CR-46 — Tidied `_run_playlist_entry` internals: dead state, unreachable branch, redundant counters, falsy-index guard
+**File:** [batch.py](src/sidelinehd_extractor/batch.py), [youtube.py](src/sidelinehd_extractor/youtube.py)
+**Resolved:** Pass 12
+
+Retry loop rewritten as `for attempt in range(1, retries + 2)`; the dead `previous[...] = result` mutation is gone (replaced by the meaningful `state_snapshot[...] = result`); tallies use `collections.Counter`; a shared `_result_from_entry()` factory builds the done/failed/skipped results; and `_playlist_entry_index` uses explicit `None` checks so a legitimate `0` index no longer falls through to the fallback. The former `raise AssertionError` is replaced by an unreachable graceful `return`. 247 tests pass.
+
+---
 
 #### CR-41 — `OPTIONAL_TEMPLATE_FIELDS` in `processing.py` splits field optionality from field definitions in `ocr.py`
 **File:** [processing.py](src/sidelinehd_extractor/processing.py), [ocr.py](src/sidelinehd_extractor/ocr.py)

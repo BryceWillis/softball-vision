@@ -188,6 +188,25 @@ sidelinehd-extractor run-youtube \
 `run-youtube` downloads the video once with `yt-dlp`; OCR, state parsing, event
 detection, review, corrections, and export are all local after that.
 
+Process a curated YouTube playlist one game at a time:
+
+```sh
+sidelinehd-extractor run-playlist \
+  'https://www.youtube.com/playlist?list=YOUR_PLAYLIST_ID' \
+  --template examples/sidelinehd_640x360_active.example.json \
+  --roster examples/roster.example.csv \
+  --start 10:00 \
+  --ocr tesseract
+```
+
+`run-playlist` first enumerates the playlist without downloading video media,
+then runs the same local pipeline used by `run-youtube` for each entry. It writes
+`runs/playlist_state.jsonl` so interrupted batches can resume and
+`runs/batch_summary.md` as a human-readable index of each video's title, URL,
+chapter file, and at-bat file. Completed entries are skipped on the next run
+unless you pass `--force`. Use `--limit N`, `--start-index N`, and `--retries N`
+for smaller or retry-friendly batches.
+
 By default, processing records video metadata but skips full-file SHA-256 hashing
 so large game videos start faster. Add `--hash-video` when you want audit-grade
 file identity in `manifest.json`.

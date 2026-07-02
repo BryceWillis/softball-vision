@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -20,7 +19,11 @@ from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_c
 from sidelinehd_extractor.models import HalfInning, OverlayTemplate, Roster
 from sidelinehd_extractor.naming import game_slug_for_run
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
-from sidelinehd_extractor.processing import process_video, write_jsonl
+from sidelinehd_extractor.processing import (
+    process_video,
+    update_manifest_section,
+    write_jsonl,
+)
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
@@ -285,15 +288,7 @@ def _stage(callback: Optional[Callable[[str], None]], name: str) -> None:
 
 
 def _update_manifest_detection_config(manifest_path: Path, values: dict) -> None:
-    if not manifest_path.exists():
-        return
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    detection = manifest.get("detection")
-    if not isinstance(detection, dict):
-        detection = {}
-    detection.update(values)
-    manifest["detection"] = detection
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    update_manifest_section(manifest_path, "detection", values)
 
 
 def _half_value(half: Optional[HalfInning]) -> str:

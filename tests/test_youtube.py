@@ -6,7 +6,9 @@ from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
     DEFAULT_YOUTUBE_CLIENT,
     YTDLPError,
+    build_ytdlp_playlist_command,
     build_ytdlp_command,
+    list_playlist_videos,
     parse_downloaded_video_path,
     resolve_ytdlp_executable,
 )
@@ -41,6 +43,40 @@ class YoutubeTests(unittest.TestCase):
 
         self.assertEqual(command[:3], ["python3", "-m", "yt_dlp"])
         self.assertIn("--paths", command)
+
+    def test_build_ytdlp_playlist_command_uses_flat_playlist(self):
+        command = build_ytdlp_playlist_command(
+            "https://youtube.com/playlist?list=abc",
+            executable=["python3", "-m", "yt_dlp"],
+        )
+
+        self.assertEqual(command[:3], ["python3", "-m", "yt_dlp"])
+        self.assertIn("--flat-playlist", command)
+        self.assertIn("--dump-single-json", command)
+        self.assertEqual(command[-1], "https://youtube.com/playlist?list=abc")
+
+    def test_list_playlist_videos_parses_flat_playlist_json(self):
+        class Completed:
+            returncode = 0
+            stdout = (
+                '{"entries": ['
+                '{"id": "abc123", "title": "Game One", "playlist_index": 2},'
+                '{"id": "def456", "title": "Game Two", "url": "https://youtu.be/def456"}'
+                "]}"
+            )
+            stderr = ""
+
+        with patch("sidelinehd_extractor.youtube.resolve_ytdlp_executable", return_value=["yt-dlp"]):
+            entries = list_playlist_videos(
+                "https://youtube.com/playlist?list=abc",
+                runner=lambda *_args, **_kwargs: Completed(),
+            )
+
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].video_id, "abc123")
+        self.assertEqual(entries[0].url, "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(entries[0].index, 2)
+        self.assertEqual(entries[1].url, "https://youtu.be/def456")
 
     def test_resolve_ytdlp_executable_falls_back_to_python_module(self):
         with patch("sidelinehd_extractor.youtube.shutil.which", return_value=None):

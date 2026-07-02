@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from sidelinehd_extractor.batch import run_playlist_batch
 from sidelinehd_extractor.calibration import (
     extract_calibration_frames,
     parse_timestamp_list,
@@ -106,6 +107,13 @@ def _build_stage_callback() -> Callable[[str], None]:
 
     def progress(stage_name: str) -> None:
         print(f"run-game: {labels.get(stage_name, stage_name)}", file=sys.stderr, flush=True)
+
+    return progress
+
+
+def _build_batch_progress_callback() -> Callable[[str], None]:
+    def progress(message: str) -> None:
+        print(f"run-playlist: {message}", file=sys.stderr, flush=True)
 
     return progress
 
@@ -579,6 +587,56 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run_playlist(args: argparse.Namespace) -> int:
+    _apply_config_defaults(args, use_roster=True, use_template=True)
+    template = load_overlay_template(args.template) if args.template else None
+    roster = load_roster(args.roster, team_name=args.team_name) if args.roster else None
+    ocr_backend = create_ocr_backend(args.ocr)
+    corrections = load_event_corrections(args.corrections) if args.corrections else None
+    result = run_playlist_batch(
+        playlist_url=args.url,
+        video_dir=args.video_dir,
+        output_dir=args.output_dir,
+        template=template,
+        roster=roster,
+        sample_every_seconds=args.sample_every,
+        start_seconds=parse_timestamp_value(args.start),
+        end_seconds=parse_timestamp_value(args.end) if args.end else None,
+        save_crops=not args.no_crops,
+        ocr=ocr_backend,
+        fields=_default_run_fields(args),
+        progress=None if args.quiet else _build_progress_callback(args.progress_every),
+        compute_video_hash=args.hash_video,
+        output_prefix=args.output_prefix,
+        corrections=corrections,
+        stage_progress=None if args.quiet else _build_stage_callback(),
+        include_chapter_intro=not args.no_chapter_intro,
+        chapter_intro_label=args.chapter_intro_label,
+        include_inning_score=not args.no_inning_score,
+        include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
+        batting_half=_parse_batting_half(args.batting_half),
+        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
+        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+        min_game_final_observations=args.min_game_final_observations,
+        order_validation=not args.no_order_validation,
+        batting_half_inference_progress=(
+            None if args.quiet else _build_batting_half_inference_callback()
+        ),
+        format_selector=args.format,
+        merge_output_format=args.merge_output_format,
+        write_info_json=not args.no_info_json,
+        youtube_client=args.youtube_client,
+        force=args.force,
+        limit=args.limit,
+        start_index=args.start_index,
+        retries=args.retries,
+        batch_progress=None if args.quiet else _build_batch_progress_callback(),
+    )
+    print(_to_json(result))
+    return 0
+
+
 def _cmd_parse_states(args: argparse.Namespace) -> int:
     input_path = args.input_path
     if input_path.is_dir():
@@ -982,6 +1040,45 @@ def build_parser() -> argparse.ArgumentParser:
     run_youtube.add_argument("--no-info-json", action="store_true")
     run_youtube.add_argument("--playlist", action="store_true", help="Allow playlist downloads.")
     run_youtube.set_defaults(func=_cmd_run_youtube)
+
+    run_playlist = subparsers.add_parser(
+        "run-playlist",
+        help="Process every game video in a YouTube playlist.",
+    )
+    run_playlist.add_argument("url")
+    run_playlist.add_argument("--video-dir", type=Path, default=Path("videos"))
+    _add_run_processing_arguments(run_playlist)
+    run_playlist.add_argument(
+        "--format",
+        default=DEFAULT_FORMAT_SELECTOR,
+        help="yt-dlp format selector.",
+    )
+    run_playlist.add_argument("--merge-output-format", default="mp4")
+    run_playlist.add_argument(
+        "--youtube-client",
+        default=DEFAULT_YOUTUBE_CLIENT,
+        help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
+    )
+    run_playlist.add_argument("--no-info-json", action="store_true")
+    run_playlist.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess playlist entries already marked done in the batch state.",
+    )
+    run_playlist.add_argument("--limit", type=int, help="Process at most N playlist entries.")
+    run_playlist.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Skip the first N playlist entries before processing.",
+    )
+    run_playlist.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="Retry each failed playlist entry this many times before marking it failed.",
+    )
+    run_playlist.set_defaults(func=_cmd_run_playlist)
 
     parse_states = subparsers.add_parser(
         "parse-states",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import json
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -26,6 +27,16 @@ class DownloadResult:
     command: List[str]
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class PlaylistEntry:
+    """One video entry discovered from a YouTube playlist."""
+
+    video_id: str
+    url: str
+    title: str
+    index: int
 
 
 class YTDLPError(RuntimeError):
@@ -78,6 +89,24 @@ def build_ytdlp_command(
     if youtube_client:
         command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
     command.append(url)
+    return command
+
+
+def build_ytdlp_playlist_command(
+    playlist_url: str,
+    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
+    executable: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """Build a cheap flat-playlist enumeration command."""
+
+    command = list(executable or ["yt-dlp"]) + [
+        "--flat-playlist",
+        "--dump-single-json",
+        "--no-warnings",
+    ]
+    if youtube_client:
+        command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
+    command.append(playlist_url)
     return command
 
 
@@ -149,6 +178,73 @@ def download_youtube_video(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def list_playlist_videos(
+    playlist_url: str,
+    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
+    runner=subprocess.run,
+) -> List[PlaylistEntry]:
+    """Return YouTube playlist entries without downloading video media."""
+
+    executable = resolve_ytdlp_executable()
+    command = build_ytdlp_playlist_command(
+        playlist_url=playlist_url,
+        youtube_client=youtube_client,
+        executable=executable,
+    )
+    completed = runner(command, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise YTDLPError(command, completed.returncode, completed.stdout, completed.stderr)
+
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("yt-dlp returned invalid playlist JSON") from exc
+
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return []
+    result = []
+    for fallback_index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            continue
+        video_id = str(entry.get("id") or "").strip()
+        url = _playlist_entry_url(entry, video_id)
+        if not video_id and not url:
+            continue
+        title = str(entry.get("title") or video_id or url).strip()
+        index = _playlist_entry_index(entry, fallback_index)
+        result.append(
+            PlaylistEntry(
+                video_id=video_id or url,
+                url=url,
+                title=title,
+                index=index,
+            )
+        )
+    return result
+
+
+def _playlist_entry_url(entry: dict, video_id: str) -> str:
+    url = str(entry.get("webpage_url") or entry.get("url") or "").strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+
+def _playlist_entry_index(entry: dict, fallback: int) -> int:
+    value = entry.get("playlist_index")
+    if value is None:
+        value = entry.get("playlist_autonumber")
+    if value is None:
+        value = fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def command_as_string(command: Sequence[str]) -> str:
