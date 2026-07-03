@@ -28,7 +28,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
 | — | **48** — Generate `review_report.md` during runs | Done (Pass 17) | **Web track (Fable 5).** Implemented: `run_game` writes `review_report.md` after export (degrades via `warning review-report-failed`; opt-out flag threaded through `run_youtube_game`); item 47's per-game review summary now lights up end-to-end. Awaiting architect review. |
 | — | **49** — Web App 39c: Exception Review + Corrections UI | Done (Pass 17) | **Web track (Fable 5).** Implemented: `/jobs/{id}/review` flagged-events UI → edit/delete/add → de-duped `<run_dir>/corrections.csv` → faithful re-export via new shared `finalize_run_exports` + manifest-persisted export options. Awaiting architect review. |
-| 3 | **50** — Web App 39d: Roster Management UI | Ready to implement | **Web track (next; unblocked).** CRUD over `rosters/*.csv` reusing `parse_team_list` + `write_roster_csv`; paste-a-list create, per-row edit, set config default. Names stay local. |
+| 3 | **50** — Web App 39d: Roster Management UI | Ready for review (branch `impl/item-50`, Fable 5) | **Web track.** Implemented: `/rosters` list/create + `/rosters/{slug}` edit/replace/delete/set-default, all writes through `parse_team_list`/`write_roster_csv`; set-default via item 28's config writer. Names stay local. |
 | 4 | **51** — Web App 39e: Send-Feedback UI | Ready to implement (after item 50) | **Web track.** Item 38 landed (Pass 17), so unblocked. Preview the **sanitized** feedback log (item 38's `render_feedback_log`) → prefilled GitHub-issue/email hand-off; app makes no outbound request. Mandatory PII-leak test. Shares `webapp/app.py` with item 50 — sequence after it. |
 | — | **41** — OCR Pipeline Performance | Done (Pass 17) | **OCR track (Codex).** Added worker-pool OCR with stable sample ordering, optional `tesserocr` backend/fallback, and opt-in end-to-end crop saving via `--save-crops`. |
 | — | **40** — OCR Confidence Capture | Done (Pass 17) | **OCR track (Codex).** Tesseract TSV parsing now captures 0–1 OCR confidence with numeric-min/text-weighted aggregation and degrades safely on malformed output. |
@@ -3741,7 +3741,7 @@ in the UI (the options are persisted and reused, not yet user-editable).
 
 ### 50. Local Web App — Phase 39d: Roster Management UI
 
-Status: Ready to implement
+Status: Ready for review (implemented on branch `impl/item-50` by Fable 5)
 Source: Promoted from item 39 (epic), phase 39d. Depends on item 46 (web skeleton,
 Done) and the existing `roster.py` / `config.py` roster machinery. Independent of
 the OCR track and of items 48/49.

@@ -19,7 +19,12 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 50 — Web App 39d: Roster Management UI
+**Branch:** `impl/item-50` (Fable 5) — review with `git diff origin/main...impl/item-50`
+**Files:** [app.py](src/sidelinehd_extractor/webapp/app.py), [rosters.html](src/sidelinehd_extractor/webapp/templates/rosters.html), [roster_edit.html](src/sidelinehd_extractor/webapp/templates/roster_edit.html), [test_webapp_rosters.py](tests/test_webapp_rosters.py)
+**Status:** Ready for Review
+
+**Implementation note.** Extended the item 46 FastAPI app with the designed routes: `GET /rosters` (list with player counts + default badge + new-roster paste form), `GET /rosters/{slug}` (editable table + add-player row + per-row delete + replace-from-paste), `POST /rosters` (create via `parse_team_list` → `write_roster_csv(default_roster_path(...))`), `POST /rosters/{slug}` (row edits validated by `_players_from_rows` — unique numbers, non-empty names, ≥1 player — or bulk replace via `parse_team_list`; 400 re-renders inline with the submitted rows, file untouched), `POST /rosters/{slug}/delete` (onsubmit confirm; stronger prompt when it is the configured default), and `POST /rosters/{slug}/set-default` (item 28's `write_project_config`, preserving `template`/`team_name`). All writes go through `write_roster_csv`; nothing is hand-serialized in the web layer, and no roster data touches job results or any egress surface. Slugs are validated against the `slugify` alphabet before path resolution, so URL slugs cannot escape `rosters/`. Two small additions beyond the letter of the design, flagged for review: `POST /rosters` refuses to overwrite an existing CSV (400) instead of silently clobbering it, and a `Manage rosters` link was added to `index.html`. A live-server verification pass caught (and fixed) a 500 when directly opening the edit URL of a hand-corrupted CSV — it now 400s while the list page shows the load error inline. 23 new tests in `test_webapp_rosters.py` (placeholder names only) cover the designed test list; 339 total pass, ruff clean.
 
 ## Open Items
 
