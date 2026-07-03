@@ -30,12 +30,25 @@ There are **two implementers**: Codex, and Claude Code running on **Fable 5** (`
 1. **Check `CODE-REVIEW.md` first.** Open items always preempt the roadmap queue. If any item has status **Open**, implement it before picking up any roadmap work.
 2. **Read the Implementation Queue** in `Roadmap.md`. Pick the highest-priority item that is **Ready to implement** and not already claimed by the other implementer.
 3. **Stop for items marked "Needs design."** Do not start implementation. Ask the architect (Opus) to write the full design first.
-4. **Implement per the architect's design** in `Roadmap.md`. Do not reinterpret or simplify the design without flagging it.
+4. **Implement per the architect's design** in `Roadmap.md`, following the **design-deviation policy** below.
 5. **Update `CODE-REVIEW.md`** for any CR being fixed: set status to **Ready for Review** and add a short implementation note describing what was done and how tests were added.
 6. **Run the full test suite** before considering work done. All tests must pass.
 7. **Update `Roadmap.md`** — move the implemented item's status to "Ready for review" in the queue table.
 
 An implementer does **not** write designs, move CRs to Resolved, or conduct code review passes — those belong to the Architect (Opus).
+
+### Design-Deviation Policy (tiered)
+
+The design in `Roadmap.md` is the spec the review is checked against. Deviating from it is sometimes right — the implementer sees the real code — but the risk lives in *cross-cutting* changes, where the implementer lacks the architect's whole-roadmap context. So the policy is tiered by **blast radius**, with one hard rule.
+
+**Escalation test — ask before deviating:** *Could this change affect another item, a user-visible contract, the security/name constraint, or a future design decision?*
+
+- **No → adjust and flag.** For changes local to this item's own internals — a detail the design left unspecified, a rename to avoid a real collision, an obvious defensive guard, a template/layout choice — the implementer may make the call, and **must record it** (see the hard rule). The on-the-ground context is an asset here.
+- **Yes → stop and ask the architect first**, before implementing. This covers: changing a default or user-visible behavior; touching the security/PII boundary or name handling; altering a data format, API, or contract another item depends on (e.g. `finalize_run_exports`, the corrections/roster CSV, the manifest); or dropping/weakening an acceptance criterion. These are exactly where missing context bites (see the item 41 `save_crops` default flip — a reasonable-looking local call that rippled into the review UI and existing behavior; it should have been escalated).
+
+**Hard rule — never silent.** Every deviation, either tier, is recorded as a **Deviations** line in the item's `CODE-REVIEW.md` Ready-for-Review note, so the architect evaluates it at review regardless. An unflagged change quietly defeats the review anchor.
+
+**Independent review is preserved.** The Architect (Opus) reviews all implementations regardless of which implementer wrote them. No agent reviews or approves its own work: Fable 5 implements but never runs a review pass on code it wrote. Review and the approval commit stay with the Opus architect.
 
 **Independent review is preserved.** The Architect (Opus) reviews all implementations regardless of which implementer wrote them. No agent reviews or approves its own work: Fable 5 implements but never runs a review pass on code it wrote. Review and the approval commit stay with the Opus architect.
 
@@ -63,10 +76,15 @@ STEP 0 — ISOLATE (do this before anything else, do not skip):
 Work ONLY in this worktree. Never edit the shared main working tree.
 
 TASK: implement item <N> (<name>) per its design in Roadmap.md — or the named
-Open CR in CODE-REVIEW.md, which preempts the queue. Do not reinterpret the
-design; if you'd deviate, stop and flag it.
+Open CR in CODE-REVIEW.md, which preempts the queue.
 
 RULES:
+- Follow the tiered design-deviation policy (see ROLES.md). Ask yourself: could a
+  change affect another item, a user-visible contract, the security/name
+  constraint, or a future design decision? If YES, stop and ask the architect
+  before implementing. If NO (local to this item's internals), you may adjust.
+  Either way, NEVER deviate silently — record every deviation as a "Deviations:"
+  line in your CODE-REVIEW.md note.
 - Reuse existing pipeline/helpers; do not re-implement what the codebase has.
 - Security: never write real player names to committed files; fixtures use
   sanitized placeholders. Names only leave the machine via item 38/39e.
