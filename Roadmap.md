@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | Epic — schedule 54a next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -3973,6 +3974,68 @@ yt-dlp needs to float so users can update it as YouTube changes.
 2. With yt-dlp entirely absent, the user gets a clear reinstall message, not a raw
    `FileNotFoundError`.
 3. Existing youtube/download/batch tests pass unchanged.
+
+### 54. Turnkey Web App — Zero-Friction Install, Launch, Stop, and Onboarding (Epic)
+
+Status: Epic — phases promoted to numbered items with full designs when scheduled.
+Source: Product owner (2026-07-03), from live-fire prep: the project owner — who
+built the tool — could not start the web app unaided, and Tesseract/ffmpeg/yt-dlp
+are external binaries a non-developer will not install by hand. This is the gate
+between "usable by us" and "usable by a softball coach."
+
+**Goal.** A non-technical user (a parent/coach with a SidelineHD channel) can
+install, start, use, and stop the web app **without a terminal, without pip, and
+without knowing what Tesseract or ffmpeg are.** The app explains itself. Failures
+are actionable in-UI, never a stack trace. Aligns with the item 39 "local-first,
+per-device install" goal and item 19 (packaging/CI).
+
+**The dependency reality (the core problem).**
+- `yt-dlp` — already pip-installed automatically (items 53/dependency). ✅
+- `ffmpeg` — a system binary today, but **pip-installable as a bundled static
+  build** via `imageio-ffmpeg` (`get_ffmpeg_exe()` returns a path) or
+  `static-ffmpeg`. yt-dlp accepts `--ffmpeg-location`, so we can make ffmpeg
+  automatic through pip and stop asking users to `brew install ffmpeg`.
+- `tesseract` — the hard one: no clean official pip wheel bundling the binary +
+  language data. Options: bundle it in the packaged app (phase 54d), or
+  detect-and-guide with a one-line per-platform install (phase 54a). This is the
+  only dep that can't be fully pip-automated short of app bundling.
+
+**Phases** (each becomes its own item with a full design when picked up):
+- **54a — Dependency doctor + auto-provisioning.** A preflight that runs on
+  `start` and on the web app's first page: detect `yt-dlp`/`ffmpeg`/`tesseract`
+  (reuse item 42's Tesseract version check); **auto-provide ffmpeg via a bundled
+  pip build** and wire yt-dlp's `--ffmpeg-location` to it; for a missing Tesseract,
+  show a clear in-UI card with the exact copy-paste install for the user's OS
+  (`brew install tesseract` / winget / apt) and a "re-check" button — never a
+  traceback. Everything degrades to actionable guidance.
+- **54b — One-command launch + clean lifecycle.** `sidelinehd-extractor start`
+  (friendly alias) that runs the doctor, starts the server, **auto-opens the
+  browser** (`webbrowser.open`), prints "open http://127.0.0.1:8000 — press Ctrl+C
+  here to stop," and shuts down gracefully. Handle "port already in use" and
+  "already running" cleanly.
+- **54c — In-app onboarding + plain language.** A first-run welcome/explainer:
+  what the tool does, the four-step flow (roster → submit a game → results →
+  send feedback), empty-state guidance on every page, plain-language labels
+  (no "OCR"/"manifest"/"job" jargon in the primary UI), and a persistent "How this
+  works" panel. Directly answers "I don't understand how it works."
+- **54d — Packaged desktop app (the endgame).** A double-clickable macOS `.app`
+  (py2app/PyInstaller) and a Windows installer that **bundle Python + all deps
+  including Tesseract + language data**, with a menubar/tray control to start/stop
+  the server and open the UI. No terminal, no pip, no brew — download and run.
+  Depends on 54a/54b and item 19 (cross-platform packaging/CI).
+- **54e — Non-developer quickstart docs.** Rewrite the README/quickstart for a
+  coach, not a developer (screenshots, "download → double-click → paste your
+  game," troubleshooting). Folds item 19's doc gaps in.
+
+**Sequencing.** 54a → 54b → 54c deliver most of the value while staying
+pip-installable (ffmpeg becomes automatic, launch becomes one command, the UI
+teaches itself). 54d is the heavy lift that removes the terminal entirely; do it
+once 54a–54c prove the flow and item 19 establishes packaging/CI. Capture concrete
+friction from the current live-fire runs directly into 54a/54c acceptance criteria.
+
+**Deliberately out of scope (for now):** auto-updating the packaged app, code
+signing/notarization beyond what distribution requires (revisit at 54d), and the
+hosted/cloud seam (still deferred; see the CSRF hardening note).
 
 ## Discussion / Later Deliverables
 
