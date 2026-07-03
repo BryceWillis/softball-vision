@@ -4018,6 +4018,14 @@ per-device install" goal and item 19 (packaging/CI).
   send feedback), empty-state guidance on every page, plain-language labels
   (no "OCR"/"manifest"/"job" jargon in the primary UI), and a persistent "How this
   works" panel. Directly answers "I don't understand how it works."
+  **Roster-first is a specific requirement (owner feedback, live-fire):** the
+  submit page must explain *before the run* that adding the batting team's roster
+  first improves name matching (the manifest snapshots the roster at run time, so
+  a roster added afterward does not backfill), and offer a one-click path to add
+  it — e.g. a prompt/link on the submit page when no roster is configured, and a
+  paste box reachable from the submit flow rather than a separate "Manage rosters"
+  detour. Making the roster easy to add and clearly recommended up front is part
+  of 54c's done criteria.
 - **54d — Packaged desktop app (the endgame).** A double-clickable macOS `.app`
   (py2app/PyInstaller) and a Windows installer that **bundle Python + all deps
   including Tesseract + language data**, with a menubar/tray control to start/stop
