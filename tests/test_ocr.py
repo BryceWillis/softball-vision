@@ -1,4 +1,5 @@
 import io
+import shutil
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -10,11 +11,16 @@ from sidelinehd_extractor.ocr import (
     OCRBackendResult,
     OCRFieldConfig,
     FIELD_CONFIGS,
+    MULTI_PSM_VOTE_FIELDS,
+    NUMERIC_CONFIDENCE_FIELDS,
+    PREPROCESS_STRATEGIES,
     _extract_highlighted_lineup_crop,
+    _GLYPH_PAD_PX,
     _optional_tesserocr_backend,
     _parse_tesseract_tsv_output,
     _tesseract_install_hint,
     _tesseract_command,
+    _tesseract_ocr_preprocessed_image,
     create_ocr_backend,
     normalize_ocr_text,
     preprocess_for_ocr,
@@ -228,6 +234,214 @@ class OCRTests(unittest.TestCase):
 
         self.assertEqual(text, "plain text\n")
         self.assertIsNone(confidence)
+
+
+def _make_numeric_crop(text, width=32, height=23):
+    """Deterministic scorebug-like crop: bright digits on a dark noisy background."""
+
+    import cv2
+    import numpy as np
+
+    rng = np.random.default_rng(sum(ord(character) for character in text))
+    image = np.zeros((height, width, 3), dtype=np.float32)
+    for row in range(height):
+        image[row, :] = np.array([58, 48, 42], dtype=np.float32) * (1.0 + 0.25 * row / height)
+    image += rng.normal(0, 6.0, size=image.shape)
+    font_scale = 0.62 if len(text) <= 2 else 0.5
+    size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+    origin = ((width - size[0]) // 2, (height + size[1]) // 2)
+    cv2.putText(
+        image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (235, 235, 235), 1, cv2.LINE_AA
+    )
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+class PreprocessStrategyTests(unittest.TestCase):
+    def test_isolated_glyph_fields_use_pad_and_other_fields_default(self):
+        for field in MULTI_PSM_VOTE_FIELDS - {"count"}:
+            self.assertEqual(FIELD_CONFIGS[field].preprocess, "numeric_glyph_pad", field)
+        # count is multi-glyph ("1-2"): measured worse under the pad, stays default.
+        for field in ("count", "left_team", "right_team", "batter_card_name", "lineup_strip"):
+            self.assertEqual(FIELD_CONFIGS[field].preprocess, "default", field)
+        self.assertEqual(OCRFieldConfig().preprocess, "default")
+
+    def test_vote_fields_match_numeric_confidence_fields(self):
+        self.assertEqual(MULTI_PSM_VOTE_FIELDS, frozenset(NUMERIC_CONFIDENCE_FIELDS))
+
+    def test_unknown_preprocess_strategy_raises_with_known_names(self):
+        bogus = OCRFieldConfig(preprocess="hologram")
+        with patch.dict(FIELD_CONFIGS, {"left_score": bogus}):
+            with self.assertRaises(ValueError) as caught:
+                preprocess_for_ocr(_make_numeric_crop("4"), "left_score")
+        self.assertIn("hologram", str(caught.exception))
+        self.assertIn("numeric_glyph_pad", str(caught.exception))
+
+    def test_numeric_glyph_pad_adds_white_border_around_default_output(self):
+        crop = _make_numeric_crop("4")
+        padded = preprocess_for_ocr(crop, "left_score")
+        with patch.dict(
+            FIELD_CONFIGS, {"left_score": OCRFieldConfig(psm=10, scale=6, preprocess="default")}
+        ):
+            plain = preprocess_for_ocr(crop, "left_score")
+
+        self.assertEqual(padded.shape[0], plain.shape[0] + 2 * _GLYPH_PAD_PX)
+        self.assertEqual(padded.shape[1], plain.shape[1] + 2 * _GLYPH_PAD_PX)
+        # Border is white (Tesseract-friendly background); interior is the default output.
+        self.assertTrue((padded[:_GLYPH_PAD_PX, :] == 255).all())
+        self.assertTrue((padded[:, :_GLYPH_PAD_PX] == 255).all())
+        self.assertTrue(
+            (padded[_GLYPH_PAD_PX:-_GLYPH_PAD_PX, _GLYPH_PAD_PX:-_GLYPH_PAD_PX] == plain).all()
+        )
+
+    def test_every_registered_strategy_produces_binary_output(self):
+        import numpy as np
+
+        crop = _make_numeric_crop("26")
+        for name in PREPROCESS_STRATEGIES:
+            config = OCRFieldConfig(psm=7, scale=4, preprocess=name)
+            with patch.dict(FIELD_CONFIGS, {"left_team": config}):
+                processed = preprocess_for_ocr(crop, "left_team")
+            self.assertEqual(processed.dtype, np.uint8, name)
+            self.assertTrue(set(np.unique(processed)) <= {0, 255}, name)
+
+
+class MultiPsmVotingTests(unittest.TestCase):
+    def _run_field(self, field_name, results_by_psm, recorded_configs):
+        def fake_run(processed_image, config, name):
+            recorded_configs.append(config)
+            return results_by_psm[config.psm]
+
+        with patch("sidelinehd_extractor.ocr.ensure_tesseract_available"):
+            with patch("sidelinehd_extractor.ocr.preprocess_for_ocr", return_value=object()):
+                with patch(
+                    "sidelinehd_extractor.ocr._tesseract_ocr_preprocessed_image",
+                    side_effect=fake_run,
+                ):
+                    return tesseract_ocr_image(object(), field_name)
+
+    def test_numeric_field_runs_both_psms_and_higher_confidence_wins(self):
+        configs = []
+        result = self._run_field(
+            "left_score",
+            {
+                10: OCRBackendResult("8\n", "8", confidence=0.41, backend="tesseract"),
+                7: OCRBackendResult("3\n", "3", confidence=0.93, backend="tesseract"),
+            },
+            configs,
+        )
+
+        # Configured PSM (10) first, then the other vote PSM; preprocessing ran once.
+        self.assertEqual([config.psm for config in configs], [10, 7])
+        self.assertEqual(result.normalized_text, "3")
+        self.assertEqual(result.confidence, 0.93)
+
+    def test_confidence_tie_prefers_whitelist_valid_candidate(self):
+        configs = []
+        result = self._run_field(
+            "batter_number",
+            {
+                10: OCRBackendResult("1 z\n", "1 z", confidence=0.6, backend="tesseract"),
+                7: OCRBackendResult("12\n", "12", confidence=0.6, backend="tesseract"),
+            },
+            configs,
+        )
+        self.assertEqual(result.normalized_text, "12")
+
+    def test_tie_between_valid_candidates_keeps_configured_psm(self):
+        configs = []
+        result = self._run_field(
+            "right_score",
+            {
+                10: OCRBackendResult("4\n", "4", confidence=0.7, backend="tesseract"),
+                7: OCRBackendResult("9\n", "9", confidence=0.7, backend="tesseract"),
+            },
+            configs,
+        )
+        self.assertEqual(result.normalized_text, "4")
+
+    def test_missing_confidence_loses_to_scored_candidate(self):
+        configs = []
+        result = self._run_field(
+            "count",
+            {
+                7: OCRBackendResult("1-2\n", "1-2", confidence=None, backend="tesseract"),
+                10: OCRBackendResult("3-1\n", "3-1", confidence=0.2, backend="tesseract"),
+            },
+            configs,
+        )
+        self.assertEqual([config.psm for config in configs], [7, 10])
+        self.assertEqual(result.normalized_text, "3-1")
+
+    def test_text_field_is_never_double_run(self):
+        configs = []
+        result = self._run_field(
+            "left_team",
+            {7: OCRBackendResult("VIPERS\n", "VIPERS", confidence=0.5, backend="tesseract")},
+            configs,
+        )
+        self.assertEqual([config.psm for config in configs], [7])
+        self.assertEqual(result.normalized_text, "VIPERS")
+
+
+@unittest.skipUnless(shutil.which("tesseract"), "requires the Tesseract CLI")
+class NumericConfidenceRegressionTests(unittest.TestCase):
+    """Item 43's measurement gate as a test: the shipped numeric pipeline
+    (glyph-pad preprocessing + PSM voting) must not regress accuracy or
+    confidence against the pre-item-43 pipeline (default Otsu, single PSM)
+    on scorebug-like digit fixtures."""
+
+    CASES = [
+        ("left_score", "2"),
+        ("left_score", "4"),
+        ("right_score", "11"),
+        ("batter_number", "26"),
+        ("on_deck_number", "7"),
+        ("count", "1-2"),
+    ]
+
+    def _old_pipeline(self, crop, field_name):
+        config = FIELD_CONFIGS[field_name]
+        old_config = OCRFieldConfig(
+            psm=config.psm, whitelist=config.whitelist, scale=config.scale, preprocess="default"
+        )
+        with patch.dict(FIELD_CONFIGS, {field_name: old_config}):
+            processed = preprocess_for_ocr(crop, field_name)
+        return _tesseract_ocr_preprocessed_image(processed, old_config, field_name)
+
+    def test_shipped_numeric_pipeline_does_not_regress(self):
+        old_correct = new_correct = 0
+        paired_deltas = []
+        for field_name, truth in self.CASES:
+            crop = _make_numeric_crop(truth)
+            old = self._old_pipeline(crop, field_name)
+            new = tesseract_ocr_image(crop, field_name)
+            old_correct += old.normalized_text == truth
+            new_correct += new.normalized_text == truth
+            # Confidence is only comparable where both pipelines read the same
+            # text; comparing raw means would reward a pipeline for failing to
+            # read hard crops at all (a miss records no confidence).
+            if (
+                old.confidence is not None
+                and new.confidence is not None
+                and old.normalized_text == new.normalized_text
+            ):
+                paired_deltas.append(new.confidence - old.confidence)
+
+        self.assertGreaterEqual(new_correct, old_correct)
+        self.assertGreaterEqual(new_correct, len(self.CASES) - 1)
+        self.assertTrue(paired_deltas)
+        mean_delta = sum(paired_deltas) / len(paired_deltas)
+        self.assertGreaterEqual(mean_delta, -0.05)
+
+    def test_empty_crop_still_reads_empty(self):
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        empty = np.clip(
+            rng.normal(0, 6.0, (23, 32, 3)) + np.array([58, 48, 42])[None, None, :], 0, 255
+        ).astype(np.uint8)
+        result = tesseract_ocr_image(empty, "right_score")
+        self.assertEqual(result.normalized_text, "")
 
 
 if __name__ == "__main__":

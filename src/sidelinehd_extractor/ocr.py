@@ -33,12 +33,17 @@ class OCRBackendResult:
 
 @dataclass(frozen=True)
 class OCRFieldConfig:
-    """Tesseract settings for one crop field."""
+    """Tesseract settings for one crop field.
+
+    ``preprocess`` names a strategy in ``PREPROCESS_STRATEGIES`` so binarization
+    is tunable per field/template without touching ``preprocess_for_ocr``.
+    """
 
     psm: int = 7
     whitelist: Optional[str] = None
     scale: int = 4
     optional: bool = False
+    preprocess: str = "default"
 
 
 OCRCallable = Callable[[object, str], OCRBackendResult]
@@ -52,13 +57,26 @@ FIELD_CONFIGS: Dict[str, OCRFieldConfig] = {
     "batter_card_name": OCRFieldConfig(psm=7, scale=5),
     "lineup_strip": OCRFieldConfig(psm=7, scale=5),
     "inning": OCRFieldConfig(psm=7, whitelist="0123456789TtBbOoPp^▲△- ", scale=6),
+    # count is three glyphs ("1-2"), not an isolated glyph: measurement showed
+    # the pad strategy costs it confidence with no accuracy gain, so it keeps
+    # the default binarization (it still gets multi-PSM voting).
     "count": OCRFieldConfig(psm=7, whitelist="0123456789- ", scale=6),
-    "left_score": OCRFieldConfig(psm=10, whitelist="0123456789", scale=6),
-    "right_score": OCRFieldConfig(psm=10, whitelist="0123456789", scale=6),
+    "left_score": OCRFieldConfig(
+        psm=10, whitelist="0123456789", scale=6, preprocess="numeric_glyph_pad"
+    ),
+    "right_score": OCRFieldConfig(
+        psm=10, whitelist="0123456789", scale=6, preprocess="numeric_glyph_pad"
+    ),
     "game_status": OCRFieldConfig(psm=7, scale=4, optional=True),
-    "batter_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
-    "on_deck_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
-    "batter_card_number": OCRFieldConfig(psm=10, whitelist="0123456789#", scale=6),
+    "batter_number": OCRFieldConfig(
+        psm=10, whitelist="0123456789#", scale=6, preprocess="numeric_glyph_pad"
+    ),
+    "on_deck_number": OCRFieldConfig(
+        psm=10, whitelist="0123456789#", scale=6, preprocess="numeric_glyph_pad"
+    ),
+    "batter_card_number": OCRFieldConfig(
+        psm=10, whitelist="0123456789#", scale=6, preprocess="numeric_glyph_pad"
+    ),
 }
 
 NUMERIC_CONFIDENCE_FIELDS = {
@@ -69,6 +87,15 @@ NUMERIC_CONFIDENCE_FIELDS = {
     "batter_card_number",
     "on_deck_number",
 }
+
+# Item 43: the critical numeric fields are OCR'd under both PSM 7 and PSM 10
+# and the higher-confidence normalized read wins (tie -> the whitelist-valid
+# candidate). Same membership as the item-40 min-confidence set: these are the
+# fields where a single misread glyph flips an event. Text fields are never
+# double-run.
+MULTI_PSM_VOTE_FIELDS = frozenset(NUMERIC_CONFIDENCE_FIELDS)
+
+_VOTE_PSMS = (7, 10)
 
 MIN_SUPPORTED_TESSERACT_VERSION = (4, 1)
 
@@ -200,8 +227,86 @@ def _parse_version_prefix(version: str) -> Optional[tuple[int, int]]:
     return int(match.group(1)), int(match.group(2))
 
 
+# White margin (in preprocessed pixels) added around isolated numeric glyphs;
+# Tesseract drops or misreads lone digits whose strokes sit near the image edge.
+_GLYPH_PAD_PX = 5
+
+# Adaptive-threshold shape for text on uneven backgrounds (e.g. gradient team
+# banners). Measured *worse* than Otsu on the current fixture set, so no field
+# ships with it by default — it exists as a per-template tuning option.
+_TEXT_ADAPTIVE_BLOCK_SIZE = 75
+_TEXT_ADAPTIVE_C = 15
+
+
+def _binarize_default(gray):
+    """Blur + Otsu, inverted to dark-on-light (the pre-item-43 pipeline).
+
+    The overlay text is bright on a dark translucent background. Tesseract tends
+    to perform better with dark text on a light background, so invert after
+    thresholding.
+    """
+
+    import cv2
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return cv2.bitwise_not(binary)
+
+
+def _binarize_numeric_glyph_pad(gray):
+    """Default binarization plus a white border, tuned for isolated glyphs.
+
+    Item 43 measurement (synthetic scorebug digit fixtures, real Tesseract):
+    a small white margin recovered single digits the bare Otsu output lost
+    (14/18 vs 11/18 correct) at equal confidence; the design's hard-threshold
+    example regressed at every value tried, so this is the shipped numeric
+    strategy instead.
+    """
+
+    import cv2
+
+    inverted = _binarize_default(gray)
+    return cv2.copyMakeBorder(
+        inverted,
+        _GLYPH_PAD_PX,
+        _GLYPH_PAD_PX,
+        _GLYPH_PAD_PX,
+        _GLYPH_PAD_PX,
+        cv2.BORDER_CONSTANT,
+        value=255,
+    )
+
+
+def _binarize_text_adaptive(gray):
+    """Blur + Gaussian adaptive threshold, inverted to dark-on-light."""
+
+    import cv2
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    binary = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        _TEXT_ADAPTIVE_BLOCK_SIZE,
+        _TEXT_ADAPTIVE_C,
+    )
+    return cv2.bitwise_not(binary)
+
+
+PREPROCESS_STRATEGIES: Dict[str, Callable[[object], object]] = {
+    "default": _binarize_default,
+    "numeric_glyph_pad": _binarize_numeric_glyph_pad,
+    "text_adaptive": _binarize_text_adaptive,
+}
+
+
 def preprocess_for_ocr(image: object, field_name: str):
-    """Prepare a crop image for OCR using OpenCV."""
+    """Prepare a crop image for OCR using OpenCV.
+
+    Grayscale + upscale are shared; binarization dispatches on the field
+    config's ``preprocess`` strategy.
+    """
 
     import cv2
 
@@ -211,6 +316,14 @@ def preprocess_for_ocr(image: object, field_name: str):
         raise ValueError("image must be an OpenCV image array")
 
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+    binarize = PREPROCESS_STRATEGIES.get(config.preprocess)
+    if binarize is None:
+        known = ", ".join(sorted(PREPROCESS_STRATEGIES))
+        raise ValueError(
+            f"unknown preprocess strategy {config.preprocess!r} for field "
+            f"'{field_name}' (known: {known})"
+        )
+
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
@@ -225,12 +338,56 @@ def preprocess_for_ocr(image: object, field_name: str):
             interpolation=cv2.INTER_CUBIC,
         )
 
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return binarize(gray)
 
-    # The overlay text is bright on a dark translucent background. Tesseract tends
-    # to perform better with dark text on a light background, so invert after thresholding.
-    return cv2.bitwise_not(binary)
+
+def _is_whitelist_valid(text: str, whitelist: Optional[str]) -> bool:
+    if not text:
+        return False
+    if not whitelist:
+        return True
+    return all(character in whitelist for character in text)
+
+
+def _ocr_with_psm_voting(
+    run_config: Callable[[OCRFieldConfig], OCRBackendResult],
+    config: OCRFieldConfig,
+    field_name: str,
+) -> OCRBackendResult:
+    """Run OCR once, or vote across PSMs for the critical numeric fields.
+
+    ``run_config`` executes the backend on the same preprocessed image with a
+    given config. Non-vote fields run exactly once with their configured PSM.
+    Vote fields run under each of ``_VOTE_PSMS`` (configured PSM first, so a
+    tie keeps pre-voting behavior); the higher-confidence normalized result
+    wins, a missing confidence loses to any scored one, and an exact tie
+    prefers the whitelist-valid candidate.
+    """
+
+    if field_name not in MULTI_PSM_VOTE_FIELDS:
+        return run_config(config)
+
+    psms = dict.fromkeys((config.psm, *_VOTE_PSMS))
+    best: Optional[OCRBackendResult] = None
+    for psm in psms:
+        candidate = run_config(replace(config, psm=psm))
+        if best is None or _beats_incumbent(candidate, best, config.whitelist):
+            best = candidate
+    return best
+
+
+def _beats_incumbent(
+    candidate: OCRBackendResult,
+    incumbent: OCRBackendResult,
+    whitelist: Optional[str],
+) -> bool:
+    candidate_confidence = -1.0 if candidate.confidence is None else candidate.confidence
+    incumbent_confidence = -1.0 if incumbent.confidence is None else incumbent.confidence
+    if candidate_confidence != incumbent_confidence:
+        return candidate_confidence > incumbent_confidence
+    return _is_whitelist_valid(candidate.normalized_text, whitelist) and not _is_whitelist_valid(
+        incumbent.normalized_text, whitelist
+    )
 
 
 def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
@@ -251,7 +408,11 @@ def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
 
     processed = preprocess_for_ocr(image, field_name)
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
-    result = _tesseract_ocr_preprocessed_image(processed, config, field_name)
+    result = _ocr_with_psm_voting(
+        lambda vote_config: _tesseract_ocr_preprocessed_image(processed, vote_config, field_name),
+        config,
+        field_name,
+    )
     if field_name == "lineup_strip":
         return replace(result, source_detail=LINEUP_SOURCE_FULL_STRIP)
     return result
@@ -280,7 +441,11 @@ class TesserocrOCRBackend:
 
         processed = preprocess_for_ocr(image, field_name)
         config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
-        result = self._ocr_preprocessed(processed, config, field_name)
+        result = _ocr_with_psm_voting(
+            lambda vote_config: self._ocr_preprocessed(processed, vote_config, field_name),
+            config,
+            field_name,
+        )
         if field_name == "lineup_strip":
             return replace(result, source_detail=LINEUP_SOURCE_FULL_STRIP)
         return result

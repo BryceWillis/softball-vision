@@ -34,7 +34,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **40** — OCR Confidence Capture | Done (Pass 17) | **OCR track (Codex).** Tesseract TSV parsing now captures 0–1 OCR confidence with numeric-min/text-weighted aggregation and degrades safely on malformed output. |
 | — | **42** — Tesseract Version Capture | Done (Pass 17) | Captures `tesseract --version`, warns non-fatally for missing/old/unrecognized versions, and records the version in `manifest.json`. |
 | — | **38** — Feedback Log | Done (Pass 17) | Added CLI-first sanitized Markdown feedback logs with stable player pseudonyms, preserved jersey numbers, environment/version metadata, review flags, and guard tests against name leakage. |
-| 9 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 9 | **43** — OCR Accuracy Follow-ons | Ready for review (branch `impl/item-43`, Fable 5) | Multi-PSM voting (psm 7 vs 10, higher item-40 confidence wins) for the six critical numeric fields + `OCRFieldConfig.preprocess` strategy dispatch. Measured deviation: shipped `numeric_glyph_pad` (Otsu + white margin), not the hard-threshold example — see the item note. |
 | 9b | **52** — Persist Roster Display Name | Ready to implement | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
 | 10 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. 39a/39b→items 46/47; 39c/39d/39e→items 49/50/51. Depends on items 37, 38, 20. Cloud is a later seam. |
 | 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
@@ -3216,7 +3216,8 @@ failure, and manifest persistence.
 ### 43. OCR Accuracy Follow-ons — Multi-PSM Voting and Per-Field Preprocessing
 
 Source: Architect review 2026-07-02 / accuracy
-Status: Ready to implement (depends on item 40)
+Status: Ready for review (implemented on branch `impl/item-43` by Fable 5; measured
+strategy deviation flagged in CODE-REVIEW.md)
 
 Depends on confidence being available (item 40); measure every change against
 confidence deltas on a small fixture set before committing thresholds.
