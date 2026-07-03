@@ -6,7 +6,10 @@ from io import StringIO
 from pathlib import Path
 
 from sidelinehd_extractor.config import (
+    BUILTIN_TEMPLATE_NAME,
     ProjectConfig,
+    default_overlay_template,
+    full_frame_overlay_template,
     load_overlay_template,
     load_project_config,
     load_roster,
@@ -44,6 +47,28 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertAlmostEqual(region.y, 0.025)
         self.assertAlmostEqual(region.width, 0.050)
         self.assertAlmostEqual(region.height, 0.064)
+
+    def test_default_overlay_template_is_the_packaged_sidelinehd_template(self):
+        template = default_overlay_template()
+
+        self.assertEqual(template.name, BUILTIN_TEMPLATE_NAME)
+        for field_name in ("left_score", "right_score", "count", "inning", "batter_card"):
+            self.assertIn(field_name, template.regions)
+        self.assertNotIn("full_frame", template.regions)
+        # The packaged copy must stay in sync with the calibrated example.
+        example = load_overlay_template(
+            Path("examples/sidelinehd_640x360_active.example.json")
+        )
+        self.assertEqual(set(template.regions), set(example.regions))
+        for name, region in example.regions.items():
+            self.assertEqual(template.regions[name], region)
+
+    def test_full_frame_overlay_template_is_explicit_opt_in(self):
+        template = full_frame_overlay_template()
+
+        self.assertEqual(template.name, "full_frame")
+        self.assertEqual(list(template.regions), ["full_frame"])
+        self.assertEqual(template.regions["full_frame"].width, 1.0)
 
     def test_load_roster_csv(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,6 +6,7 @@ import configparser
 import csv
 import json
 import sys
+from importlib import resources
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -111,7 +112,10 @@ def load_overlay_template(path: Path) -> OverlayTemplate:
     """Load an overlay template JSON file."""
 
     source = path.expanduser()
-    data = _read_json(source)
+    return _overlay_template_from_data(_read_json(source), fallback_name=source.stem)
+
+
+def _overlay_template_from_data(data: Dict[str, Any], fallback_name: str) -> OverlayTemplate:
     raw_regions = data.get("regions")
     if not isinstance(raw_regions, dict) or not raw_regions:
         raise ValueError("overlay template must include a non-empty 'regions' object")
@@ -128,7 +132,7 @@ def load_overlay_template(path: Path) -> OverlayTemplate:
         )
 
     return OverlayTemplate(
-        name=str(data.get("name") or source.stem),
+        name=str(data.get("name") or fallback_name),
         video_width=data.get("video_width"),
         video_height=data.get("video_height"),
         regions=regions,
@@ -136,13 +140,43 @@ def load_overlay_template(path: Path) -> OverlayTemplate:
     )
 
 
+BUILTIN_TEMPLATE_NAME = "sidelinehd_640x360_active"
+
+
+def builtin_overlay_template() -> OverlayTemplate:
+    """Load the packaged SidelineHD overlay template shipped with the tool."""
+
+    resource = (
+        resources.files("sidelinehd_extractor")
+        .joinpath("data")
+        .joinpath(f"{BUILTIN_TEMPLATE_NAME}.json")
+    )
+    data = json.loads(resource.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("packaged overlay template must be a JSON object")
+    return _overlay_template_from_data(data, fallback_name=BUILTIN_TEMPLATE_NAME)
+
+
 def default_overlay_template() -> OverlayTemplate:
-    """Return a safe fallback template that crops the whole frame."""
+    """Return the template used when no overlay template is configured.
+
+    This is the packaged SidelineHD scorebug template, not a whole-frame crop:
+    a run with no configured template must still read real scoreboard regions
+    (a full-frame fallback OCRs mush and silently yields zero events). Callers
+    that genuinely want the whole frame opt in via
+    ``full_frame_overlay_template``.
+    """
+
+    return builtin_overlay_template()
+
+
+def full_frame_overlay_template() -> OverlayTemplate:
+    """Return the single whole-frame region template (explicit opt-in only)."""
 
     return OverlayTemplate(
         name="full_frame",
         regions={"full_frame": RegionFraction(x=0.0, y=0.0, width=1.0, height=1.0)},
-        notes="Fallback template used when no overlay template is provided.",
+        notes="Whole-frame template for calibration/debugging; not an OCR default.",
     )
 
 
