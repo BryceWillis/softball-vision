@@ -35,6 +35,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **42** — Tesseract Version Capture | Done (Pass 17) | Captures `tesseract --version`, warns non-fatally for missing/old/unrecognized versions, and records the version in `manifest.json`. |
 | — | **38** — Feedback Log | Done (Pass 17) | Added CLI-first sanitized Markdown feedback logs with stable player pseudonyms, preserved jersey numbers, environment/version metadata, review flags, and guard tests against name leakage. |
 | 9 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 9b | **52** — Persist Roster Display Name | Ready to implement | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
 | 10 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. 39a/39b→items 46/47; 39c/39d/39e→items 49/50/51. Depends on items 37, 38, 20. Cloud is a later seam. |
 | 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
 | 12 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
@@ -3898,7 +3899,56 @@ mandatory, not optional.
 **Out of scope:** authenticated GitHub API submission, attachments, and any
 telemetry — hand-off is user-initiated links only.
 
+### 52. Persist Roster Display Name (round-trip pretty team name)
+
+Status: Ready to implement
+Source: Item 50 review (Pass 19). Small, contained; not an item 50 defect —
+surfaces a pre-existing roster-CSV format limitation.
+
+The roster CSV stores only `number,full_name,preferred_name,display_name,aliases`
+(no team name), and `load_roster_csv` falls back to `team_name or source.stem`.
+So creating **"St. Mary's 12U"** saves `st_mary_s_12u.csv` and, on reload, the UI
+(and CLI) display **"st_mary_s_12u"** — the pretty capitalization/spacing is lost.
+Item 50's roster UI made this visible because it creates by pretty name then
+re-displays the stem.
+
+**Change.** Persist the roster's display/team name in the file so it survives a
+round-trip, without breaking the existing header-based readers. Preferred
+approach: write a leading comment line (e.g. `# team_name: St. Mary's 12U`) that
+`write_roster_csv` emits and `load_roster_csv`/`load_roster` parse back, falling
+back to the stem when absent (so old files still load). Keep the `csv.DictReader`
+column contract unchanged. Touch points: `write_roster_csv`, `load_roster_csv`
+(and `load_roster`/`make_roster_from_lines`); the web `create_roster` already has
+the pretty name and just needs the writer to keep it. Verify `feedback.py`
+`_roster_from_manifest` and any manifest roster snapshot still round-trip.
+
+**Acceptance criteria.**
+1. A roster created as "St. Mary's 12U" reloads (CLI and web) with team name
+   "St. Mary's 12U", not the stem.
+2. Roster files written before this change still load (stem fallback), and the
+   `number,full_name,…` column contract is unchanged.
+3. Full suite passes; placeholder-only fixtures.
+
 ## Discussion / Later Deliverables
+
+### Web App — CSRF / same-origin hardening (deferred)
+
+Source: Item 50 review (Pass 19).
+
+None of the webapp's state-changing routes (job submit, corrections apply/clear,
+roster create/save/delete/set-default across items 46–50) have CSRF or
+same-origin protection, and there is no auth. On a single-user `localhost`
+install this is the accepted posture, but a malicious page open in the user's
+browser could POST to `127.0.0.1:<port>` and, e.g., delete a roster or mutate a
+run. Low risk today; **must be addressed before the epic's "cloud/hosted" seam**
+is ever taken (add a same-origin/Origin-header check or a CSRF token to all
+mutating routes). Deletes/mutations should also prefer server-side confirmation
+tokens over client-only `onsubmit` prompts if this hardens.
+
+Reason to defer: local-first, single-user, loopback-bound, no auth by design; no
+hosted deployment exists yet.
+
+
 
 ### 22. Detection Configuration Object
 
