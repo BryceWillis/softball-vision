@@ -124,7 +124,7 @@ def default_ytdlp_executable() -> List[str]:
         return [executable]
     if importlib.util.find_spec("yt_dlp") is not None:
         return [sys.executable, "-m", "yt_dlp"]
-    raise RuntimeError(YTDLP_REINSTALL_MESSAGE)
+    raise FileNotFoundError(YTDLP_REINSTALL_MESSAGE)
 
 
 def resolve_ytdlp_executable() -> List[str]:

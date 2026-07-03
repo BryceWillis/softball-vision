@@ -149,7 +149,7 @@ class YoutubeTests(unittest.TestCase):
                 "sidelinehd_extractor.youtube.importlib.util.find_spec",
                 return_value=None,
             ):
-                with self.assertRaises(RuntimeError) as context:
+                with self.assertRaises(FileNotFoundError) as context:
                     default_ytdlp_executable()
 
         self.assertIn("yt-dlp is required", str(context.exception))

@@ -29,6 +29,10 @@ reinstall message when neither is available. Routed both `build_ytdlp_command()`
 and `build_ytdlp_playlist_command()` defaults through the helper while preserving
 explicit executable overrides. Tests cover script resolution, module fallback,
 absent-both error text, builder default routing, and override preservation.
+Review-defect follow-up: the absent-dependency path now raises
+`FileNotFoundError`, so `cli.main()` handles it through the existing clean
+`Error: ...` exit-1 path; the CLI-level regression test covers that no traceback
+escapes.
 
 **Deviations:** None.
 
