@@ -656,6 +656,31 @@ class CLITests(unittest.TestCase):
         self.assertIn("runs/does-not-exist", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_main_prints_clean_error_when_ytdlp_dependency_is_unavailable(self):
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+
+        with (
+            patch("sidelinehd_extractor.youtube.shutil.which", return_value=None),
+            patch("sidelinehd_extractor.youtube.importlib.util.find_spec", return_value=None),
+            redirect_stderr(stderr),
+            redirect_stdout(stdout),
+        ):
+            exit_code = main(
+                [
+                    "download",
+                    "https://youtu.be/example",
+                    "--output-dir",
+                    "videos",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Error: yt-dlp is required", stderr.getvalue())
+        self.assertIn("pip install -e .", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

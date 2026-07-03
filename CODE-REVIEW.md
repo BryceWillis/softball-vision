@@ -19,7 +19,22 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 53 — Make the Declared `yt-dlp` Dependency Sufficient
+**Status:** Ready for Review
+
+Implemented `default_ytdlp_executable()` so the default download invocation uses
+the `yt-dlp` console script when present, falls back to `python -m yt_dlp` when
+only the declared Python dependency is importable, and raises an actionable
+reinstall message when neither is available. Routed both `build_ytdlp_command()`
+and `build_ytdlp_playlist_command()` defaults through the helper while preserving
+explicit executable overrides. Tests cover script resolution, module fallback,
+absent-both error text, builder default routing, and override preservation.
+Review-defect follow-up: the absent-dependency path now raises
+`FileNotFoundError`, so `cli.main()` handles it through the existing clean
+`Error: ...` exit-1 path; the CLI-level regression test covers that no traceback
+escapes.
+
+**Deviations:** None.
 
 ## Open Items
 
