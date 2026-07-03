@@ -19,7 +19,17 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 51 — Web App 39e: Send-Feedback UI
+**Status:** Ready for Review
+
+Implemented `/jobs/{id}/feedback` and `/jobs/{id}/feedback/preview` on the
+local FastAPI app. The route renders only item 38's sanitized feedback Markdown
+pipeline output, then provides client-side GitHub issue, mailto, and copy
+hand-off paths with no outbound request from the app. Added mandatory web leak
+coverage for a label-only player name: the seeded name is absent from the
+preview, decoded GitHub issue body, decoded email body, and copy body while the
+jersey number remains present. Also covered note preview refresh, not-done job
+fallback, unknown job 404, and the no-outbound-request guard.
 
 ## Open Items
 

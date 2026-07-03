@@ -52,7 +52,10 @@
 
   {% if job.status == "done" %}
     <h2>Result</h2>
-    <p><a href="/jobs/{{ job.id }}/results">View results</a></p>
+    <p>
+      <a href="/jobs/{{ job.id }}/results">View results</a> |
+      <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
+    </p>
     <pre>{{ job.result | tojson(indent=2) }}</pre>
   {% elif job.status == "error" %}
     <h2>Error</h2>

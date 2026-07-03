@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -38,7 +39,13 @@ from sidelinehd_extractor.corrections import (
     write_event_corrections,
 )
 from sidelinehd_extractor.events import load_events
-from sidelinehd_extractor.exports import format_timestamp
+from sidelinehd_extractor.exports import PROJECT_URL, format_timestamp
+from sidelinehd_extractor.feedback import (
+    build_name_sanitizer,
+    load_feedback_data,
+    render_feedback_log,
+    sanitize_feedback,
+)
 from sidelinehd_extractor.models import EventType, HalfInning, Roster, RosterPlayer
 from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish_kit_fragment
 from sidelinehd_extractor.review import collect_event_review_rows
@@ -54,6 +61,7 @@ _VALID_KINDS = ("single", "playlist")
 REVIEW_REPORT_FILENAME = "review_report.md"
 CORRECTIONS_FILENAME = "corrections.csv"
 EVENTS_FILENAME = "events.jsonl"
+FEEDBACK_ISSUE_TITLE = "SidelineHD Extractor Feedback"
 
 EDIT_FIELDS = (
     "label",
@@ -170,6 +178,42 @@ def _run_dir_for_entry(job: Job, entry: int) -> Path:
     if not run_dir:
         raise HTTPException(status_code=404, detail="This entry has no run directory")
     return Path(run_dir)
+
+
+def _render_feedback_markdown(run_dir: Path, note: Optional[str]) -> str:
+    """Return item 38's post-redaction Markdown and nothing else.
+
+    This route is the one sanctioned egress surface: do not read roster names,
+    raw event labels, or samples directly into a response here. The browser only
+    receives the Markdown produced by the feedback sanitizer pipeline.
+    """
+
+    data = load_feedback_data(run_dir, note=note)
+    sanitizer = build_name_sanitizer(data)
+    log = sanitize_feedback(data, sanitizer)
+    return render_feedback_log(log)
+
+
+def _feedback_handoff_links(markdown: str) -> dict:
+    return {
+        "github_issue_url": f"{PROJECT_URL.rstrip('/')}/issues/new?"
+        + urlencode({"title": FEEDBACK_ISSUE_TITLE, "body": markdown}),
+        "mailto_url": "mailto:?"
+        + urlencode({"subject": FEEDBACK_ISSUE_TITLE, "body": markdown}),
+    }
+
+
+def _feedback_context(job: Job, entry: int, note: str) -> dict:
+    run_dir = _run_dir_for_entry(job, entry)
+    markdown = _render_feedback_markdown(run_dir, note=note if note else None)
+    return {
+        "job": job,
+        "entry": entry,
+        "pending": False,
+        "note": note,
+        "markdown": markdown,
+        **_feedback_handoff_links(markdown),
+    }
 
 
 def load_configured_roster() -> Optional[Roster]:
@@ -482,6 +526,37 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
             request,
             "results.html",
             {"job": job, "blocks": blocks, "copy_script": PUBLISH_KIT_COPY_SCRIPT},
+        )
+
+    @app.get("/jobs/{job_id}/feedback", response_class=HTMLResponse)
+    def job_feedback(request: Request, job_id: str, entry: int = 0) -> HTMLResponse:
+        job = _get_job_or_404(job_id)
+        if job.status != "done":
+            return templates.TemplateResponse(
+                request,
+                "feedback.html",
+                {"job": job, "entry": entry, "pending": True, "note": ""},
+            )
+        return templates.TemplateResponse(
+            request, "feedback.html", _feedback_context(job, entry, note="")
+        )
+
+    @app.post("/jobs/{job_id}/feedback/preview", response_class=HTMLResponse)
+    def preview_feedback(
+        request: Request,
+        job_id: str,
+        entry: int = Form(default=0),
+        note: str = Form(default=""),
+    ) -> HTMLResponse:
+        job = _get_job_or_404(job_id)
+        if job.status != "done":
+            return templates.TemplateResponse(
+                request,
+                "feedback.html",
+                {"job": job, "entry": entry, "pending": True, "note": note},
+            )
+        return templates.TemplateResponse(
+            request, "feedback.html", _feedback_context(job, entry, note=note)
         )
 
     @app.get("/jobs/{job_id}/review", response_class=HTMLResponse)
