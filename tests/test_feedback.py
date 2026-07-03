@@ -38,13 +38,14 @@ class FeedbackLogTests(unittest.TestCase):
 
             text = result.output_path.read_text(encoding="utf-8")
 
-        leaked_tokens = ["Emma", "Olivia", "Maya", "Local Stars"]
+        leaked_tokens = ["Emma", "Olivia", "Maya", "Charlotte", "Local Stars"]
         for token in leaked_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
         self.assertIn("Player A", text)
         self.assertIn("Player B", text)
         self.assertIn("Player C", text)
+        self.assertIn("Player D", text)
 
 
 def _write_feedback_fixture(run_dir: Path) -> None:
@@ -117,6 +118,13 @@ def _write_feedback_fixture(run_dir: Path) -> None:
                 player_number="9",
                 player_name="Maya R.",
                 metadata={"batter_card_name": "Maya R."},
+            ),
+            Event(
+                EventType.AT_BAT_START,
+                900,
+                "Charlotte P. (#44)",
+                player_number="44",
+                metadata={"ocr_player_number": "44"},
             ),
         ],
     )

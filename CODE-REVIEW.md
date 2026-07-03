@@ -19,15 +19,17 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
-
-## Open Items
-
 #### CR-52 — Feedback sanitizer only redacts names it can register as a source; a label-only or non-`name` field name can leak
 **File:** [feedback.py](src/sidelinehd_extractor/feedback.py) — `build_name_sanitizer` / `NameSanitizer.sanitize_text`
 **Pass:** 17 — correctness/privacy (non-blocking follow-up to item 38)
 
 `build_name_sanitizer` registers replacement sources from the roster, `event.player_name`, `"name"`-keyed metadata, and samples whose `field_name` contains `"name"`. `sanitize_text` then only masks those registered strings/tokens. A real name that appears **only** in an `event.label` or in a sample field whose name does not contain `"name"` — and never as a registered source — passes through unchanged into the feedback log, which is the one sanctioned egress surface. In practice labels are derived from the same `player_name` that is registered, so the gap is narrow and the guard tests cover the common paths, but a miss here leaks PII. Harden by also registering names parsed from `event.label` (e.g. the `"Name (#NN)"` pattern) into the sanitizer, and/or add a stricter net; extend the leak-guard test to seed a name that exists *only* in a label. Approved item 38 regardless — this is defense-in-depth on an already-guarded surface, not a demonstrated leak in current fixtures.
+
+**Implementation note.** `build_name_sanitizer()` now registers names parsed from event labels matching the `"Name (#NN)"` pattern before rendering feedback, so label-only names get stable `Player X` pseudonyms. The feedback leak-guard fixture now includes `Charlotte P. (#44)` with no `player_name`, no roster entry, and no name-keyed metadata/sample source, and asserts `Charlotte` is absent while the generated `Player D` pseudonym appears.
+
+## Open Items
+
+_No open items._
 
 ## Deferred Items
 
