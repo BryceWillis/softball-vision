@@ -13,7 +13,11 @@ from sidelinehd_extractor.models import (
     RosterPlayer,
 )
 from sidelinehd_extractor.processing import write_jsonl
-from sidelinehd_extractor.review_report import render_review_report, write_review_report
+from sidelinehd_extractor.review_report import (
+    render_review_report,
+    summarize_review_report_text,
+    write_review_report,
+)
 
 
 class ReviewReportTests(unittest.TestCase):
@@ -206,6 +210,42 @@ class ReviewReportTests(unittest.TestCase):
             text = result.output_path.read_text(encoding="utf-8")
             self.assertIn("field-never-read", text)
             self.assertIn("right_score", text)
+
+    def test_write_review_report_ignores_corrupt_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            (run_dir / "manifest.json").write_text("{", encoding="utf-8")
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertIn("No questionable events found.", text)
+            self.assertNotIn("## Run Warnings", text)
+
+    def test_summarize_review_report_text_round_trips_rendered_report(self):
+        text = render_review_report(
+            events=[],
+            warnings=[
+                {"code": "field-never-read", "field": "right_score", "message": "never read"},
+                {"code": "empty-field", "field": "outs"},
+            ],
+        )
+
+        summary = summarize_review_report_text(text)
+
+        self.assertEqual(summary.flagged_count, 0)
+        self.assertEqual(len(summary.warnings), 2)
+        self.assertIn("field-never-read", summary.warnings[0])
+        self.assertIn("never read", summary.warnings[0])
+        self.assertIn("empty-field", summary.warnings[1])
+
+    def test_summarize_review_report_text_handles_missing_sections(self):
+        summary = summarize_review_report_text("# Something Else\n\nNo counts here.\n")
+
+        self.assertIsNone(summary.flagged_count)
+        self.assertEqual(summary.warnings, [])
 
 
 if __name__ == "__main__":

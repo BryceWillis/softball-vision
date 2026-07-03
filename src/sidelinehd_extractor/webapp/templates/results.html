@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Results {{ job.id[:8] }} — SidelineHD Extractor</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           max-width: 72rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.3rem; }
+    h2 { font-size: 1.05rem; }
+    a { color: #1447a3; }
+    .job-url { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem;
+               word-break: break-all; }
+    .job-kind { color: #555; font-size: 0.8rem; text-transform: uppercase;
+                letter-spacing: 0.04em; margin-right: 0.5rem; }
+    .game-block { border: 1px solid #ddd; border-radius: 8px; padding: 1rem;
+                  margin-bottom: 1.2rem; }
+    .game-block > h2 { margin-top: 0; }
+    .game-block.error-block { border-color: #e2a3a9; background: #fdf3f4; }
+    .block-error { color: #a3131f; }
+    .review-summary { color: #555; font-size: 0.9rem; margin: 0.2rem 0 0.8rem; }
+    .review-warnings { color: #8a5a00; font-size: 0.9rem; margin: 0.3rem 0 0.8rem;
+                       padding-left: 1.2rem; }
+    /* Publish-kit fragment styling (classes come from render_publish_kit_fragment). */
+    .sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 16px; align-items: start; }
+    .panel { background: #ffffff; border: 1px solid #cfd7df; border-radius: 8px;
+             padding: 16px; }
+    .panel-header { display: flex; justify-content: space-between; gap: 12px;
+                    align-items: center; margin-bottom: 10px; }
+    .panel-header h2 { margin: 0; }
+    .source { margin-bottom: 10px; color: #5d6d7e; font-size: 0.85rem;
+              overflow-wrap: anywhere; }
+    .panel textarea { width: 100%; min-height: 260px; resize: vertical;
+                      border: 1px solid #cfd7df; border-radius: 6px; padding: 12px;
+                      background: #fbfcfd; white-space: pre;
+                      font: 0.92rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .panel button { min-height: 40px; border: 0; border-radius: 6px; padding: 0 14px;
+                    background: #0969da; color: #ffffff; font-weight: 700;
+                    cursor: pointer; white-space: nowrap; }
+    .panel button:hover { background: #0756b3; }
+    .status { min-height: 1.3em; margin-top: 8px; color: #5d6d7e; font-size: 0.9rem; }
+    .status.success { color: #1a7f37; }
+    .status.warning { color: #9a6700; }
+    @media (max-width: 760px) { .sections { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <p><a href="/">&larr; All jobs</a> | <a href="/jobs/{{ job.id }}">Job detail</a></p>
+  <h1>Results <span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
+
+  {% if job.status != "done" %}
+    <p>This job is not finished yet (status: {{ job.status }}).
+       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+  {% elif not blocks %}
+    <p>The job finished but produced no game results.
+       See the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+  {% else %}
+    {% for block in blocks %}
+      {% if block.kind == "error" %}
+        <section class="game-block error-block">
+          <h2>{{ block.label }}</h2>
+          <p class="block-error">Failed: {{ block.error }}</p>
+        </section>
+      {% else %}
+        <section class="game-block">
+          <h2>{{ block.label }}</h2>
+          {% if block.flagged_count is not none %}
+            <p class="review-summary">Flagged events: {{ block.flagged_count }}
+              {% if block.report_path %}(from <code>{{ block.report_path }}</code>){% endif %}</p>
+          {% else %}
+            <p class="review-summary">No review report found for this run.
+              Generate one with <code>sidelinehd-extractor review-report</code>.</p>
+          {% endif %}
+          {% if block.warnings %}
+            <ul class="review-warnings">
+              {% for warning in block.warnings %}<li>{{ warning }}</li>{% endfor %}
+            </ul>
+          {% endif %}
+          {{ block.fragment | safe }}
+        </section>
+      {% endif %}
+    {% endfor %}
+    {{ copy_script | safe }}
+  {% endif %}
+</body>
+</html>

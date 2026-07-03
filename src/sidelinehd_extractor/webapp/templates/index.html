@@ -61,8 +61,10 @@
     document.body.addEventListener("htmx:responseError", function (evt) {
       document.getElementById("form-error").innerHTML = evt.detail.xhr.responseText;
     });
+    // CR-51: only a successful submit clears the error slot — the 1s status
+    // polls must not wipe a just-shown validation message.
     document.body.addEventListener("htmx:afterRequest", function (evt) {
-      if (evt.detail.successful) {
+      if (evt.detail.successful && evt.detail.requestConfig.path === "/jobs") {
         document.getElementById("form-error").innerHTML = "";
       }
     });

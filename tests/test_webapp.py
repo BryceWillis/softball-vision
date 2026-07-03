@@ -270,7 +270,147 @@ def test_summarize_result_playlist_dataclass(tmp_path):
 def test_create_app_builds_without_binding_a_socket():
     app = create_app()
     routes = {route.path for route in app.routes}
-    assert {"/", "/jobs", "/jobs/{job_id}", "/jobs/{job_id}/status"} <= routes
+    assert {
+        "/",
+        "/jobs",
+        "/jobs/{job_id}",
+        "/jobs/{job_id}/status",
+        "/jobs/{job_id}/results",
+    } <= routes
+
+
+CHAPTERS_TEXT = "0:00 Pregame\n12:34 Top 1\n"
+AT_BATS_TEXT = "1st Inning\n12:34 #22\n14:05 #7\n"
+REVIEW_REPORT_TEXT = (
+    "# Review Report\n"
+    "\n"
+    "Run: `runs/fake`\n"
+    "\n"
+    "## Run Warnings\n"
+    "\n"
+    "- `field-never-read` `right_score` - right_score was never read\n"
+    "\n"
+    "Flagged events: 3\n"
+    "\n"
+    "Use this file to inspect likely OCR/detection issues.\n"
+)
+
+
+def _write_fake_run_dir(root, name="run", review_report=True):
+    """Materialize the artifacts item 47 reads: exports plus review_report.md."""
+
+    run_dir = root / name
+    run_dir.mkdir(parents=True)
+    chapters = run_dir / "full_chapters.txt"
+    at_bats = run_dir / "full_at_bats.txt"
+    chapters.write_text(CHAPTERS_TEXT, encoding="utf-8")
+    at_bats.write_text(AT_BATS_TEXT, encoding="utf-8")
+    if review_report:
+        (run_dir / "review_report.md").write_text(REVIEW_REPORT_TEXT, encoding="utf-8")
+    return {
+        "run_dir": str(run_dir),
+        "chapters_path": str(chapters),
+        "at_bats_path": str(at_bats),
+    }
+
+
+def test_results_single_done_job_renders_copy_kit_and_review_summary(tmp_path):
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={"kind": "single", "video_path": "videos/Game vs Ice.mp4", **paths},
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    # Exports rendered into copy panels with the publish-kit copy markup.
+    assert "12:34 Top 1" in response.text
+    assert "12:34 #22" in response.text
+    assert 'data-copy-target="game-0-chapters-text"' in response.text
+    assert 'data-copy-target="game-0-at-bats-text"' in response.text
+    assert "navigator.clipboard.writeText" in response.text
+    # Review-report summary: flagged count plus the item-45 run warning.
+    assert "Flagged events: 3" in response.text
+    assert "right_score was never read" in response.text
+    # Game label comes from the video name.
+    assert "Game vs Ice.mp4" in response.text
+
+
+def test_results_single_job_without_review_report_degrades_gracefully(tmp_path):
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path, review_report=False)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"kind": "single", **paths})
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert "12:34 Top 1" in response.text
+    assert "No review report found" in response.text
+
+
+def test_results_playlist_renders_blocks_in_order_with_error_block(tmp_path):
+    client, store = _make_client()
+    ok_paths = _write_fake_run_dir(tmp_path, name="run-1")
+    job = store.create(kind="playlist", url="https://youtube.com/playlist?list=PL1")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "playlist",
+            "entries": [
+                {"video_id": "vid1", "title": "Game 1", "status": "done", **ok_paths},
+                {
+                    "video_id": "vid2",
+                    "title": "Game 2",
+                    "status": "failed",
+                    "run_dir": None,
+                    "chapters_path": None,
+                    "at_bats_path": None,
+                    "error": "yt-dlp exploded",
+                },
+            ],
+        },
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert "1. Game 1" in response.text
+    assert "2. Game 2" in response.text
+    # Batch order preserved: the successful block precedes the failed one.
+    assert response.text.index("1. Game 1") < response.text.index("2. Game 2")
+    # Success block carries the copy kit and review summary.
+    assert 'data-copy-target="game-0-chapters-text"' in response.text
+    assert "Flagged events: 3" in response.text
+    # Failure is a clearly-marked error block with no copy kit of its own.
+    assert "error-block" in response.text
+    assert "yt-dlp exploded" in response.text
+    assert 'data-copy-target="game-1-chapters-text"' not in response.text
+
+
+def test_results_not_done_job_links_back_to_detail_and_unknown_404s():
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running")
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert "not finished" in response.text
+    assert f"/jobs/{job.id}" in response.text
+    assert "data-copy-target" not in response.text
+
+    assert client.get("/jobs/deadbeef/results").status_code == 404
+
+
+def test_index_error_clear_is_scoped_to_the_submit_request():
+    """CR-51: the afterRequest clear must be gated on the /jobs submit path so
+    the 1s status polls cannot wipe a validation message."""
+
+    client, _ = _make_client()
+    response = client.get("/")
+    assert 'evt.detail.requestConfig.path === "/jobs"' in response.text
 
 
 def test_cli_serve_wiring(monkeypatch, capsys):

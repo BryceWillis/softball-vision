@@ -122,6 +122,93 @@ def render_publish_kit(
     )
 
 
+PUBLISH_KIT_COPY_SCRIPT = """<script>
+    async function copyText(textarea, status) {
+      const text = textarea.value;
+      status.className = "status";
+      status.textContent = "";
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          throw new Error("Clipboard API unavailable");
+        }
+        status.className = "status success";
+        status.textContent = "Copied!";
+        return;
+      } catch (clipboardError) {
+        try {
+          textarea.focus();
+          textarea.select();
+          const copied = document.execCommand("copy");
+          if (!copied) {
+            throw new Error("Copy command failed");
+          }
+          status.className = "status success";
+          status.textContent = "Copied!";
+          return;
+        } catch (fallbackError) {
+          textarea.focus();
+          textarea.select();
+          status.className = "status warning";
+          status.textContent = "Select the text and copy manually.";
+        }
+      }
+    }
+
+    document.querySelectorAll("[data-copy-target]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        const textarea = document.getElementById(button.dataset.copyTarget);
+        const status = document.getElementById(button.dataset.statusTarget);
+        copyText(textarea, status);
+      });
+    });
+  </script>"""
+
+
+def render_publish_kit_fragment(
+    game_name: str,
+    chapters_text: str,
+    at_bats_text: str,
+    chapters_path: Optional[Path] = None,
+    at_bats_path: Optional[Path] = None,
+    element_id_prefix: str = "",
+) -> str:
+    """Render the embeddable chapters/at-bats copy panels (no page shell).
+
+    ``element_id_prefix`` keeps textarea/status ids unique when several
+    fragments share one page (e.g. the web results view). The copy buttons
+    require ``PUBLISH_KIT_COPY_SCRIPT`` to be included once on the host page.
+    """
+
+    escaped_chapters = escape(chapters_text)
+    escaped_at_bats = escape(at_bats_text)
+    chapters_source = _html_source_line(chapters_path)
+    at_bats_source = _html_source_line(at_bats_path)
+    prefix = escape(element_id_prefix, quote=True)
+
+    return f"""<section class="sections" aria-label="YouTube timestamp copy sections for {escape(game_name, quote=True)}">
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Description Chapters</h2>
+          <button type="button" data-copy-target="{prefix}chapters-text" data-status-target="{prefix}chapters-status">Copy chapters</button>
+        </div>
+        {chapters_source}
+        <textarea id="{prefix}chapters-text" readonly spellcheck="false">{escaped_chapters}</textarea>
+        <p class="status" id="{prefix}chapters-status" role="status" aria-live="polite"></p>
+      </article>
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Pinned Comment</h2>
+          <button type="button" data-copy-target="{prefix}at-bats-text" data-status-target="{prefix}at-bats-status">Copy at-bats</button>
+        </div>
+        {at_bats_source}
+        <textarea id="{prefix}at-bats-text" readonly spellcheck="false">{escaped_at_bats}</textarea>
+        <p class="status" id="{prefix}at-bats-status" role="status" aria-live="polite"></p>
+      </article>
+    </section>"""
+
+
 def render_publish_kit_html(
     game_name: str,
     chapters_text: str,
@@ -133,12 +220,15 @@ def render_publish_kit_html(
 
     title = f"YouTube Paste Kit: {game_name}"
     escaped_title = escape(title)
-    escaped_chapters = escape(chapters_text)
-    escaped_at_bats = escape(at_bats_text)
     escaped_credit = escape(PROJECT_CREDIT)
     escaped_project_url = escape(PROJECT_URL, quote=True)
-    chapters_source = _html_source_line(chapters_path)
-    at_bats_source = _html_source_line(at_bats_path)
+    copy_sections = render_publish_kit_fragment(
+        game_name=game_name,
+        chapters_text=chapters_text,
+        at_bats_text=at_bats_text,
+        chapters_path=chapters_path,
+        at_bats_path=at_bats_path,
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -286,26 +376,7 @@ def render_publish_kit_html(
       <h1>{escaped_title}</h1>
       <p class="muted">Open this file locally, copy each section, and paste it into YouTube.</p>
     </header>
-    <section class="sections" aria-label="YouTube timestamp copy sections">
-      <article class="panel">
-        <div class="panel-header">
-          <h2>Description Chapters</h2>
-          <button type="button" data-copy-target="chapters-text" data-status-target="chapters-status">Copy chapters</button>
-        </div>
-        {chapters_source}
-        <textarea id="chapters-text" readonly spellcheck="false">{escaped_chapters}</textarea>
-        <p class="status" id="chapters-status" role="status" aria-live="polite"></p>
-      </article>
-      <article class="panel">
-        <div class="panel-header">
-          <h2>Pinned Comment</h2>
-          <button type="button" data-copy-target="at-bats-text" data-status-target="at-bats-status">Copy at-bats</button>
-        </div>
-        {at_bats_source}
-        <textarea id="at-bats-text" readonly spellcheck="false">{escaped_at_bats}</textarea>
-        <p class="status" id="at-bats-status" role="status" aria-live="polite"></p>
-      </article>
-    </section>
+    {copy_sections}
     <section class="panel checklist" aria-label="Posting checklist">
       <h2>Posting Checklist</h2>
       <ul>
@@ -321,48 +392,7 @@ def render_publish_kit_html(
       <p><a href="{escaped_project_url}">{escaped_project_url}</a></p>
     </footer>
   </main>
-  <script>
-    async function copyText(textarea, status) {{
-      const text = textarea.value;
-      status.className = "status";
-      status.textContent = "";
-      try {{
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-          await navigator.clipboard.writeText(text);
-        }} else {{
-          throw new Error("Clipboard API unavailable");
-        }}
-        status.className = "status success";
-        status.textContent = "Copied!";
-        return;
-      }} catch (clipboardError) {{
-        try {{
-          textarea.focus();
-          textarea.select();
-          const copied = document.execCommand("copy");
-          if (!copied) {{
-            throw new Error("Copy command failed");
-          }}
-          status.className = "status success";
-          status.textContent = "Copied!";
-          return;
-        }} catch (fallbackError) {{
-          textarea.focus();
-          textarea.select();
-          status.className = "status warning";
-          status.textContent = "Select the text and copy manually.";
-        }}
-      }}
-    }}
-
-    document.querySelectorAll("[data-copy-target]").forEach(function (button) {{
-      button.addEventListener("click", function () {{
-        const textarea = document.getElementById(button.dataset.copyTarget);
-        const status = document.getElementById(button.dataset.statusTarget);
-        copyText(textarea, status);
-      }});
-    }});
-  </script>
+  {PUBLISH_KIT_COPY_SCRIPT}
 </body>
 </html>
 """

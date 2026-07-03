@@ -5,8 +5,10 @@ from pathlib import Path
 
 from sidelinehd_extractor.exports import PROJECT_CREDIT
 from sidelinehd_extractor.publish import (
+    PUBLISH_KIT_COPY_SCRIPT,
     default_publish_kit_path,
     render_publish_kit,
+    render_publish_kit_fragment,
     render_publish_kit_html,
     write_publish_kit,
 )
@@ -110,6 +112,32 @@ class PublishTests(unittest.TestCase):
         self.assertIn('document.execCommand("copy")', text)
         self.assertIn("Select the text and copy manually.", text)
         self.assertIn('type="checkbox"', text)
+
+    def test_render_publish_kit_fragment_is_embeddable_with_prefixed_ids(self):
+        text = render_publish_kit_fragment(
+            game_name="Game <One>",
+            chapters_text="0:00 Pregame\n",
+            at_bats_text="12:34 #22\n",
+            element_id_prefix="game-3-",
+        )
+
+        self.assertNotIn("<html", text)
+        self.assertNotIn("<script", text)
+        self.assertIn('id="game-3-chapters-text"', text)
+        self.assertIn('data-copy-target="game-3-chapters-text"', text)
+        self.assertIn('data-status-target="game-3-at-bats-status"', text)
+        self.assertIn(html.escape("0:00 Pregame\n"), text)
+        self.assertIn("12:34 #22", text)
+
+    def test_publish_kit_copy_script_is_shared_not_duplicated(self):
+        html_text = render_publish_kit_html(
+            game_name="Game",
+            chapters_text="0:00 Pregame\n",
+            at_bats_text="12:34 #22\n",
+        )
+
+        self.assertIn(PUBLISH_KIT_COPY_SCRIPT, html_text)
+        self.assertIn("navigator.clipboard.writeText", PUBLISH_KIT_COPY_SCRIPT)
 
 
 if __name__ == "__main__":

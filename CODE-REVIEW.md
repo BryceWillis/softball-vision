@@ -1,8 +1,8 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-07-02
-**Review passes:** 15 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened)
+**Last updated:** 2026-07-03
+**Review passes:** 16 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -23,17 +23,7 @@ _No items ready for review._
 
 ## Open Items
 
-#### CR-51 — Web submit-error slot is cleared by every successful HTMX request, including the 1s status polls
-**File:** [index.html](src/sidelinehd_extractor/webapp/templates/index.html) — `htmx:afterRequest` handler
-**Pass:** 15 — correctness (low severity, non-blocking follow-up to item 46)
-
-The `htmx:afterRequest` listener clears `#form-error` on any `evt.detail.successful` request. Because each non-terminal job row polls `GET /jobs/{id}/status` `every 1s`, a successful poll fires that handler and wipes a just-shown 400 validation message within ~1s whenever any job is running — so the inline submit error effectively disappears on its own. Scope the clear to the submit request (e.g. gate on `evt.detail.requestConfig.path === "/jobs"` / the form element via `evt.detail.elt`, or bind the handler to the form rather than `document.body`) so only a subsequent submit clears the error. Add a note/test if practical. Approved item 46 regardless — this is a UI-polish defect, not a pipeline or data issue, and folds naturally into item 47's UI work.
-
-#### CR-50 — `write_review_report` now reads `manifest.json` with an unguarded `json.loads`, adding a new throw path on the report command
-**File:** [review_report.py](src/sidelinehd_extractor/review_report.py) — `_manifest_warnings`
-**Pass:** 14 — correctness (low severity, non-blocking follow-up to item 45)
-
-Item 45 added `_manifest_warnings`, which calls `json.loads(manifest_path.read_text(...))` to surface run warnings in the review report. `write_review_report` never read the manifest before, so a corrupt/truncated `manifest.json` in the run dir now makes the report command raise `JSONDecodeError` where it previously succeeded. Low realism (the manifest is machine-written) and consistent with the existing unguarded `update_manifest_section` reader, but the review report is a user-facing command that should tolerate a bad run dir gracefully. Wrap the parse in a `try/except (json.JSONDecodeError, OSError)` returning `[]` (treat an unreadable manifest as "no warnings"), and add a test for the corrupt-manifest case. Approved item 45 regardless — this is an independent hardening, not a defect in the item 45 behavior.
+_No open items._
 
 ## Deferred Items
 
@@ -44,6 +34,22 @@ Item 45 added `_manifest_warnings`, which calls `json.loads(manifest_path.read_t
 `run_playlist_batch` → `_run_playlist_entry` → `run_youtube` re-declares ~30 detection/tuning knobs at each hop with no transformation. Adding one new knob now means editing four parallel signatures, and a missed hop silently passes a stale default (batch runs would diverge from single-game runs). This materially weakens the deferral rationale for **item 22 (Detection Configuration Object)** — the fan-out just tripled. Not blocking item 37; folded into item 22's scope, which should now bundle these knobs into a `DetectionConfig` dataclass threaded through `run_game`/`run_youtube_game`/`run_playlist_batch`.
 
 ## Resolved Items
+
+#### CR-50 — `write_review_report` read `manifest.json` with an unguarded `json.loads`
+**File:** [review_report.py](src/sidelinehd_extractor/review_report.py) — `_manifest_warnings`
+**Resolved:** Pass 16 (by Fable 5)
+
+`_manifest_warnings()` now wraps the parse in `try/except (json.JSONDecodeError, OSError)` and returns `[]` when `manifest.json` is unreadable or corrupt, so `write_review_report` keeps producing a report for a bad run dir instead of raising. Verified: `test_write_review_report_ignores_corrupt_manifest` writes an invalid manifest, runs `write_review_report()`, and asserts the report is still produced with no Run Warnings section. 286 tests pass.
+
+---
+
+#### CR-51 — Web submit-error slot was cleared by every successful HTMX request, including the 1s status polls
+**File:** [index.html](src/sidelinehd_extractor/webapp/templates/index.html) — `htmx:afterRequest` handler
+**Resolved:** Pass 16 (by Fable 5)
+
+The clear is now gated on `evt.detail.successful && evt.detail.requestConfig.path === "/jobs"` (with a CR-51 comment), so only a successful submit clears `#form-error`; the status polls hit `/jobs/{id}/status` and leave a shown validation message alone. Verified against the fix: status polls no longer match the gate. `test_index_error_clear_is_scoped_to_the_submit_request` asserts the rendered template gates on the `/jobs` path. 286 tests pass.
+
+---
 
 #### CR-48 — Pregame→ingame game-start path conditionally re-opened the item-34 / CR-36 "0-0 must not qualify" guard
 **File:** [events.py](src/sidelinehd_extractor/events.py) — `_game_active_timestamp`

@@ -25,7 +25,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
-| 2 | **47** — Web App 39b: Results + Paste Kits | Ready to implement | **Web track (Fable 5).** After item 46. Stacked per-game copy kits + review-report/warnings; reuses `render_publish_kit_html` (item 20 Done). |
+| — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
+| 1 | **48** — Generate `review_report.md` during runs | Ready to implement | **Web track (next).** Small: call the existing `write_review_report(run_dir)` after export in `run_game` so the report becomes a standard run artifact — lights up item 47's per-game flagged count/warnings and makes `review-report` a re-render convenience. Surfaced by item 47 review (Pass 16). |
 | 3 | **41** — OCR Pipeline Performance | Ready to implement | **OCR track (Codex).** Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
 | 4 | **40** — OCR Confidence Capture | Ready to implement | **OCR track (Codex).** Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
 | 5 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
@@ -3429,7 +3430,7 @@ UI (39c), roster UI (39d), feedback egress (39e), SQLite persistence.
 
 ### 47. Local Web App — Phase 39b: Results + Multi-Game Paste Kits
 
-Status: Ready to implement (after item 46)
+Status: Done (Pass 16, implemented by Fable 5; approved. Criterion #2 — per-game review summary — is gated on item 48.)
 Source: Promoted from item 39 (epic), phase 39b. Depends on item 46 and item 20 (Done).
 
 The presentation slice: for a completed job, render a results page that stacks one
@@ -3492,6 +3493,60 @@ show jersey numbers and timestamps only, matching current export content.
 
 **Out of scope:** corrections editing (39c), roster editing (39d), feedback egress
 (39e).
+
+**Post-review note (Pass 16).** Criterion #2 is implemented but **inert in
+production**: `run_game`/`run_youtube_game` never write `review_report.md` — only
+the `review-report` CLI command does — so real web jobs always hit the graceful
+"No review report found" path. The results-page code is correct and reads the
+artifact when present; the missing producer is tracked as **item 48**. Fable 5
+followed the design's "read already-written artifacts; do not recompute" rule and
+flagged the gap rather than silently adding generation.
+
+### 48. Generate `review_report.md` During Runs
+
+Status: Ready to implement
+Source: Item 47 review (Pass 16). Depends on item 45 (manifest warnings, Done) and
+item 47 (consumer, Done).
+
+The run pipeline writes `samples.jsonl` / `states.jsonl` / `events.jsonl` /
+`manifest.json` but **not** `review_report.md`; only the `review-report` CLI
+command produces it. So item 47's per-game review summary (flagged count + item 45
+run warnings) is dark for every real web job. Make the review report a standard
+run artifact.
+
+**Change.** After the export step in `run_game` (so `run_youtube_game` and each
+`run_playlist_batch` entry inherit it), call the existing
+`write_review_report(run_dir)` — which reads the already-written
+events/states/samples/manifest and writes `review_report.md`. No detection is
+recomputed; this is the same call the CLI already makes. The `review-report` CLI
+command then becomes a re-render/relocation convenience rather than the sole
+producer.
+
+**Placement + safety.**
+- Generate after exports are written and after the manifest is finalized (the
+  report reads manifest warnings), so the artifact reflects the completed run.
+- **Do not let report generation fail the run.** Wrap it so an error degrades
+  (surface via the existing `stage_progress` callback, e.g. a
+  `warning review-report-failed` stage) but the run still returns its result.
+- Optional `write_review_report: bool = True` knob threaded like the other run
+  flags if opt-out is ever wanted; default on.
+
+**Testing.**
+- `run_game` on a fixture leaves `review_report.md` in the run dir with the
+  expected flagged count / warnings.
+- The item 47 results-page test can drop its hand-written `review_report.md`
+  fixture and instead assert the count/warnings come from a report generated by a
+  real (faked-OCR) run — an end-to-end check that criterion #2 now lights up.
+- Existing `review-report` CLI tests still pass unchanged.
+- A forced report-generation failure degrades without failing the run.
+
+**Acceptance criteria.**
+1. A completed `run_game` / `run_youtube_game` leaves `review_report.md` in the run
+   dir.
+2. Item 47's results page shows the per-game flagged count + item 45 warnings for
+   real jobs (no longer the degraded path).
+3. Report-generation failure degrades gracefully; the run still succeeds.
+4. `review-report` CLI behavior is unchanged.
 
 ## Discussion / Later Deliverables
 

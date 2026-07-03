@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -22,6 +23,44 @@ class ReviewReportResult:
 
     output_path: Path
     flagged_count: int
+
+
+@dataclass(frozen=True)
+class ReviewReportSummary:
+    """Headline numbers parsed back out of a written review report."""
+
+    flagged_count: Optional[int]
+    warnings: List[str]
+
+
+_FLAGGED_COUNT_PATTERN = re.compile(r"^Flagged events: (\d+)$", re.MULTILINE)
+_RUN_WARNINGS_HEADING = "## Run Warnings"
+
+
+def summarize_review_report_text(text: str) -> ReviewReportSummary:
+    """Parse the flagged-event count and Run Warnings bullets from report Markdown.
+
+    Reads what ``render_review_report`` wrote rather than recomputing from the
+    run artifacts, so callers (e.g. the web results page) stay a pure view.
+    """
+
+    match = _FLAGGED_COUNT_PATTERN.search(text)
+    flagged_count = int(match.group(1)) if match else None
+
+    warnings: List[str] = []
+    in_warnings = False
+    for line in text.splitlines():
+        if line.strip() == _RUN_WARNINGS_HEADING:
+            in_warnings = True
+            continue
+        if in_warnings:
+            if line.startswith("#"):
+                break
+            if line.startswith("- "):
+                warnings.append(line[2:].strip())
+            elif line.strip():
+                break
+    return ReviewReportSummary(flagged_count=flagged_count, warnings=warnings)
 
 
 def write_review_report(
@@ -144,7 +183,10 @@ def render_review_report(
 def _manifest_warnings(manifest_path: Path) -> List[dict]:
     if not manifest_path.exists():
         return []
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
     warnings = manifest.get("warnings")
     if not isinstance(warnings, list):
         return []
