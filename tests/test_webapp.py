@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 
+import html
+import re
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -276,6 +280,8 @@ def test_create_app_builds_without_binding_a_socket():
         "/jobs/{job_id}",
         "/jobs/{job_id}/status",
         "/jobs/{job_id}/results",
+        "/jobs/{job_id}/feedback",
+        "/jobs/{job_id}/feedback/preview",
     } <= routes
 
 
@@ -311,6 +317,67 @@ def _write_fake_run_dir(root, name="run", review_report=True):
         "run_dir": str(run_dir),
         "chapters_path": str(chapters),
         "at_bats_path": str(at_bats),
+    }
+
+
+def _write_feedback_run_dir(root):
+    """Run dir for the item 51 feedback egress tests."""
+
+    from sidelinehd_extractor.models import Event, EventType
+    from sidelinehd_extractor.processing import write_json, write_jsonl
+
+    run_dir = root / "feedback-run"
+    run_dir.mkdir(parents=True)
+    write_json(
+        run_dir / "manifest.json",
+        {
+            "template": {"name": "sidelinehd active"},
+            "tesseract_version": "5.3.0",
+            "ocr_backend": "tesseract",
+            "ocr_workers": 2,
+            "sample_every_seconds": 5.0,
+            "fields": ["batter_card_number"],
+            "warnings": [],
+        },
+    )
+    write_jsonl(
+        run_dir / "events.jsonl",
+        [
+            Event(EventType.HALF_INNING_START, 600, "Top 1"),
+            Event(
+                EventType.AT_BAT_START,
+                605,
+                "Charlotte P. (#44)",
+                player_number="44",
+                metadata={"ocr_player_number": "88"},
+            ),
+        ],
+    )
+    return {
+        "run_dir": str(run_dir),
+        "chapters_path": str(run_dir / "full_chapters.txt"),
+        "at_bats_path": str(run_dir / "full_at_bats.txt"),
+    }
+
+
+def _decoded_feedback_bodies(response_text):
+    github_href = html.unescape(
+        re.search(r'href="([^"]*github\.com[^"]*)"', response_text).group(1)
+    )
+    mailto_href = html.unescape(re.search(r'href="(mailto:[^"]*)"', response_text).group(1))
+    preview_body = html.unescape(
+        re.search(
+            r'<textarea[^>]+id="feedback-body"[^>]*>(.*?)</textarea>',
+            response_text,
+            flags=re.S,
+        ).group(1)
+    )
+    return {
+        "preview": preview_body,
+        "github": parse_qs(urlparse(github_href).query)["body"][0],
+        "email": parse_qs(urlparse(mailto_href).query)["body"][0],
+        "copy": preview_body,
+        "github_href": github_href,
     }
 
 
@@ -402,6 +469,78 @@ def test_results_not_done_job_links_back_to_detail_and_unknown_404s():
     assert "data-copy-target" not in response.text
 
     assert client.get("/jobs/deadbeef/results").status_code == 404
+
+
+def test_feedback_preview_and_handoff_bodies_are_sanitized(tmp_path):
+    client, store = _make_client()
+    paths = _write_feedback_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"kind": "single", **paths})
+
+    response = client.get(f"/jobs/{job.id}/feedback")
+
+    assert response.status_code == 200
+    assert "Open GitHub issue" in response.text
+    assert "Charlotte" not in response.text
+    assert "Player A (#44)" in response.text
+    assert "#44" in response.text
+    bodies = _decoded_feedback_bodies(response.text)
+    assert bodies["github_href"].startswith(
+        "https://github.com/BryceWillis/softball-vision/issues/new?"
+    )
+    for channel in ("preview", "github", "email", "copy"):
+        body = bodies[channel]
+        assert "Charlotte" not in body
+        assert "Player A (#44)" in body
+        assert '"player_number": "44"' in body
+
+
+def test_feedback_preview_post_includes_note_in_all_handoff_paths(tmp_path):
+    client, store = _make_client()
+    paths = _write_feedback_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"kind": "single", **paths})
+
+    response = client.post(
+        f"/jobs/{job.id}/feedback/preview",
+        data={"entry": "0", "note": "Count looked wrong after the delay."},
+    )
+
+    assert response.status_code == 200
+    assert "Count looked wrong after the delay." in response.text
+    bodies = _decoded_feedback_bodies(response.text)
+    for channel in ("preview", "github", "email", "copy"):
+        assert "Count looked wrong after the delay." in bodies[channel]
+        assert "Charlotte" not in bodies[channel]
+
+
+def test_feedback_not_done_links_back_unknown_id_404_and_no_outbound_http(
+    tmp_path, monkeypatch
+):
+    import http.client
+
+    def fail_outbound_request(*args, **kwargs):
+        pytest.fail("feedback route must not make outbound HTTP requests")
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", fail_outbound_request)
+
+    client, store = _make_client()
+    running = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(running.id, status="running")
+
+    response = client.get(f"/jobs/{running.id}/feedback")
+    assert response.status_code == 200
+    assert "not finished" in response.text
+    assert f"/jobs/{running.id}" in response.text
+
+    paths = _write_feedback_run_dir(tmp_path)
+    done = store.create(kind="single", url="https://youtu.be/def456")
+    store.update(done.id, status="done", result={"kind": "single", **paths})
+    response = client.get(f"/jobs/{done.id}/feedback")
+    assert response.status_code == 200
+    assert "Open GitHub issue" in response.text
+
+    assert client.get("/jobs/deadbeef/feedback").status_code == 404
 
 
 def test_results_page_lights_up_from_report_generated_by_run_game(tmp_path, monkeypatch):
