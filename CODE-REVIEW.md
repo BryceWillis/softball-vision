@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-03
-**Review passes:** 17 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy)
+**Review passes:** 18 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,13 +19,7 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### CR-52 — Feedback sanitizer only redacts names it can register as a source; a label-only or non-`name` field name can leak
-**File:** [feedback.py](src/sidelinehd_extractor/feedback.py) — `build_name_sanitizer` / `NameSanitizer.sanitize_text`
-**Pass:** 17 — correctness/privacy (non-blocking follow-up to item 38)
-
-`build_name_sanitizer` registers replacement sources from the roster, `event.player_name`, `"name"`-keyed metadata, and samples whose `field_name` contains `"name"`. `sanitize_text` then only masks those registered strings/tokens. A real name that appears **only** in an `event.label` or in a sample field whose name does not contain `"name"` — and never as a registered source — passes through unchanged into the feedback log, which is the one sanctioned egress surface. In practice labels are derived from the same `player_name` that is registered, so the gap is narrow and the guard tests cover the common paths, but a miss here leaks PII. Harden by also registering names parsed from `event.label` (e.g. the `"Name (#NN)"` pattern) into the sanitizer, and/or add a stricter net; extend the leak-guard test to seed a name that exists *only* in a label. Approved item 38 regardless — this is defense-in-depth on an already-guarded surface, not a demonstrated leak in current fixtures.
-
-**Implementation note.** `build_name_sanitizer()` now registers names parsed from event labels matching the `"Name (#NN)"` pattern before rendering feedback, so label-only names get stable `Player X` pseudonyms. The feedback leak-guard fixture now includes `Charlotte P. (#44)` with no `player_name`, no roster entry, and no name-keyed metadata/sample source, and asserts `Charlotte` is absent while the generated `Player D` pseudonym appears.
+_No items ready for review._
 
 ## Open Items
 
@@ -40,6 +34,19 @@ _No open items._
 `run_playlist_batch` → `_run_playlist_entry` → `run_youtube` re-declares ~30 detection/tuning knobs at each hop with no transformation. Adding one new knob now means editing four parallel signatures, and a missed hop silently passes a stale default (batch runs would diverge from single-game runs). This materially weakens the deferral rationale for **item 22 (Detection Configuration Object)** — the fan-out just tripled. Not blocking item 37; folded into item 22's scope, which should now bundle these knobs into a `DetectionConfig` dataclass threaded through `run_game`/`run_youtube_game`/`run_playlist_batch`.
 
 ## Resolved Items
+
+#### CR-52 — Feedback sanitizer only redacts names it can register as a source; a label-only or non-`name` field name can leak
+**File:** [feedback.py](src/sidelinehd_extractor/feedback.py) — `build_name_sanitizer` / `NameSanitizer.sanitize_text`
+**Pass:** 17 — correctness/privacy (non-blocking follow-up to item 38)
+**Resolved:** Pass 18 (by Fable 5)
+
+`build_name_sanitizer` registers replacement sources from the roster, `event.player_name`, `"name"`-keyed metadata, and samples whose `field_name` contains `"name"`. `sanitize_text` then only masks those registered strings/tokens. A real name that appears **only** in an `event.label` or in a sample field whose name does not contain `"name"` — and never as a registered source — passes through unchanged into the feedback log, which is the one sanctioned egress surface. In practice labels are derived from the same `player_name` that is registered, so the gap is narrow and the guard tests cover the common paths, but a miss here leaks PII. Harden by also registering names parsed from `event.label` (e.g. the `"Name (#NN)"` pattern) into the sanitizer, and/or add a stricter net; extend the leak-guard test to seed a name that exists *only* in a label. Approved item 38 regardless — this is defense-in-depth on an already-guarded surface, not a demonstrated leak in current fixtures.
+
+**Implementation note.** `build_name_sanitizer()` now registers names parsed from event labels matching the `"Name (#NN)"` pattern before rendering feedback, so label-only names get stable `Player X` pseudonyms. The feedback leak-guard fixture now includes `Charlotte P. (#44)` with no `player_name`, no roster entry, and no name-keyed metadata/sample source, and asserts `Charlotte` is absent while the generated `Player D` pseudonym appears.
+
+**Resolution.** `build_name_sanitizer` now also registers names parsed from `"Name (#NN)"` event labels, closing the concrete label-only leak vector; the guard test seeds a label-only name (`Charlotte P. (#44)`) and asserts redaction to `Player D`. The speculative non-`name`-field vector has no known trigger among current OCR fields (name-bearing fields already contain `name`); reopen if such a field is added.
+
+---
 
 #### CR-50 — `write_review_report` read `manifest.json` with an unguarded `json.loads`
 **File:** [review_report.py](src/sidelinehd_extractor/review_report.py) — `_manifest_warnings`
