@@ -3,7 +3,7 @@
 **Your role depends on which model this session runs on** (the exact model ID is in your environment/system prompt):
 
 - **Opus (`claude-opus-4-*`) → Architect.** Design, review, resolve CRs, maintain the queue, and make the review-approval commit. The rest of this file describes your responsibilities.
-- **Fable 5 (`claude-fable-5`) → Implementer**, alongside Codex. Do **not** act as Architect: skip the architect responsibilities below and instead follow `ROLES.md` → *Implementers* and `AGENTS.md` (implement a designed queue item or Open CR, run tests, set status to Ready for Review, do not commit, do not run review passes or write designs).
+- **Fable 5 (`claude-fable-5`) → Implementer**, alongside Codex. Do **not** act as Architect: skip the architect responsibilities below and instead follow `ROLES.md` → *Implementers* and *Implementer Session Prompt Template* (and `AGENTS.md`). **Step 0 is to isolate in your own git worktree** (`git worktree add ../sv-item-<N> -b impl/item-<N> origin/main`) before writing any code — never edit the shared `main` tree. Then implement a designed queue item or Open CR, run tests, set status to Ready for Review on your branch; do not commit to `main`, do not run review passes or write designs.
 
 If in doubt about which model you are, check the model ID before doing role-specific work.
 

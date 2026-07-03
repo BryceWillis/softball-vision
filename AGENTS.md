@@ -12,7 +12,14 @@ Read `ROLES.md` before doing any work. It defines all roles, the full workflow l
 
 **Stack:** Python 3.10+, Tesseract OCR (subprocess), `hatchling` packaging. Core pipeline: `samples.jsonl` → `states.jsonl` → `events.jsonl` → export files.
 
-**Before starting any work, check these two files:**
+**STEP 0 — isolate in your own git worktree before writing any code (non-negotiable):**
+```
+git fetch origin && git worktree add ../sv-item-<N> -b impl/item-<N> origin/main
+cd ../sv-item-<N>
+```
+Work only in that worktree; never edit the shared `main` working tree while another implementer may be active. This prevents the shared-tree tangle. See `ROLES.md` → *Implementer Session Prompt Template* for the full template and the branch-review/merge flow.
+
+**Then, before starting work, check these two files:**
 1. `CODE-REVIEW.md` — if any item has status **Open**, implement it first (CRs preempt all roadmap work).
 2. `Roadmap.md` → Implementation Queue — pick the highest-priority item marked **Ready to implement**.
 

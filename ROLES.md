@@ -47,6 +47,44 @@ An implementer does **not** write designs, move CRs to Resolved, or conduct code
 - **If two items must touch the same file, sequence them** — the first merges to `main`, the second rebases onto it — rather than editing the same file in two live worktrees.
 - Keep the `main` working tree clean between approvals so the next branch starts from a reviewed base.
 
+### Implementer Session Prompt Template (mandatory first step: worktree)
+
+Every implementer session — Codex or Fable 5 — starts from this template. The
+`git worktree` command is **step 0 and non-negotiable**: it is what prevents the
+Pass 16→17 shared-tree tangle. Fill in `<N>` (item number) and the item name.
+
+```
+You are the Implementer on sidelinehd-extractor (<Codex | Fable 5>). Read ROLES.md
+(your role, the security constraint, the CR lifecycle) before writing code.
+
+STEP 0 — ISOLATE (do this before anything else, do not skip):
+  git fetch origin && git worktree add ../sv-item-<N> -b impl/item-<N> origin/main
+  cd ../sv-item-<N>
+Work ONLY in this worktree. Never edit the shared main working tree.
+
+TASK: implement item <N> (<name>) per its design in Roadmap.md — or the named
+Open CR in CODE-REVIEW.md, which preempts the queue. Do not reinterpret the
+design; if you'd deviate, stop and flag it.
+
+RULES:
+- Reuse existing pipeline/helpers; do not re-implement what the codebase has.
+- Security: never write real player names to committed files; fixtures use
+  sanitized placeholders. Names only leave the machine via item 38/39e.
+- Run the full suite (PYTHONPATH=src python3 -m pytest tests/) and ruff; all green.
+
+WHEN DONE:
+- Set the item Ready for Review in CODE-REVIEW.md (short implementation note) and
+  in the Roadmap queue. Commit to your branch impl/item-<N>. DO NOT commit to main,
+  DO NOT merge, DO NOT run a review pass or resolve CRs — those are the Opus
+  architect's. Tell Ryan the branch name so the architect can review
+  `git diff origin/main...impl/item-<N>`.
+```
+
+The architect reviews the branch diff, and the **approval commit merges the branch
+to `main`** (`git merge --no-ff impl/item-<N>` or an equivalent squash) — that
+merge is the approval signal. After merging, prune the worktree
+(`git worktree remove ../sv-item-<N>`).
+
 ---
 
 ## Workflow Loop
