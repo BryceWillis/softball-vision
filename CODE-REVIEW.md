@@ -19,7 +19,14 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 43 — OCR Accuracy Follow-ons: Multi-PSM Voting + Per-Field Preprocessing
+**Branch:** `impl/item-43` (Fable 5) — review with `git diff origin/main...impl/item-43`
+**Files:** [ocr.py](src/sidelinehd_extractor/ocr.py), [test_ocr.py](tests/test_ocr.py)
+**Status:** Ready for Review
+
+**Implementation note.** (1) Multi-PSM voting: the six critical numeric fields (`MULTI_PSM_VOTE_FIELDS`, same membership as item 40's min-confidence set) are OCR'd on the same preprocessed image under PSM 7 and PSM 10 via `_ocr_with_psm_voting` (configured PSM first, so ties keep pre-voting behavior); the higher-confidence normalized result wins, missing confidence loses to any scored one, and an exact tie prefers the whitelist-valid candidate. Wired into both the subprocess and tesserocr backends; text fields run exactly once (asserted by test). (2) `OCRFieldConfig.preprocess` names a strategy in `PREPROCESS_STRATEGIES` (`default`, `numeric_glyph_pad`, `text_adaptive`); `preprocess_for_ocr` dispatches on it and rejects unknown names.
+
+**Measured deviation (flagging per protocol).** The design's example strategies were measured with real Tesseract on synthetic scorebug fixtures before committing, per the design's own gate, and both examples lost: a hard fixed threshold regressed at every value tried (120/150/180 → as low as 1/10 correct vs Otsu's 8/10), and adaptive thresholding regressed on numeric (0–1/10) *and* text crops (1/6 vs Otsu 4/6). What won for isolated glyphs is `numeric_glyph_pad` — default Otsu plus a 5px white margin — recovering single digits Tesseract otherwise drops (16/18 vs 11/18, paired confidence −0.023). Shipped assignment: the five digit fields get `numeric_glyph_pad`; `count` (three glyphs, measured confidence loss under the pad) and the name/strip fields stay on `default`; `text_adaptive` exists as a per-template tuning option but no field defaults to it. The before/after comparison is committed as `NumericConfidenceRegressionTests` (real Tesseract, skipped when unavailable): accuracy must not drop, paired confidence delta ≥ −0.05, and an empty crop must still read empty (the item-45 failure mode). Digits-only fixtures, no names. 351 tests pass; ruff clean.
 
 ## Open Items
 
