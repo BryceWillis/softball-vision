@@ -40,6 +40,13 @@ class WorkflowTests(unittest.TestCase):
                 samples_path=run_dir / "samples.jsonl",
                 sample_count=4,
                 crop_count=4,
+                warnings=[
+                    {
+                        "code": "field-never-read",
+                        "field": "right_score",
+                        "message": "Configured OCR field 'right_score' was empty.",
+                    }
+                ],
             )
             state_result = StateParseResult(
                 input_path=run_dir / "samples.jsonl",
@@ -99,7 +106,16 @@ class WorkflowTests(unittest.TestCase):
                 min_game_final_observations=3,
                 order_validation=True,
             )
-            self.assertEqual(stages, ["process", "parse-states", "detect-events", "export"])
+            self.assertEqual(
+                stages,
+                [
+                    "process",
+                    "warning field-never-read: right_score",
+                    "parse-states",
+                    "detect-events",
+                    "export",
+                ],
+            )
             self.assertEqual(result.event_count, 2)
             self.assertEqual(
                 (root / "scratch" / "full_chapters.txt").read_text(),

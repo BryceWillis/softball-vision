@@ -23,7 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **45** — Fix `right_score` Calibration + Empty-Field Guard | Ready to implement | Confirmed defect: home score reads empty on the whole Victor Vipers run, so no chapter shows a score. Recalibrate the example template's `right_score` region (Codex extracts a frame locally) and add a warning when a configured field reads empty for an entire run. |
+| — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | 2 | **41** — OCR Pipeline Performance | Ready to implement | Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
 | 3 | **40** — OCR Confidence Capture | Ready to implement | Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
 | 4 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
@@ -3254,6 +3254,8 @@ latched pregame read — which conditionally re-opens the item-34 / CR-36 guard.
 
 ### 45. Fix `right_score` Region Calibration + Empty-Field Guard
 
+Status: Done (Pass 14)
+
 Source: Product QA (Pass 13 diagnosis). On the `9AaT4645z6s` / Victor Vipers run,
 chapters exported with no score suffix even though item 29 is Done and score
 display is on by default.
@@ -3273,11 +3275,9 @@ This is the region shipped in
 (or one derived from it) silently loses the home score.
 
 **Part A — recalibrate `right_score`.**
-- The home-score digit sits to the **right** of the current `x: 0.612`. Layout
-  hint from the same template: `left_score` center ≈ 0.40, `count` center ≈ 0.563;
-  mirroring the away score about the scorebug center puts the home score near
-  `x ≈ 0.70` (width ~0.05) — treat this as a **starting hypothesis to verify, not
-  a final value**.
+- The home-score digit sits **left/up** from the old `x: 0.612, y: 0.033`
+  region. Real-frame calibration found `x: 0.580, y: 0.025, width: 0.050,
+  height: 0.064`.
 - Codex should extract a real frame from the game video (the calibration-frame
   command / `calibration.py`) — neither the architect nor Ryan has a loose frame
   to hand — locate the actual home-score digit, set the corrected coordinate in
@@ -3307,6 +3307,13 @@ This is the region shipped in
 - Part B: a run where one configured field has all-empty samples produces the
   warning + manifest flag + review-report line; a run where every field reads at
   least once does not.
+
+**Implementation note.** The corrected template region read `right_score` on
+8/8 real smoke-test samples from the Victor Vipers video (`0, 0, 2, 2, 2, 4, 4,
+4`) with no warnings. `process_video` now records `field_read_stats` and
+`warnings` in `manifest.json`; `run-game` / `run-youtube` surface warnings via
+the existing stage-progress callback; and `review_report` renders manifest
+warnings under "Run Warnings".
 
 ## Discussion / Later Deliverables
 

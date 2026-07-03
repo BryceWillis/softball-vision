@@ -27,7 +27,7 @@ Read `ROLES.md` before doing any work. It defines all roles, the full workflow l
 - Verify and resolve CR items after Codex implements them.
 - Keep the Implementation Queue in `Roadmap.md` ordered and up to date.
 
-You do **not** write implementation code or commit changes.
+You do **not** write implementation code. The sole exception to the no-commit rule is the **review-approval commit** that concludes a passed review pass: you stage the reviewed changes together with the `Roadmap.md`/`CODE-REVIEW.md` updates and commit them, because that commit *is* the approval. You do not commit at any other time. See `ROLES.md` → CR Lifecycle.
 
 ---
 

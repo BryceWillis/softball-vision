@@ -103,6 +103,7 @@ def run_game(
         progress=progress,
         compute_video_hash=compute_video_hash,
     )
+    _emit_process_warnings(stage_progress, process_result.warnings)
     _stage(stage_progress, "parse-states")
     state_result = parse_samples_file(process_result.samples_path)
     _stage(stage_progress, "detect-events")
@@ -285,6 +286,19 @@ def _write_text_export(path: Path, text: str) -> None:
 def _stage(callback: Optional[Callable[[str], None]], name: str) -> None:
     if callback is not None:
         callback(name)
+
+
+def _emit_process_warnings(
+    callback: Optional[Callable[[str], None]],
+    warnings: Iterable[dict],
+) -> None:
+    if callback is None:
+        return
+    for warning in warnings:
+        code = warning.get("code") or "warning"
+        field = warning.get("field")
+        suffix = f": {field}" if field else ""
+        callback(f"warning {code}{suffix}")
 
 
 def _update_manifest_detection_config(manifest_path: Path, values: dict) -> None:

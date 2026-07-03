@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-02
-**Review passes:** 13 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved)
+**Review passes:** 14 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -23,7 +23,11 @@ _No items ready for review._
 
 ## Open Items
 
-_No open items._
+#### CR-50 — `write_review_report` now reads `manifest.json` with an unguarded `json.loads`, adding a new throw path on the report command
+**File:** [review_report.py](src/sidelinehd_extractor/review_report.py) — `_manifest_warnings`
+**Pass:** 14 — correctness (low severity, non-blocking follow-up to item 45)
+
+Item 45 added `_manifest_warnings`, which calls `json.loads(manifest_path.read_text(...))` to surface run warnings in the review report. `write_review_report` never read the manifest before, so a corrupt/truncated `manifest.json` in the run dir now makes the report command raise `JSONDecodeError` where it previously succeeded. Low realism (the manifest is machine-written) and consistent with the existing unguarded `update_manifest_section` reader, but the review report is a user-facing command that should tolerate a bad run dir gracefully. Wrap the parse in a `try/except (json.JSONDecodeError, OSError)` returning `[]` (treat an unreadable manifest as "no warnings"), and add a test for the corrupt-manifest case. Approved item 45 regardless — this is an independent hardening, not a defect in the item 45 behavior.
 
 ## Deferred Items
 

@@ -36,6 +36,15 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertIn("inning", template.regions)
         self.assertEqual(template.regions["inning"].x, 0.1)
 
+    def test_active_example_template_right_score_uses_calibrated_region(self):
+        template = load_overlay_template(Path("examples/sidelinehd_640x360_active.example.json"))
+        region = template.regions["right_score"]
+
+        self.assertAlmostEqual(region.x, 0.580)
+        self.assertAlmostEqual(region.y, 0.025)
+        self.assertAlmostEqual(region.width, 0.050)
+        self.assertAlmostEqual(region.height, 0.064)
+
     def test_load_roster_csv(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "roster.csv"

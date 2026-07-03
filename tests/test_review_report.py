@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sidelinehd_extractor.processing import write_json
 from sidelinehd_extractor.models import (
     Event,
     EventType,
@@ -130,6 +131,26 @@ class ReviewReportTests(unittest.TestCase):
         self.assertIn("unrostered-card-number=7", text)
         self.assertIn("lineup-had-rostered-candidate=26", text)
 
+    def test_render_review_report_includes_run_warnings(self):
+        text = render_review_report(
+            events=[],
+            states=[],
+            samples=[],
+            warnings=[
+                {
+                    "code": "field-never-read",
+                    "field": "right_score",
+                    "message": "Configured OCR field 'right_score' was empty for every sample.",
+                }
+            ],
+            run_path=Path("runs/game"),
+        )
+
+        self.assertIn("## Run Warnings", text)
+        self.assertIn("field-never-read", text)
+        self.assertIn("right_score", text)
+        self.assertIn("No questionable events found.", text)
+
     def test_write_review_report_uses_run_files(self):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"
@@ -161,6 +182,30 @@ class ReviewReportTests(unittest.TestCase):
             self.assertEqual(result.flagged_count, 1)
             self.assertEqual(result.output_path, run_dir / "review_report.md")
             self.assertTrue(result.output_path.exists())
+
+    def test_write_review_report_reads_manifest_warnings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            write_json(
+                run_dir / "manifest.json",
+                {
+                    "warnings": [
+                        {
+                            "code": "field-never-read",
+                            "field": "right_score",
+                            "message": "Configured OCR field 'right_score' was empty.",
+                        }
+                    ]
+                },
+            )
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertIn("field-never-read", text)
+            self.assertIn("right_score", text)
 
 
 if __name__ == "__main__":

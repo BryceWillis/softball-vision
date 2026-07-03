@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
@@ -26,6 +26,8 @@ class ProcessResult:
     samples_path: Path
     sample_count: int
     crop_count: int
+    field_read_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    warnings: List[Dict[str, str]] = field(default_factory=list)
 
 
 def sample_timestamps(
@@ -138,6 +140,50 @@ def read_jsonl(path: Path) -> List[object]:
     return rows
 
 
+def summarize_field_reads(
+    samples: Iterable[OCRSample],
+    field_names: Iterable[str],
+) -> Dict[str, Dict[str, int]]:
+    """Return sample/read counts for each configured OCR field."""
+
+    stats = {
+        field_name: {"sample_count": 0, "non_empty_count": 0}
+        for field_name in field_names
+    }
+    for sample in samples:
+        field_stats = stats.setdefault(
+            sample.field_name,
+            {"sample_count": 0, "non_empty_count": 0},
+        )
+        field_stats["sample_count"] += 1
+        if _sample_has_text(sample):
+            field_stats["non_empty_count"] += 1
+    return stats
+
+
+def field_read_warnings(
+    field_read_stats: Dict[str, Dict[str, int]],
+) -> List[Dict[str, str]]:
+    """Return warnings for configured fields that never produced OCR text."""
+
+    warnings = []
+    for field_name, stats in sorted(field_read_stats.items()):
+        if stats.get("sample_count", 0) > 0 and stats.get("non_empty_count", 0) == 0:
+            warnings.append(
+                {
+                    "code": "field-never-read",
+                    "field": field_name,
+                    "message": f"Configured OCR field '{field_name}' was empty for every sample.",
+                }
+            )
+    return warnings
+
+
+def _sample_has_text(sample: OCRSample) -> bool:
+    text = sample.normalized_text if sample.normalized_text is not None else sample.raw_text
+    return bool(text.strip())
+
+
 def update_manifest_section(manifest_path: Path, section_name: str, values: dict) -> None:
     """Merge values into a named manifest section if the manifest exists."""
 
@@ -227,6 +273,9 @@ def process_video(
                 total_expected_samples,
             )
 
+    field_read_stats = summarize_field_reads(samples, selected_regions.keys())
+    warnings = [] if ocr is no_ocr else field_read_warnings(field_read_stats)
+
     write_jsonl(samples_path, samples)
     write_json(
         manifest_path,
@@ -242,6 +291,8 @@ def process_video(
             "ocr_backend": getattr(ocr, "__name__", ocr.__class__.__name__),
             "compute_video_hash": compute_video_hash,
             "fields": list(selected_regions.keys()),
+            "field_read_stats": field_read_stats,
+            "warnings": warnings,
             "samples_path": samples_path.relative_to(run_dir),
             "crops_dir": crops_dir.relative_to(run_dir),
         },
@@ -253,4 +304,6 @@ def process_video(
         samples_path=samples_path,
         sample_count=len(samples),
         crop_count=crop_count,
+        field_read_stats=field_read_stats,
+        warnings=warnings,
     )

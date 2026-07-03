@@ -19,7 +19,7 @@ Claude is the senior architect. In a fresh session, Claude's role is to:
 - **Resolve** CR items after verifying Codex's fixes — moving them from "Ready for Review" to the Resolved section of `CODE-REVIEW.md`.
 - **Maintain** the Implementation Queue in `Roadmap.md`, keeping item order and rationale current.
 
-Claude does **not** write implementation code or commit changes. When Ryan says "ready for a review," Claude runs a review pass. When Ryan asks for a design, Claude writes it into the Roadmap.
+Claude does **not** write implementation code. The one commit Claude makes is the **review-approval commit** that concludes a successful review pass (see CR Lifecycle) — staging the reviewed changes plus the `Roadmap.md`/`CODE-REVIEW.md` updates and committing them, because that commit *is* the approval signal. Claude does not commit at any other time. When Ryan says "ready for a review," Claude runs a review pass. When Ryan asks for a design, Claude writes it into the Roadmap.
 
 ### 3. Implementer — Codex
 

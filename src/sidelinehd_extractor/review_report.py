@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -37,15 +38,18 @@ def write_review_report(
     events_path = run_dir / "events.jsonl" if source.is_dir() else source
     states_path = run_dir / "states.jsonl"
     samples_path = run_dir / "samples.jsonl"
+    manifest_path = run_dir / "manifest.json"
     destination = output_path.expanduser() if output_path else run_dir / "review_report.md"
 
     events = load_events(events_path)
     states = load_states(states_path) if states_path.exists() else []
     samples = load_ocr_samples(samples_path) if samples_path.exists() else []
+    warnings = _manifest_warnings(manifest_path)
     text = render_review_report(
         events=events,
         states=states,
         samples=samples,
+        warnings=warnings,
         run_path=run_dir,
         kind=kind,
         options=options,
@@ -66,6 +70,7 @@ def render_review_report(
     events: Iterable[Event],
     states: Iterable[OverlayState] = (),
     samples: Iterable[OCRSample] = (),
+    warnings: Iterable[dict] = (),
     run_path: Optional[Path] = None,
     kind: str = "all",
     options: Optional[ReviewOptions] = None,
@@ -85,6 +90,9 @@ def render_review_report(
     lines = [f"# {title}", ""]
     if run_path is not None:
         lines.extend([f"Run: `{run_path}`", ""])
+    warning_list = list(warnings)
+    if warning_list:
+        lines.extend(_render_warnings(warning_list))
     lines.extend(
         [
             f"Flagged events: {len(rows)}",
@@ -131,6 +139,32 @@ def render_review_report(
         lines.extend(_render_correction_examples(event))
 
     return "\n".join(lines).rstrip()
+
+
+def _manifest_warnings(manifest_path: Path) -> List[dict]:
+    if not manifest_path.exists():
+        return []
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    warnings = manifest.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [warning for warning in warnings if isinstance(warning, dict)]
+
+
+def _render_warnings(warnings: List[dict]) -> List[str]:
+    lines = ["## Run Warnings", ""]
+    for warning in warnings:
+        code = warning.get("code") or "warning"
+        field = warning.get("field")
+        message = warning.get("message") or ""
+        detail = f"`{code}`"
+        if field:
+            detail += f" `{field}`"
+        if message:
+            detail += f" - {message}"
+        lines.append(f"- {detail}")
+    lines.append("")
+    return lines
 
 
 def _nearest_state(states: List[OverlayState], timestamp_seconds: float) -> Optional[OverlayState]:

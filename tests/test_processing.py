@@ -1,11 +1,18 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sidelinehd_extractor.models import OverlayTemplate, RegionFraction, Video
+from sidelinehd_extractor.models import OCRSample, OverlayTemplate, RegionFraction, Video
 from sidelinehd_extractor.ocr import OCRBackendResult
-from sidelinehd_extractor.processing import process_video, sample_timestamps, select_template_regions
+from sidelinehd_extractor.processing import (
+    field_read_warnings,
+    process_video,
+    sample_timestamps,
+    select_template_regions,
+    summarize_field_reads,
+)
 
 
 class ProcessingTests(unittest.TestCase):
@@ -153,6 +160,83 @@ class ProcessingTests(unittest.TestCase):
                 '"source_detail": "lineup_highlight"',
                 result.samples_path.read_text(encoding="utf-8"),
             )
+
+    def test_field_read_warnings_flags_configured_field_that_never_reads(self):
+        samples = [
+            OCRSample(0, "left_score", "1", normalized_text="1"),
+            OCRSample(0, "right_score", "", normalized_text=""),
+            OCRSample(5, "left_score", "1", normalized_text="1"),
+            OCRSample(5, "right_score", "", normalized_text=""),
+        ]
+
+        stats = summarize_field_reads(samples, ["left_score", "right_score"])
+        warnings = field_read_warnings(stats)
+
+        self.assertEqual(stats["left_score"], {"sample_count": 2, "non_empty_count": 2})
+        self.assertEqual(stats["right_score"], {"sample_count": 2, "non_empty_count": 0})
+        self.assertEqual(warnings[0]["code"], "field-never-read")
+        self.assertEqual(warnings[0]["field"], "right_score")
+
+    def test_process_video_records_field_read_stats_and_warnings_in_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={
+                    "left_score": RegionFraction(0, 0, 0.1, 0.1),
+                    "right_score": RegionFraction(0.1, 0, 0.1, 0.1),
+                },
+            )
+
+            def ocr(_image, field_name):
+                text = "1" if field_name == "left_score" else ""
+                return OCRBackendResult(text=text, normalized_text=text, backend="test")
+
+            with patch(
+                "sidelinehd_extractor.processing.probe_video",
+                return_value=Video(Path("game.mp4"), duration_seconds=0.0, width=10, height=10, fps=30),
+            ):
+                with patch("sidelinehd_extractor.processing.read_frames_at", return_value=[(0.0, object())]):
+                    with patch("sidelinehd_extractor.processing.crop_frame", return_value=object()):
+                        result = process_video(
+                            video_path=Path("game.mp4"),
+                            output_dir=Path(directory),
+                            template=template,
+                            save_crops=False,
+                            ocr=ocr,
+                        )
+
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["field_read_stats"]["right_score"],
+                {"sample_count": 1, "non_empty_count": 0},
+            )
+            self.assertEqual(manifest["warnings"][0]["code"], "field-never-read")
+            self.assertEqual(manifest["warnings"][0]["field"], "right_score")
+            self.assertEqual(result.warnings, manifest["warnings"])
+
+    def test_process_video_does_not_warn_for_no_ocr_debug_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={"right_score": RegionFraction(0, 0, 0.1, 0.1)},
+            )
+
+            with patch(
+                "sidelinehd_extractor.processing.probe_video",
+                return_value=Video(Path("game.mp4"), duration_seconds=0.0, width=10, height=10, fps=30),
+            ):
+                with patch("sidelinehd_extractor.processing.read_frames_at", return_value=[(0.0, object())]):
+                    with patch("sidelinehd_extractor.processing.crop_frame", return_value=object()):
+                        result = process_video(
+                            video_path=Path("game.mp4"),
+                            output_dir=Path(directory),
+                            template=template,
+                            save_crops=False,
+                        )
+
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["warnings"], [])
+            self.assertEqual(result.warnings, [])
 
 
 if __name__ == "__main__":
