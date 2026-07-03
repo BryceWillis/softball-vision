@@ -99,8 +99,24 @@ def _normalize_game_status(value: Optional[str]) -> Optional[str]:
 
     if not value:
         return None
-    if "final" in value.lower():
+    lowered = value.lower()
+    if "final" in lowered:
         return "final"
+    tokens = re.findall(r"[a-z]+", lowered)
+    game_indexes = [
+        index
+        for index, token in enumerate(tokens)
+        if token.startswith(("gam", "qam", "oam"))
+    ]
+    soon_tokens = {"soon", "boon", "book", "oon", "oom", "eom"}
+    # Interim OCR heuristic: keep this conservative and token-adjacent. The
+    # durable version belongs with item 40's confidence/fuzzy matching work.
+    if any(
+        candidate in soon_tokens
+        for index in game_indexes
+        for candidate in tokens[index + 1 : index + 4]
+    ):
+        return "pregame"
     return None
 
 

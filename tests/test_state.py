@@ -42,6 +42,17 @@ class StateParsingTests(unittest.TestCase):
         self.assertIsNone(_normalize_game_status("in play"))
         self.assertIsNone(_normalize_game_status(None))
 
+    def test_normalize_game_status_detects_pregame(self):
+        self.assertEqual(_normalize_game_status("GAME STARTING SOON"), "pregame")
+        self.assertEqual(_normalize_game_status("GAME 7:00 SOON"), "pregame")
+        self.assertEqual(_normalize_game_status("GAM Soon NG"), "pregame")
+        self.assertEqual(_normalize_game_status("GAM BOON NG"), "pregame")
+        self.assertEqual(_normalize_game_status("GAME oon NG"), "pregame")
+        self.assertEqual(_normalize_game_status("OAM Eom NG"), "pregame")
+        self.assertIsNone(_normalize_game_status("Smash-It Sports 12U"))
+        self.assertIsNone(_normalize_game_status("a1 0-0"))
+        self.assertIsNone(_normalize_game_status("GAME ON FIELD"))
+
     def test_parse_inning_handles_noisy_top_first(self):
         self.assertEqual(parse_inning("o1"), (1, HalfInning.TOP))
         self.assertEqual(parse_inning("o 1"), (1, HalfInning.TOP))
@@ -140,6 +151,21 @@ class StateParsingTests(unittest.TestCase):
         )
 
         self.assertEqual(state.metadata["game_status"], "final")
+
+    def test_state_from_samples_stores_pregame_status(self):
+        state = state_from_samples(
+            0.0,
+            {
+                "game_status": OCRSample(
+                    0.0,
+                    "game_status",
+                    "GAM Soon NG",
+                    normalized_text="GAM Soon NG",
+                ),
+            },
+        )
+
+        self.assertEqual(state.metadata["game_status"], "pregame")
 
     def test_state_from_samples_falls_back_to_lineup_batter_number(self):
         state = state_from_samples(

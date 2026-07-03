@@ -595,7 +595,7 @@ def _detect_game_final(
     run_start_index = None
     run_length = 0
     for index, state in enumerate(states):
-        if state.metadata.get("game_status") == "final":
+        if _game_status(state) == "final":
             if run_start_index is None:
                 run_start_index = index
             run_length += 1
@@ -967,11 +967,17 @@ def _game_active_timestamp(
     half_key: Tuple[int, HalfInning],
     window: int,
 ) -> Optional[float]:
-    """Return the first timestamp with a pitch count change or batter change."""
+    """Return the first timestamp that shows a live game state."""
 
     previous_batter_number: Optional[str] = None
     for state in states[start_index : start_index + window]:
         if _half_key(state) != half_key:
+            continue
+        if _is_pregame_state(state):
+            # Pregame status is a reliable negative signal, not a game-start
+            # trigger. A missed pregame OCR read followed by 0-0 must not
+            # bypass the existing positive activity gate.
+            previous_batter_number = None
             continue
         if not _is_plausible_batter_state(state):
             continue
@@ -991,6 +997,15 @@ def _game_active_timestamp(
         if state.batter_number and _has_batter_change_activity_signal(state):
             previous_batter_number = state.batter_number
     return None
+
+
+def _game_status(state: OverlayState) -> Optional[str]:
+    value = state.metadata.get("game_status")
+    return str(value) if value else None
+
+
+def _is_pregame_state(state: OverlayState) -> bool:
+    return _game_status(state) == "pregame"
 
 
 def _has_batter_change_activity_signal(state: OverlayState) -> bool:

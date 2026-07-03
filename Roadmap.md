@@ -32,6 +32,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | 7 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
 | 8 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort. |
 | 9 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. |
+| — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
 | — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
 | — | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
@@ -3173,6 +3174,82 @@ confidence deltas on a small fixture set before committing thresholds.
 **Testing:** voting picks the higher-confidence variant on fixtures and leaves
 text fields untouched; each preprocess strategy is exercised; a small
 before/after confidence comparison confirms no regression on the numeric fields.
+
+### 44. Pregame Status as Game-Start Suppressor
+
+Status: Done (Pass 13, CR-48 and CR-49 resolved)
+
+Source: CR-48 / CR-49 (Pass 13). An initial implementation of this landed in the
+working tree outside the item/CR workflow; this design retro-specifies it and
+fixes the two review findings before it is committed.
+
+**Problem.** SidelineHD renders an explicit pregame banner ("GAME STARTING SOON")
+in the scorebug status area before play begins. Item 34 already defers the first
+chapter using count/batter activity signals, but an explicit pregame marker is a
+stronger, independent way to say "definitely not live yet" — useful for the
+Victor Vipers class of games where a stable pregame overlay (including a 0-0
+count and a lineup-highlight batter) otherwise risks an early `Top 1` at 0:00.
+
+**Core design principle (resolves CR-48).** The pregame banner is a reliable
+**negative** signal ("still pregame → suppress game start") but an **unreliable
+positive** one: `game_status` OCR is intermittent, so "banner absent this frame"
+does not mean "game is live" — it may just be a missed read. Therefore the
+pregame status must be used as a **suppressor layered on item 34's existing
+activity gate**, never as an independent trigger that fires on a bare non-null
+(e.g. 0-0) count. The initial implementation did the latter — `saw_pregame_status
+and _has_ingame_overlay_signal(state)` returned on the first 0-0 after a single
+latched pregame read — which conditionally re-opens the item-34 / CR-36 guard.
+
+**Behavior.**
+- A state whose `game_status` normalizes to `"pregame"` is treated as
+  confirmed-pregame: it is skipped and **suppresses** game-start emission for that
+  frame, regardless of the count shown. It also resets the batter-change baseline
+  (`previous_batter_number = None`) so a post-pregame batter change is measured
+  from after the banner.
+- The **trigger** for game start remains item 34's positive activity gate only:
+  `balls > 0 or strikes > 0`, or a trusted batter change
+  (`_has_batter_change_activity_signal`). Remove the `saw_pregame_status`
+  early-return branch and the `_has_ingame_overlay_signal` helper entirely — a
+  bare 0-0 never qualifies, pregame or not.
+- Net effect: a stable pregame 0-0 overlay is suppressed (explicit banner ∧ no
+  positive activity); the chapter fires at the first real pitch/activity after
+  the banner clears. Correctness no longer depends on `game_status` OCR being
+  perfectly reliable, and the item-34/CR-36 guard is preserved.
+- Trade-off (document in code): this places the chapter at first *activity*, not
+  at banner-clear. If a future real-footage study shows banner-clear is a
+  materially better placement, trusting it as a trigger would require a
+  **confirmed stable pregame→ingame transition** (a run of ≥N pregame reads then
+  ≥N in-game reads, mirroring `_detect_game_final`), not a single latched flag —
+  spec that separately, backed by footage.
+
+**Normalizer robustness (resolves CR-49).** In `_normalize_game_status`:
+- Dedupe the token sets — `"gam"` subsumes `"game"`/`"gamo"`; `"oon"` subsumes
+  `"soon"`/`"boon"`. Keep only genuinely distinct variants and tighten the
+  over-broad short tokens (`"oon"`, `"oom"`, `"ong"`, `"eom"`) that can
+  false-positive on crop bleed.
+- Drop the digit guard: `gameish AND soonish` already excludes `"0-0"`/`"top1"`
+  (neither carries the alphabetic tokens), so the guard only harms — it wrongly
+  rejects legitimate labels like `"GAME 7:00 SOON"`.
+- The hardcoded-misread enumeration is a known-fragile interim. The durable form
+  is confidence-scored or edit-distance matching; tie that to **item 40 (OCR
+  Confidence Capture)** rather than growing the token lists. Leave a comment
+  saying so.
+- Add a shared `game_status` accessor (e.g. `_game_status(state)`) so
+  `_is_pregame_state` and `_detect_game_final` stop independently hardcoding the
+  `"game_status"` metadata key and its literal values.
+
+**Testing.**
+- A confirmed-pregame state followed by a **stable 0-0** overlay (no pitch) must
+  **not** emit a chapter — the realistic case CR-48 flagged. Update the existing
+  `test_window_has_game_active_signal_returns_false_for_pregame_zero_count_stable_batter`
+  to carry `game_status: "pregame"` and assert suppression.
+- A flaky pregame read (drops for a frame) with a stable 0-0 in the gap must not
+  fire early.
+- After a pregame period, the first `balls>0/strikes>0` (or trusted batter
+  change) state fires the chapter at that timestamp.
+- `_normalize_game_status`: keep the pregame-variant coverage tests, add
+  `"GAME 7:00 SOON"` → `"pregame"` (digit-guard removal), and a negative for a
+  short-token false-positive that the tightened set now rejects.
 
 ## Discussion / Later Deliverables
 

@@ -1,8 +1,8 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-07-01
-**Review passes:** 12 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred)
+**Last updated:** 2026-07-02
+**Review passes:** 13 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -34,6 +34,22 @@ _No open items._
 `run_playlist_batch` → `_run_playlist_entry` → `run_youtube` re-declares ~30 detection/tuning knobs at each hop with no transformation. Adding one new knob now means editing four parallel signatures, and a missed hop silently passes a stale default (batch runs would diverge from single-game runs). This materially weakens the deferral rationale for **item 22 (Detection Configuration Object)** — the fan-out just tripled. Not blocking item 37; folded into item 22's scope, which should now bundle these knobs into a `DetectionConfig` dataclass threaded through `run_game`/`run_youtube_game`/`run_playlist_batch`.
 
 ## Resolved Items
+
+#### CR-48 — Pregame→ingame game-start path conditionally re-opened the item-34 / CR-36 "0-0 must not qualify" guard
+**File:** [events.py](src/sidelinehd_extractor/events.py) — `_game_active_timestamp`
+**Resolved:** Pass 13
+
+Implemented Roadmap item 44's suppressor design. The `saw_pregame_status` latch and `_has_ingame_overlay_signal` early-return branch are removed (verified: no stale references in src/ or tests/). A `game_status == "pregame"` state now only suppresses — it is skipped and resets the batter-change baseline — and the game-start trigger remains item 34's positive-activity gate (`balls>0 or strikes>0`, or a trusted batter change), so a bare `0-0` never qualifies, pregame or not. Two crux regression tests confirm the fix: `test_game_active_timestamp_ignores_first_non_pregame_zero_count_state` (pregame → non-pregame 0-0 with a stable batter → `None`, where the old code returned the 0-0 timestamp) and `test_game_active_timestamp_waits_for_positive_activity_after_intermittent_pregame_reads` (flickering pregame reads + stable 0-0 → fires only at the first `strikes=1` state, t=405). 253 tests pass; ruff clean.
+
+---
+
+#### CR-49 — `_normalize_game_status` pregame matcher was a fragile hardcoded-OCR-variant denylist with redundant/over-broad tokens
+**File:** [state.py](src/sidelinehd_extractor/state.py) — `_normalize_game_status`; [events.py](src/sidelinehd_extractor/events.py)
+**Resolved:** Pass 13
+
+Rewritten to tokenize alphabetic runs (`re.findall(r"[a-z]+", ...)`) and require a game-prefixed token (`gam`/`qam`/`oam`) **followed within 3 tokens** by a soon-like token — adding the adjacency/ordering constraint the old "gameish AND soonish anywhere" matcher lacked, and tightening away the riskiest token (`ong` dropped). The digit guard is gone, so `"GAME 7:00 SOON"` now normalizes to `"pregame"` (tokenizing already excludes `"0-0"`/`"top1"`, which carry no alphabetic game/soon tokens). A comment routes the durable fuzzy/confidence matcher to item 40. Shared `_game_status(state)` accessor added and used by both `_is_pregame_state` and `_detect_game_final`, removing the duplicated `"game_status"` literal. Tests cover the accepted OCR variants, the digit-bearing label, and tightened negatives (`"GAME ON FIELD"`, `"Smash-It Sports 12U"`, `"a1 0-0"`). 253 tests pass; ruff clean.
+
+---
 
 #### CR-42 — Playlist batch retried deterministic failures, re-running full download + OCR up to `retries+1` times
 **File:** [batch.py](src/sidelinehd_extractor/batch.py) — `_run_playlist_entry`

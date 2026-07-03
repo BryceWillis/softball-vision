@@ -404,6 +404,26 @@ class EventDetectionTests(unittest.TestCase):
 
         self.assertTrue(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
 
+    def test_window_has_game_active_signal_suppresses_pregame_zero_count(self):
+        states = [
+            OverlayState(
+                timestamp_seconds=390,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"game_status": "pregame"},
+            ),
+            OverlayState(
+                timestamp_seconds=395,
+                inning=1,
+                half=HalfInning.TOP,
+                balls=0,
+                strikes=0,
+                batter_number="10",
+            ),
+        ]
+
+        self.assertFalse(_window_has_game_active_signal(states, (1, HalfInning.TOP)))
+
     def test_window_has_game_active_signal_ignores_states_with_wrong_half_key(self):
         states = [
             OverlayState(
@@ -558,6 +578,47 @@ class EventDetectionTests(unittest.TestCase):
         ]
 
         self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 2), 5)
+
+    def test_game_active_timestamp_ignores_first_non_pregame_zero_count_state(self):
+        states = [
+            OverlayState(
+                390,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"game_status": "pregame"},
+            ),
+            OverlayState(395, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+            OverlayState(400, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+        ]
+
+        self.assertIsNone(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 3))
+
+    def test_game_active_timestamp_waits_for_positive_activity_after_intermittent_pregame_reads(
+        self,
+    ):
+        states = [
+            OverlayState(340, inning=1, half=HalfInning.TOP),
+            OverlayState(
+                345,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"game_status": "pregame"},
+            ),
+            OverlayState(350, inning=1, half=HalfInning.TOP),
+            OverlayState(
+                370,
+                inning=1,
+                half=HalfInning.TOP,
+                metadata={"game_status": "pregame"},
+            ),
+            OverlayState(385, inning=1, half=HalfInning.TOP),
+            OverlayState(390, inning=1, half=HalfInning.TOP),
+            OverlayState(395, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+            OverlayState(400, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+            OverlayState(405, inning=1, half=HalfInning.TOP, balls=0, strikes=1, batter_number="10"),
+        ]
+
+        self.assertEqual(_game_active_timestamp(states, 0, (1, HalfInning.TOP), 9), 405)
 
     def test_game_active_timestamp_returns_none_when_no_signal_in_window(self):
         states = [
@@ -1583,6 +1644,28 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(
             export_youtube_chapters(events, include_credit=False),
             "0:00 Pregame\n9:10 Top 1",
+        )
+
+    def test_detect_events_defers_first_chapter_until_activity_after_pregame(self):
+        states = [
+            OverlayState(0, inning=1, half=HalfInning.TOP, metadata={"game_status": "pregame"}),
+            OverlayState(5, inning=1, half=HalfInning.TOP, metadata={"game_status": "pregame"}),
+            OverlayState(10, inning=1, half=HalfInning.TOP, metadata={"game_status": "pregame"}),
+            OverlayState(395, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+            OverlayState(400, inning=1, half=HalfInning.TOP, balls=0, strikes=0, batter_number="10"),
+            OverlayState(405, inning=1, half=HalfInning.TOP, balls=0, strikes=1, batter_number="10"),
+        ]
+
+        events = detect_events(states)
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual(
+            [(event.timestamp_seconds, event.label) for event in chapters],
+            [(405, "Top 1")],
+        )
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n6:45 Top 1",
         )
 
     def test_detect_events_emits_first_chapter_at_zero_for_mid_game_stream_start(self):

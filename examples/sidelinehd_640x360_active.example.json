@@ -33,6 +33,12 @@
       "width": 0.055,
       "height": 0.064
     },
+    "game_status": {
+      "x": 0.418,
+      "y": 0.025,
+      "width": 0.165,
+      "height": 0.083
+    },
     "right_score": {
       "x": 0.612,
       "y": 0.033,
