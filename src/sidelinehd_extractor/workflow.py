@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+import json
+
 from sidelinehd_extractor.corrections import EventCorrection, apply_event_corrections
 from sidelinehd_extractor.events import (
     BattingHalfInference,
@@ -24,6 +26,7 @@ from sidelinehd_extractor.processing import (
     update_manifest_section,
     write_jsonl,
 )
+from sidelinehd_extractor.review_report import write_review_report
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
@@ -31,6 +34,28 @@ from sidelinehd_extractor.youtube import (
     DownloadResult,
     download_youtube_video,
 )
+
+
+@dataclass(frozen=True)
+class ExportOptions:
+    """Formatting options the text exports were produced with.
+
+    Persisted into the run manifest so re-exports (e.g. the web corrections UI)
+    reproduce the run's original formatting exactly.
+    """
+
+    include_chapter_intro: bool = True
+    chapter_intro_label: str = "Pregame"
+    include_inning_score: bool = True
+    include_at_bat_inning_headers: bool = True
+
+    def to_manifest(self) -> dict:
+        return {
+            "include_chapter_intro": self.include_chapter_intro,
+            "chapter_intro_label": self.chapter_intro_label,
+            "include_inning_score": self.include_inning_score,
+            "include_at_bat_inning_headers": self.include_at_bat_inning_headers,
+        }
 
 
 @dataclass(frozen=True)
@@ -66,11 +91,12 @@ def run_game(
     sample_every_seconds: float = 5.0,
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
-    save_crops: bool = True,
+    save_crops: bool = False,
     ocr: OCRCallable = no_ocr,
     fields: Optional[Iterable[str]] = None,
     progress: Optional[Callable[[int, int, float, int, int], None]] = None,
     compute_video_hash: bool = False,
+    ocr_workers: Optional[int] = None,
     output_prefix: Optional[Path] = None,
     corrections: Optional[Iterable[EventCorrection]] = None,
     stage_progress: Optional[Callable[[str], None]] = None,
@@ -85,6 +111,7 @@ def run_game(
     min_game_final_observations: int = 3,
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
+    generate_review_report: bool = True,
 ) -> RunGameResult:
     """Process video, detect events, and write both YouTube text exports."""
 
@@ -102,6 +129,7 @@ def run_game(
         fields=fields,
         progress=progress,
         compute_video_hash=compute_video_hash,
+        ocr_workers=ocr_workers,
     )
     _emit_process_warnings(stage_progress, process_result.warnings)
     _stage(stage_progress, "parse-states")
@@ -148,25 +176,20 @@ def run_game(
         },
     )
     event_count = len(events)
-    if corrections is not None:
-        events = apply_event_corrections(events, corrections)
 
-    chapters_path, at_bats_path = export_paths(process_result.run_dir, output_prefix)
-    _write_text_export(
-        chapters_path,
-        export_youtube_chapters(
-            events,
-            include_intro=include_chapter_intro,
-            intro_label=chapter_intro_label,
-            include_score=include_inning_score,
+    chapters_path, at_bats_path = finalize_run_exports(
+        process_result.run_dir,
+        corrections=corrections,
+        output_prefix=output_prefix,
+        export_options=ExportOptions(
+            include_chapter_intro=include_chapter_intro,
+            chapter_intro_label=chapter_intro_label,
+            include_inning_score=include_inning_score,
+            include_at_bat_inning_headers=include_at_bat_inning_headers,
         ),
-    )
-    _write_text_export(
-        at_bats_path,
-        export_at_bat_comment(
-            events,
-            include_inning_headers=include_at_bat_inning_headers,
-        ),
+        roster=roster,
+        generate_review_report=generate_review_report,
+        stage_progress=stage_progress,
     )
 
     return RunGameResult(
@@ -193,11 +216,12 @@ def run_youtube_game(
     sample_every_seconds: float = 5.0,
     start_seconds: float = 0.0,
     end_seconds: Optional[float] = None,
-    save_crops: bool = True,
+    save_crops: bool = False,
     ocr: OCRCallable = no_ocr,
     fields: Optional[Iterable[str]] = None,
     progress: Optional[Callable[[int, int, float, int, int], None]] = None,
     compute_video_hash: bool = False,
+    ocr_workers: Optional[int] = None,
     output_prefix: Optional[Path] = None,
     corrections: Optional[Iterable[EventCorrection]] = None,
     stage_progress: Optional[Callable[[str], None]] = None,
@@ -212,6 +236,7 @@ def run_youtube_game(
     min_game_final_observations: int = 3,
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
+    generate_review_report: bool = True,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     merge_output_format: str = "mp4",
     write_info_json: bool = True,
@@ -246,6 +271,7 @@ def run_youtube_game(
         fields=fields,
         progress=progress,
         compute_video_hash=compute_video_hash,
+        ocr_workers=ocr_workers,
         output_prefix=output_prefix,
         corrections=corrections,
         stage_progress=stage_progress,
@@ -260,8 +286,108 @@ def run_youtube_game(
         min_game_final_observations=min_game_final_observations,
         order_validation=order_validation,
         batting_half_inference_progress=batting_half_inference_progress,
+        generate_review_report=generate_review_report,
     )
     return RunYoutubeGameResult(download=download, run=run)
+
+
+def finalize_run_exports(
+    run_dir: Path,
+    *,
+    corrections: Optional[Iterable[EventCorrection]] = None,
+    output_prefix: Optional[Path] = None,
+    export_options: Optional[ExportOptions] = None,
+    roster: Optional[Roster] = None,
+    generate_review_report: bool = True,
+    stage_progress: Optional[Callable[[str], None]] = None,
+) -> tuple[Path, Path]:
+    """Apply corrections, write both text exports, and refresh the review report.
+
+    The shared tail of ``run_game``, also callable on an existing run dir (the
+    web corrections UI re-exports through here). When ``export_options`` is
+    given it is persisted to the manifest's ``export`` section together with
+    ``output_prefix``; when omitted, both are loaded back from the manifest so
+    a re-export reproduces the run's original formatting and file locations.
+    """
+
+    manifest_path = run_dir / "manifest.json"
+    if export_options is None:
+        export_options, output_prefix = load_export_options(manifest_path)
+    else:
+        update_manifest_section(
+            manifest_path,
+            "export",
+            {
+                **export_options.to_manifest(),
+                "output_prefix": str(output_prefix) if output_prefix else None,
+            },
+        )
+
+    events = load_events(run_dir / "events.jsonl")
+    if corrections is not None:
+        events = apply_event_corrections(events, corrections)
+
+    chapters_path, at_bats_path = export_paths(run_dir, output_prefix)
+    _write_text_export(
+        chapters_path,
+        export_youtube_chapters(
+            events,
+            include_intro=export_options.include_chapter_intro,
+            intro_label=export_options.chapter_intro_label,
+            include_score=export_options.include_inning_score,
+        ),
+    )
+    _write_text_export(
+        at_bats_path,
+        export_at_bat_comment(
+            events,
+            include_inning_headers=export_options.include_at_bat_inning_headers,
+        ),
+    )
+
+    # Item 48: the review report is a standard run artifact, but its
+    # generation must never fail the run (or a re-export) itself.
+    if generate_review_report:
+        _stage(stage_progress, "review-report")
+        try:
+            write_review_report(run_dir, roster=roster)
+        except Exception as exc:  # noqa: BLE001
+            _stage(stage_progress, f"warning review-report-failed: {exc}")
+
+    return chapters_path, at_bats_path
+
+
+def load_export_options(manifest_path: Path) -> tuple[ExportOptions, Optional[Path]]:
+    """Read the persisted export options + output prefix from a run manifest.
+
+    Falls back to defaults for runs recorded before the section existed (or an
+    unreadable manifest) — those match what web jobs use.
+    """
+
+    defaults = ExportOptions()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults, None
+    section = manifest.get("export")
+    if not isinstance(section, dict):
+        return defaults, None
+    options = ExportOptions(
+        include_chapter_intro=bool(
+            section.get("include_chapter_intro", defaults.include_chapter_intro)
+        ),
+        chapter_intro_label=str(
+            section.get("chapter_intro_label", defaults.chapter_intro_label)
+        ),
+        include_inning_score=bool(
+            section.get("include_inning_score", defaults.include_inning_score)
+        ),
+        include_at_bat_inning_headers=bool(
+            section.get("include_at_bat_inning_headers", defaults.include_at_bat_inning_headers)
+        ),
+    )
+    prefix = section.get("output_prefix")
+    return options, Path(prefix) if prefix else None
 
 
 def export_paths(run_dir: Path, output_prefix: Optional[Path] = None) -> tuple[Path, Path]:

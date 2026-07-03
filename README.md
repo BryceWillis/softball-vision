@@ -114,6 +114,16 @@ run's `exports/` folder with:
 - One-click copy buttons in the HTML file.
 - A short posting checklist.
 
+To send a diagnostic log for help without sharing player names, generate and
+preview a sanitized Markdown feedback file:
+
+```sh
+sidelinehd-extractor feedback runs/YOUR_RUN --note "Home score looked empty"
+```
+
+The feedback log keeps jersey numbers and OCR confidence details, but redacts
+player/team names and omits URLs, video IDs, and crop images.
+
 ## YouTube Download Notes
 
 The downloader defaults to `--extractor-args youtube:player_client=android` because
@@ -320,6 +330,15 @@ events. Install the Tesseract CLI before using those commands:
 ```sh
 brew install tesseract
 ```
+
+End-to-end runs parallelize crop OCR across worker threads by default. Use
+`--ocr-workers 1` when debugging serially, or `--ocr-workers N` to cap CPU use.
+Crop PNGs are no longer written during normal `run-game`, `run-youtube`, or
+`run-playlist` runs unless you opt in with `--save-crops`.
+
+An optional in-process backend is available as `--ocr tesserocr`; install it with
+`python -m pip install -e ".[ocr]"`. If `tesserocr` is not installed, that backend
+falls back to the regular Tesseract subprocess path.
 
 The lower-level `process` command can still run without OCR for crop/template
 debugging, but those placeholder samples are not enough to detect real events.

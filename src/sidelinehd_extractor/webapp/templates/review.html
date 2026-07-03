@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review {{ job.id[:8] }} — SidelineHD Extractor</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           max-width: 72rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.3rem; }
+    h2 { font-size: 1.05rem; }
+    a { color: #1447a3; }
+    .job-url { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem;
+               word-break: break-all; }
+    .job-kind { color: #555; font-size: 0.8rem; text-transform: uppercase;
+                letter-spacing: 0.04em; margin-right: 0.5rem; }
+    .review-summary { color: #555; }
+    .correction-error, #correction-error { color: #a3131f; min-height: 1.2rem; }
+    ul.review-list { list-style: none; padding: 0; }
+    ul.review-list li.review-row { border: 1px solid #ddd; border-radius: 6px;
+                                   padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; }
+    li.review-row.has-flags { border-color: #e0c068; background: #fdf9ee; }
+    .row-facts { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: baseline;
+                 margin-bottom: 0.4rem; }
+    .row-index { color: #888; }
+    .row-time, .row-type { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
+    .row-flags { color: #8a5a00; font-size: 0.85rem;
+                 font-family: ui-monospace, Menlo, monospace; }
+    .row-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+    form.inline-form { display: inline-flex; gap: 0.35rem; align-items: center; }
+    form.inline-form input[name="value"] { min-width: 12rem; }
+    input, select, button { padding: 0.25rem 0.45rem; border-radius: 4px;
+                            border: 1px solid #bbb; font-size: 0.85rem; }
+    button { background: #f0f4fa; cursor: pointer; }
+    button.danger { background: #fdeaea; color: #a3131f; }
+    .applied-corrections { border: 1px solid #ddd; border-radius: 6px;
+                           padding: 0.6rem 0.8rem; margin-bottom: 1rem; }
+    .applied-corrections ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+    .add-form { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 0.8rem;
+                margin: 1rem 0; }
+    .add-form .grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <p>
+    <a href="/">&larr; All jobs</a> |
+    <a href="/jobs/{{ job.id }}">Job detail</a> |
+    <a href="/jobs/{{ job.id }}/results">Results</a>
+  </p>
+  <h1>Exception review
+    <span class="job-kind">{{ job.kind }}</span>
+    <span class="job-url">{{ job.url }}</span>
+  </h1>
+
+  {% if pending %}
+    <p>This job is not finished yet (status: {{ job.status }}).
+       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+  {% else %}
+    <div id="correction-error"></div>
+
+    {% include "_review_rows.html" %}
+
+    <section class="add-form">
+      <h2>Add a missing event</h2>
+      <form hx-post="/jobs/{{ job.id }}/corrections" hx-target="#review-rows" hx-swap="outerHTML">
+        <input type="hidden" name="entry" value="{{ entry }}">
+        <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+        <input type="hidden" name="field" value="add">
+        <div class="grid">
+          <select name="event_type" aria-label="Event type">
+            {% for event_type in event_types %}
+              <option value="{{ event_type }}">{{ event_type }}</option>
+            {% endfor %}
+          </select>
+          <input name="timestamp" placeholder="mm:ss or seconds" required>
+          <input name="label" placeholder="Label (optional)">
+          <input name="player_number" placeholder="Jersey # (optional)">
+          <input name="inning" placeholder="Inning (optional)" size="6">
+          <select name="half" aria-label="Half inning">
+            <option value="">half (optional)</option>
+            {% for half in halves %}
+              <option value="{{ half }}">{{ half }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">Add event</button>
+        </div>
+      </form>
+    </section>
+
+    <script>
+      // Bad corrections come back as a 400 partial; surface it inline. A
+      // subsequent successful correction swap clears it.
+      document.body.addEventListener("htmx:responseError", function (evt) {
+        document.getElementById("correction-error").innerHTML = evt.detail.xhr.responseText;
+      });
+      document.body.addEventListener("htmx:afterRequest", function (evt) {
+        if (evt.detail.successful) {
+          document.getElementById("correction-error").innerHTML = "";
+        }
+      });
+    </script>
+  {% endif %}
+</body>
+</html>

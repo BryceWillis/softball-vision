@@ -1,0 +1,91 @@
+{# Swap target for correction posts: applied corrections + the event rows. #}
+<div id="review-rows">
+  {% if corrections_error %}
+    <p class="correction-error">Corrections file did not apply cleanly:
+      {{ corrections_error }} — showing uncorrected events.</p>
+  {% endif %}
+
+  <p class="review-summary">
+    Flagged events: {{ flagged_count }} of {{ total_count }}.
+    {% if show_all %}
+      Showing all events —
+      <a href="/jobs/{{ job.id }}/review?entry={{ entry }}&amp;show=flagged">show flagged only</a>
+    {% else %}
+      Showing flagged only —
+      <a href="/jobs/{{ job.id }}/review?entry={{ entry }}&amp;show=all">show all events</a>
+    {% endif %}
+  </p>
+
+  {% if corrections %}
+    <section class="applied-corrections">
+      <h2>Applied corrections</h2>
+      <ul>
+        {% for correction in corrections %}
+          <li>
+            <code>{{ correction.field }}</code> at {{ correction.time_label }}
+            {% if correction.event_type %}({{ correction.event_type }}){% endif %}
+            {% if correction.value %}&rarr; <code>{{ correction.value }}</code>{% endif %}
+            <form class="inline-form" hx-post="/jobs/{{ job.id }}/corrections/clear"
+                  hx-target="#review-rows" hx-swap="outerHTML">
+              <input type="hidden" name="entry" value="{{ entry }}">
+              <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="event_type" value="{{ correction.event_type }}">
+              <input type="hidden" name="timestamp" value="{{ correction.timestamp }}">
+              <input type="hidden" name="field" value="{{ correction.field }}">
+              <button type="submit">Clear</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if rows %}
+    <ul class="review-list">
+      {% for row in rows %}
+        <li class="review-row {{ 'has-flags' if row.flags else 'no-flags' }}">
+          <div class="row-facts">
+            <span class="row-index">#{{ row.index }}</span>
+            <span class="row-time">{{ format_timestamp(row.event.timestamp_seconds) }}</span>
+            <span class="row-type">{{ row.event.event_type.value }}</span>
+            <span class="row-label">{{ row.event.label }}</span>
+            {% if row.event.player_number %}
+              <span class="row-player">#{{ row.event.player_number }}
+                {% if row.event.player_name %}{{ row.event.player_name }}{% endif %}</span>
+            {% endif %}
+            {% if row.flags %}
+              <span class="row-flags">{{ row.flags | join(", ") }}</span>
+            {% endif %}
+          </div>
+          <div class="row-actions">
+            <form class="inline-form" hx-post="/jobs/{{ job.id }}/corrections"
+                  hx-target="#review-rows" hx-swap="outerHTML">
+              <input type="hidden" name="entry" value="{{ entry }}">
+              <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="timestamp" value="{{ row.event.timestamp_seconds }}">
+              <input type="hidden" name="event_type" value="{{ row.event.event_type.value }}">
+              <select name="field" aria-label="Field to correct">
+                {% for field in edit_fields %}
+                  <option value="{{ field }}">{{ field }}</option>
+                {% endfor %}
+              </select>
+              <input name="value" value="{{ row.event.label }}" aria-label="Corrected value">
+              <button type="submit">Save correction</button>
+            </form>
+            <form class="inline-form" hx-post="/jobs/{{ job.id }}/corrections"
+                  hx-target="#review-rows" hx-swap="outerHTML">
+              <input type="hidden" name="entry" value="{{ entry }}">
+              <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="timestamp" value="{{ row.event.timestamp_seconds }}">
+              <input type="hidden" name="event_type" value="{{ row.event.event_type.value }}">
+              <input type="hidden" name="field" value="delete">
+              <button type="submit" class="danger">Delete event</button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No {{ 'events' if show_all else 'flagged events' }} for this run.</p>
+  {% endif %}
+</div>

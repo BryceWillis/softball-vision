@@ -28,6 +28,7 @@ from sidelinehd_extractor.config import (
 from sidelinehd_extractor.corrections import apply_event_corrections, load_event_corrections
 from sidelinehd_extractor.events import detect_events_file, load_events
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
+from sidelinehd_extractor.feedback import write_feedback_log
 from sidelinehd_extractor.models import HalfInning, RegionFraction, Roster
 from sidelinehd_extractor.ocr import (
     OCRBackendUnavailable,
@@ -281,6 +282,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
         fields=_parse_field_list(args.field),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
         compute_video_hash=args.hash_video,
+        ocr_workers=args.ocr_workers,
     )
     print(_to_json(result))
     return 0
@@ -461,11 +463,12 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         sample_every_seconds=args.sample_every,
         start_seconds=parse_timestamp_value(args.start),
         end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=not args.no_crops,
+        save_crops=args.save_crops,
         ocr=ocr_backend,
         fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
         compute_video_hash=args.hash_video,
+        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
@@ -528,11 +531,12 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         sample_every_seconds=args.sample_every,
         start_seconds=parse_timestamp_value(args.start),
         end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=not args.no_crops,
+        save_crops=args.save_crops,
         ocr=ocr_backend,
         fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
         compute_video_hash=args.hash_video,
+        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
@@ -602,11 +606,12 @@ def _cmd_run_playlist(args: argparse.Namespace) -> int:
         sample_every_seconds=args.sample_every,
         start_seconds=parse_timestamp_value(args.start),
         end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=not args.no_crops,
+        save_crops=args.save_crops,
         ocr=ocr_backend,
         fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
         compute_video_hash=args.hash_video,
+        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
@@ -736,6 +741,16 @@ def _cmd_publish_helper(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_feedback(args: argparse.Namespace) -> int:
+    result = write_feedback_log(
+        run_path=args.run_path,
+        output_path=args.output,
+        note=args.note,
+    )
+    print(result.output_path)
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -774,7 +789,7 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
     )
     parser.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
-    parser.add_argument("--ocr", choices=("none", "tesseract"), default="tesseract")
+    parser.add_argument("--ocr", choices=("none", "tesseract", "tesserocr"), default="tesseract")
     parser.add_argument(
         "--progress-every",
         type=int,
@@ -782,6 +797,13 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
         help="Print progress every N sampled timestamps.",
     )
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output.")
+    parser.add_argument(
+        "--ocr-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="OCR worker threads. Defaults to the detected CPU count; use 1 for serial OCR.",
+    )
     parser.add_argument(
         "--field",
         action="append",
@@ -792,7 +814,17 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
             "batter_card_number,batter_number."
         ),
     )
-    parser.add_argument("--no-crops", action="store_true", help="Do not write crop image files.")
+    parser.add_argument(
+        "--save-crops",
+        action="store_true",
+        help="Write crop image files for OCR debugging. Disabled by default for runs.",
+    )
+    parser.add_argument(
+        "--no-crops",
+        action="store_false",
+        dest="save_crops",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--hash-video",
         action="store_true",
@@ -959,7 +991,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ocr_image.add_argument("image_path", type=Path)
     ocr_image.add_argument("--field", required=True, help="Template field name, such as count.")
-    ocr_image.add_argument("--ocr", choices=("none", "tesseract"), default="tesseract")
+    ocr_image.add_argument("--ocr", choices=("none", "tesseract", "tesserocr"), default="tesseract")
     ocr_image.add_argument(
         "--preprocessed-output",
         type=Path,
@@ -986,7 +1018,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
     )
     process.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
-    process.add_argument("--ocr", choices=("none", "tesseract"), default="none")
+    process.add_argument("--ocr", choices=("none", "tesseract", "tesserocr"), default="none")
     process.add_argument(
         "--progress-every",
         type=int,
@@ -994,6 +1026,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print progress every N sampled timestamps.",
     )
     process.add_argument("--quiet", action="store_true", help="Suppress progress output.")
+    process.add_argument(
+        "--ocr-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="OCR worker threads. Defaults to the detected CPU count; use 1 for serial OCR.",
+    )
     process.add_argument(
         "--field",
         action="append",
@@ -1235,6 +1274,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--game-name", help="Override game name used in the kit title and folder."
     )
     publish_helper.set_defaults(func=_cmd_publish_helper)
+
+    feedback = subparsers.add_parser(
+        "feedback",
+        help="Write a sanitized Markdown feedback log for a completed run.",
+    )
+    feedback.add_argument("run_path", type=Path, help="Run directory.")
+    feedback.add_argument("--note", help="Optional user-authored note included verbatim.")
+    feedback.add_argument("--output", "-o", type=Path, help="Output Markdown path.")
+    feedback.set_defaults(func=_cmd_feedback)
 
     serve = subparsers.add_parser(
         "serve",

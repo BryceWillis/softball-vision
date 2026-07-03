@@ -52,10 +52,12 @@ class CLITests(unittest.TestCase):
                 "none",
                 "--progress-every",
                 "10",
+                "--ocr-workers",
+                "2",
                 "--quiet",
                 "--field",
                 "inning,count",
-                "--no-crops",
+                "--save-crops",
                 "--hash-video",
                 "--output-prefix",
                 "scratch/full",
@@ -97,10 +99,12 @@ class CLITests(unittest.TestCase):
                 "none",
                 "--progress-every",
                 "10",
+                "--ocr-workers",
+                "2",
                 "--quiet",
                 "--field",
                 "inning,count",
-                "--no-crops",
+                "--save-crops",
                 "--hash-video",
                 "--output-prefix",
                 "scratch/full",
@@ -142,10 +146,12 @@ class CLITests(unittest.TestCase):
                 "none",
                 "--progress-every",
                 "10",
+                "--ocr-workers",
+                "2",
                 "--quiet",
                 "--field",
                 "inning,count",
-                "--no-crops",
+                "--save-crops",
                 "--hash-video",
                 "--output-prefix",
                 "scratch/full",
@@ -178,9 +184,10 @@ class CLITests(unittest.TestCase):
             "end",
             "ocr",
             "progress_every",
+            "ocr_workers",
             "quiet",
             "field",
-            "no_crops",
+            "save_crops",
             "hash_video",
             "output_prefix",
             "corrections",
@@ -202,6 +209,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_game.video_path, Path("game.mp4"))
         self.assertEqual(run_youtube.url, "https://youtu.be/example")
         self.assertEqual(run_playlist.url, "https://youtube.com/playlist?list=example")
+        self.assertTrue(run_game.save_crops)
+        self.assertEqual(run_game.ocr_workers, 2)
 
     def test_run_commands_default_batting_half_to_auto(self):
         parser = build_parser()
@@ -222,6 +231,16 @@ class CLITests(unittest.TestCase):
         self.assertEqual(run_youtube.min_game_final_observations, 3)
         self.assertEqual(run_playlist.min_game_final_observations, 3)
         self.assertEqual(detect_events.min_game_final_observations, 3)
+        self.assertFalse(run_game.save_crops)
+        self.assertFalse(run_youtube.save_crops)
+        self.assertFalse(run_playlist.save_crops)
+        self.assertIsNone(run_game.ocr_workers)
+
+    def test_run_commands_accept_legacy_no_crops_flag(self):
+        parser = build_parser()
+        run_game = parser.parse_args(["run-game", "game.mp4", "--no-crops"])
+
+        self.assertFalse(run_game.save_crops)
 
     def test_run_playlist_accepts_batch_controls(self):
         parser = build_parser()
@@ -288,6 +307,16 @@ class CLITests(unittest.TestCase):
         publish_helper = parser.parse_args(["publish-helper", "runs/game", "--no-html"])
 
         self.assertTrue(publish_helper.no_html)
+
+    def test_feedback_command_accepts_note_and_output(self):
+        parser = build_parser()
+        feedback = parser.parse_args(
+            ["feedback", "runs/game", "--note", "look here", "--output", "feedback.md"]
+        )
+
+        self.assertEqual(feedback.run_path, Path("runs/game"))
+        self.assertEqual(feedback.note, "look here")
+        self.assertEqual(feedback.output, Path("feedback.md"))
 
     def test_setup_roster_writes_piped_roster(self):
         with tempfile.TemporaryDirectory() as directory:

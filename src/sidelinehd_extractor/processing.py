@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +14,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 from sidelinehd_extractor.config import default_overlay_template
 from sidelinehd_extractor.crops import crop_frame, save_crop
 from sidelinehd_extractor.models import OCRSample, OverlayTemplate, Roster
-from sidelinehd_extractor.ocr import FIELD_CONFIGS, OCRCallable, no_ocr
+from sidelinehd_extractor.ocr import FIELD_CONFIGS, OCRBackendResult, OCRCallable, no_ocr
 from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.video import probe_video, read_frames_at
 
@@ -28,6 +30,25 @@ class ProcessResult:
     crop_count: int
     field_read_stats: Dict[str, Dict[str, int]] = field(default_factory=dict)
     warnings: List[Dict[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _OCRTask:
+    """One crop queued for OCR."""
+
+    index: int
+    timestamp_seconds: float
+    field_name: str
+    crop: object
+    crop_path: Optional[Path]
+
+
+@dataclass(frozen=True)
+class _OCRTaskResult:
+    """OCR output paired with the original task ordering metadata."""
+
+    task: _OCRTask
+    result: OCRBackendResult
 
 
 def sample_timestamps(
@@ -211,9 +232,11 @@ def process_video(
     fields: Optional[Iterable[str]] = None,
     progress: Optional[Callable[[int, int, float, int, int], None]] = None,
     compute_video_hash: bool = False,
+    ocr_workers: Optional[int] = None,
 ) -> ProcessResult:
     """Sample a local video, crop configured overlay regions, and persist OCR samples."""
 
+    worker_count = _normalize_ocr_workers(ocr_workers)
     overlay_template = template or default_overlay_template()
     video = probe_video(video_path, compute_hash=compute_video_hash)
     if video.duration_seconds is None:
@@ -235,43 +258,53 @@ def process_video(
     )
     total_timestamps = len(timestamps)
     total_expected_samples = total_timestamps * len(selected_regions)
-    for timestamp_index, (timestamp_seconds, frame) in enumerate(
-        read_frames_at(video.path, timestamps),
-        start=1,
-    ):
-        for field_name, region in selected_regions.items():
-            crop = crop_frame(frame, region)
-            crop_path = None
-            if save_crops:
-                safe_field_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", field_name).strip("_")
-                safe_field_name = safe_field_name or "field"
-                timestamp_token = f"{timestamp_seconds:010.3f}".replace(".", "p")
-                crop_name = f"{timestamp_token}_{safe_field_name}.png"
-                crop_path = Path("crops") / crop_name
-                save_crop(crop, run_dir / crop_path)
-                crop_count += 1
-
-            ocr_result = ocr(crop, field_name)
-            samples.append(
-                OCRSample(
-                    video_sha256=video.sha256,
-                    timestamp_seconds=timestamp_seconds,
-                    field_name=field_name,
-                    raw_text=ocr_result.text,
-                    normalized_text=ocr_result.normalized_text,
-                    confidence=ocr_result.confidence,
-                    crop_path=crop_path,
-                    source_detail=ocr_result.source_detail,
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for timestamp_index, (timestamp_seconds, frame) in enumerate(
+            read_frames_at(video.path, timestamps),
+            start=1,
+        ):
+            tasks = []
+            for field_index, (field_name, region) in enumerate(selected_regions.items()):
+                crop = crop_frame(frame, region)
+                crop_path = None
+                if save_crops:
+                    crop_path = _crop_path(timestamp_seconds, field_name)
+                    save_crop(crop, run_dir / crop_path)
+                    crop_count += 1
+                tasks.append(
+                    _OCRTask(
+                        index=field_index,
+                        timestamp_seconds=timestamp_seconds,
+                        field_name=field_name,
+                        crop=crop,
+                        crop_path=crop_path,
+                    )
                 )
-            )
-        if progress is not None:
-            progress(
-                timestamp_index,
-                total_timestamps,
-                timestamp_seconds,
-                len(samples),
-                total_expected_samples,
-            )
+
+            timestamp_results = _ocr_tasks(executor, tasks, ocr)
+            for task_result in timestamp_results:
+                task = task_result.task
+                ocr_result = task_result.result
+                samples.append(
+                    OCRSample(
+                        video_sha256=video.sha256,
+                        timestamp_seconds=task.timestamp_seconds,
+                        field_name=task.field_name,
+                        raw_text=ocr_result.text,
+                        normalized_text=ocr_result.normalized_text,
+                        confidence=ocr_result.confidence,
+                        crop_path=task.crop_path,
+                        source_detail=ocr_result.source_detail,
+                    )
+                )
+            if progress is not None:
+                progress(
+                    timestamp_index,
+                    total_timestamps,
+                    timestamp_seconds,
+                    len(samples),
+                    total_expected_samples,
+                )
 
     field_read_stats = summarize_field_reads(samples, selected_regions.keys())
     warnings = [] if ocr is no_ocr else field_read_warnings(field_read_stats)
@@ -289,6 +322,8 @@ def process_video(
             "end_seconds": end_seconds,
             "save_crops": save_crops,
             "ocr_backend": getattr(ocr, "__name__", ocr.__class__.__name__),
+            "ocr_workers": worker_count,
+            "tesseract_version": getattr(ocr, "tesseract_version", None),
             "compute_video_hash": compute_video_hash,
             "fields": list(selected_regions.keys()),
             "field_read_stats": field_read_stats,
@@ -307,3 +342,33 @@ def process_video(
         field_read_stats=field_read_stats,
         warnings=warnings,
     )
+
+
+def _normalize_ocr_workers(ocr_workers: Optional[int]) -> int:
+    if ocr_workers is None:
+        return os.cpu_count() or 1
+    if ocr_workers < 1:
+        raise ValueError("ocr_workers must be >= 1")
+    return ocr_workers
+
+
+def _crop_path(timestamp_seconds: float, field_name: str) -> Path:
+    safe_field_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", field_name).strip("_")
+    safe_field_name = safe_field_name or "field"
+    timestamp_token = f"{timestamp_seconds:010.3f}".replace(".", "p")
+    crop_name = f"{timestamp_token}_{safe_field_name}.png"
+    return Path("crops") / crop_name
+
+
+def _ocr_tasks(
+    executor: ThreadPoolExecutor,
+    tasks: List[_OCRTask],
+    ocr: OCRCallable,
+) -> List[_OCRTaskResult]:
+    futures = [executor.submit(_ocr_task, task, ocr) for task in tasks]
+    results = [future.result() for future in as_completed(futures)]
+    return sorted(results, key=lambda item: item.task.index)
+
+
+def _ocr_task(task: _OCRTask, ocr: OCRCallable) -> _OCRTaskResult:
+    return _OCRTaskResult(task=task, result=ocr(task.crop, task.field_name))

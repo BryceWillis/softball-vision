@@ -1,5 +1,8 @@
+import io
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sidelinehd_extractor.ocr import (
@@ -8,12 +11,15 @@ from sidelinehd_extractor.ocr import (
     OCRFieldConfig,
     FIELD_CONFIGS,
     _extract_highlighted_lineup_crop,
+    _optional_tesserocr_backend,
+    _parse_tesseract_tsv_output,
     _tesseract_install_hint,
     _tesseract_command,
     create_ocr_backend,
     normalize_ocr_text,
     preprocess_for_ocr,
     tesseract_ocr_image,
+    tesseract_version,
 )
 
 
@@ -43,6 +49,72 @@ class OCRTests(unittest.TestCase):
         with patch("sidelinehd_extractor.ocr.shutil.which", return_value=None):
             with self.assertRaises(OCRBackendUnavailable):
                 create_ocr_backend("tesseract")
+
+    def test_create_tesserocr_backend_falls_back_to_subprocess_when_unavailable(self):
+        with patch("sidelinehd_extractor.ocr._optional_tesserocr_backend", return_value=None):
+            with patch("sidelinehd_extractor.ocr.ensure_tesseract_available") as ensure:
+                with patch("sidelinehd_extractor.ocr.tesseract_version", return_value="5.3.0"):
+                    backend = create_ocr_backend("tesserocr")
+
+        ensure.assert_called_once()
+        self.assertIs(backend, tesseract_ocr_image)
+
+    def test_create_tesserocr_backend_uses_optional_backend_when_available(self):
+        def sentinel(_image, _field_name):
+            return OCRBackendResult("x", "x")
+
+        with patch("sidelinehd_extractor.ocr._optional_tesserocr_backend", return_value=sentinel):
+            with patch("sidelinehd_extractor.ocr.ensure_tesseract_available") as ensure:
+                with patch("sidelinehd_extractor.ocr.tesseract_version", return_value="5.3.0"):
+                    backend = create_ocr_backend("tesserocr")
+
+        ensure.assert_not_called()
+        self.assertIs(backend, sentinel)
+
+    def test_optional_tesserocr_backend_returns_none_when_dependency_missing(self):
+        def fake_import(name, *args, **kwargs):
+            if name == "tesserocr":
+                raise ImportError("missing")
+            return original_import(name, *args, **kwargs)
+
+        original_import = __import__
+        with patch("builtins.__import__", side_effect=fake_import):
+            backend = _optional_tesserocr_backend()
+
+        self.assertIsNone(backend)
+
+    def test_tesseract_version_parses_first_line(self):
+        with patch(
+            "sidelinehd_extractor.ocr.subprocess.run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="tesseract 5.3.0\n leptonica-1.83.1\n",
+                stderr="",
+            ),
+        ):
+            version = tesseract_version()
+
+        self.assertEqual(version, "5.3.0")
+
+    def test_tesseract_version_returns_none_for_unrecognized_output(self):
+        with patch(
+            "sidelinehd_extractor.ocr.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="unexpected\n", stderr=""),
+        ):
+            version = tesseract_version()
+
+        self.assertIsNone(version)
+
+    def test_create_tesseract_backend_warns_for_old_version_without_failing(self):
+        stderr = io.StringIO()
+
+        with patch("sidelinehd_extractor.ocr.shutil.which", return_value="/usr/bin/tesseract"):
+            with patch("sidelinehd_extractor.ocr.tesseract_version", return_value="3.05.02"):
+                with redirect_stderr(stderr):
+                    backend = create_ocr_backend("tesseract")
+
+        self.assertIs(backend, tesseract_ocr_image)
+        self.assertIn("below the supported minimum", stderr.getvalue())
 
     def test_tesseract_install_hint_is_platform_specific(self):
         with patch("sidelinehd_extractor.ocr.sys.platform", "darwin"):
@@ -121,6 +193,41 @@ class OCRTests(unittest.TestCase):
         self.assertIn("--psm", command)
         self.assertIn("10", command)
         self.assertIn("tessedit_char_whitelist=0123456789", command)
+        self.assertEqual(command[-1], "tsv")
+
+    def test_parse_tesseract_tsv_uses_min_confidence_for_numeric_fields(self):
+        text, confidence = _parse_tesseract_tsv_output(
+            "\t".join(["level", "page_num", "conf", "text"])
+            + "\n"
+            + "\t".join(["5", "1", "91.0", "12"])
+            + "\n"
+            + "\t".join(["5", "1", "74.0", "3"])
+            + "\n",
+            "batter_card_number",
+        )
+
+        self.assertEqual(text, "12 3")
+        self.assertAlmostEqual(confidence, 0.74)
+
+    def test_parse_tesseract_tsv_uses_weighted_mean_for_text_fields(self):
+        text, confidence = _parse_tesseract_tsv_output(
+            "\t".join(["level", "page_num", "conf", "text"])
+            + "\n"
+            + "\t".join(["5", "1", "80.0", "Maya"])
+            + "\n"
+            + "\t".join(["5", "1", "50.0", "R."])
+            + "\n",
+            "batter_card_name",
+        )
+
+        self.assertEqual(text, "Maya R.")
+        self.assertAlmostEqual(confidence, ((4 * 0.8) + (2 * 0.5)) / 6)
+
+    def test_parse_tesseract_tsv_degrades_to_text_without_confidence_when_malformed(self):
+        text, confidence = _parse_tesseract_tsv_output("plain text\n", "batter_card_name")
+
+        self.assertEqual(text, "plain text\n")
+        self.assertIsNone(confidence)
 
 
 if __name__ == "__main__":

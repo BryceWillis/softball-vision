@@ -26,16 +26,19 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
-| 1 | **48** — Generate `review_report.md` during runs | Ready to implement | **Web track (next).** Small: call the existing `write_review_report(run_dir)` after export in `run_game` so the report becomes a standard run artifact — lights up item 47's per-game flagged count/warnings and makes `review-report` a re-render convenience. Surfaced by item 47 review (Pass 16). |
-| 3 | **41** — OCR Pipeline Performance | Ready to implement | **OCR track (Codex).** Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
-| 4 | **40** — OCR Confidence Capture | Ready to implement | **OCR track (Codex).** Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
-| 5 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
-| 6 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
-| 7 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
-| 8 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. 39a/39b promoted to items 46/47; 39c–39e follow. Depends on items 37, 38, 20. Cloud is a later seam. |
-| 9 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
-| 10 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
-| 11 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
+| — | **48** — Generate `review_report.md` during runs | Done (Pass 17) | **Web track (Fable 5).** Implemented: `run_game` writes `review_report.md` after export (degrades via `warning review-report-failed`; opt-out flag threaded through `run_youtube_game`); item 47's per-game review summary now lights up end-to-end. Awaiting architect review. |
+| — | **49** — Web App 39c: Exception Review + Corrections UI | Done (Pass 17) | **Web track (Fable 5).** Implemented: `/jobs/{id}/review` flagged-events UI → edit/delete/add → de-duped `<run_dir>/corrections.csv` → faithful re-export via new shared `finalize_run_exports` + manifest-persisted export options. Awaiting architect review. |
+| 3 | **50** — Web App 39d: Roster Management UI | Ready to implement | **Web track (next; unblocked).** CRUD over `rosters/*.csv` reusing `parse_team_list` + `write_roster_csv`; paste-a-list create, per-row edit, set config default. Names stay local. |
+| 4 | **51** — Web App 39e: Send-Feedback UI | Needs item 38 first | **Web track.** Preview the **sanitized** feedback log (item 38's `render_feedback_log`) → prefilled GitHub-issue/email hand-off; app makes no outbound request. Mandatory PII-leak test. Blocked until item 38 is approved. |
+| — | **41** — OCR Pipeline Performance | Done (Pass 17) | **OCR track (Codex).** Added worker-pool OCR with stable sample ordering, optional `tesserocr` backend/fallback, and opt-in end-to-end crop saving via `--save-crops`. |
+| — | **40** — OCR Confidence Capture | Done (Pass 17) | **OCR track (Codex).** Tesseract TSV parsing now captures 0–1 OCR confidence with numeric-min/text-weighted aggregation and degrades safely on malformed output. |
+| — | **42** — Tesseract Version Capture | Done (Pass 17) | Captures `tesseract --version`, warns non-fatally for missing/old/unrecognized versions, and records the version in `manifest.json`. |
+| — | **38** — Feedback Log | Done (Pass 17) | Added CLI-first sanitized Markdown feedback logs with stable player pseudonyms, preserved jersey numbers, environment/version metadata, review flags, and guard tests against name leakage. |
+| 9 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 10 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. 39a/39b→items 46/47; 39c/39d/39e→items 49/50/51. Depends on items 37, 38, 20. Cloud is a later seam. |
+| 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
+| 12 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
+| 13 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
 | — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
 | — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
@@ -2957,7 +2960,7 @@ batch-manifest shape. Cover `--limit` and `--start-index` slicing.
 ### 38. Feedback Log — Capture, Sanitize, Export
 
 Source: Product backlog
-Status: Ready to implement (after item 37)
+Status: Ready for Review
 
 Produce a sanitized, portable **Markdown** log from a completed run that a
 videographer can attach to a GitHub issue or email and send to us. We feed that
@@ -3016,6 +3019,20 @@ feeds a deliberately name-laden run and asserts none of those name tokens surviv
 in the output — a property check that every roster name is absent from the
 rendered Markdown.
 
+**Implementation note.** Added `feedback.py` with `load_feedback_data()`,
+`build_name_sanitizer()`, `sanitize_feedback()`, `render_feedback_log()`, and
+`write_feedback_log()`. The CLI command is
+`sidelinehd-extractor feedback RUN_DIR [--note "..."] [--output feedback.md]`.
+The rendered Markdown includes selected environment metadata (tool/platform,
+Tesseract version, OCR backend/workers, template, fields, detection params), run
+warnings, review flags with exact-timestamp OCR raw/normalized/confidence rows,
+and a sanitized event sequence. Player names are replaced with stable `Player A`
+style pseudonyms built from roster and observed names; jersey numbers are kept;
+team names are redacted; URLs/video IDs/crop paths are dropped. `--note` remains
+verbatim by design. Tests cover useful diagnostic content, preserved jersey
+numbers/confidence/version metadata, name/team/URL/crop exclusion, observed-name
+pseudonyms, and CLI parsing.
+
 ### 39. Local Web App (Epic)
 
 Source: Product backlog
@@ -3044,13 +3061,14 @@ revisit only if this ever becomes a hosted product.
   below). Render chapter and at-bat exports for every game in a batch on a single
   page — multiple copy-kit blocks stacked, one per game, each with one-click copy.
   Reuses item 20's HTML paste-kit machinery.
-- **39c — Exception review UI.** Surface `review.py` flags, resolve them into
-  `corrections.py`, and re-export — a friendly front-end for the corrections
-  workflow that today is hand-edited CSV.
-- **39d — Roster management UI.** CRUD over the roster CSVs (`roster.py`).
-- **39e — Send-feedback UI.** Wraps item 38's sanitizer: preview the Markdown log
-  in-browser, then hand off to a GitHub-issue or email flow. No new sanitization
-  logic in the web layer.
+- **39c — Exception review UI.** → **Promoted to item 49** (full design below).
+  Surface `review.py` flags, resolve them into `corrections.py`, and re-export —
+  a friendly front-end for the corrections workflow that today is hand-edited CSV.
+- **39d — Roster management UI.** → **Promoted to item 50** (full design below).
+  CRUD over the roster CSVs (`roster.py`).
+- **39e — Send-feedback UI.** → **Promoted to item 51** (full design below).
+  Wraps item 38's sanitizer: preview the Markdown log in-browser, then hand off to
+  a GitHub-issue or email flow. No new sanitization logic in the web layer.
 
 **Cross-cutting — packaging/install (with item 19):** the per-device install
 model puts smooth "install and run" ergonomics for non-developers (Mac and
@@ -3062,7 +3080,7 @@ item 38.
 ### 40. OCR Confidence Capture
 
 Source: Architect review 2026-07-02 / accuracy
-Status: Ready to implement (precede item 38)
+Status: Ready for Review
 
 **Problem:** [`_tesseract_ocr_preprocessed_image`](src/sidelinehd_extractor/ocr.py)
 hardcodes `confidence=None`. `OCRSample.confidence`, the review flags, and the
@@ -3096,10 +3114,22 @@ tests still pass with the new command.
 **Value:** unblocks item 31 (tiered gate), sharpens review flags, and roughly
 doubles the diagnostic value of the feedback log (item 38) — hence "precede 38."
 
+**Implementation note.** The subprocess Tesseract path now requests TSV output
+and parses `text`/`conf` rows into `OCRBackendResult.confidence` on the existing
+0–1 scale. Numeric fields (`left_score`, `right_score`, `count`,
+`batter_number`, `batter_card_number`, `on_deck_number`) use the minimum parsed
+word confidence; text fields use a length-weighted mean of positive-confidence
+tokens. Malformed/non-TSV output returns the raw text with `confidence=None` so
+OCR does not fail on output-format drift. The optional `tesserocr` backend uses
+the same aggregation policy via `AllWordConfidences()`. Existing
+`process_video()`/`OCRSample` wiring already persisted confidence; tests now
+cover TSV numeric/text aggregation, malformed fallback, the `tsv` command mode,
+and sample-file persistence.
+
 ### 41. OCR Pipeline Performance
 
 Source: Architect review 2026-07-02 / performance
-Status: Ready to implement (pair with item 37)
+Status: Ready for Review
 
 **Problem:** the pipeline spawns one `tesseract` subprocess and writes one temp
 PNG **per crop** ([ocr.py](src/sidelinehd_extractor/ocr.py) `_tesseract_ocr_preprocessed_image`;
@@ -3135,10 +3165,26 @@ the serial path (ordering guarantee); `--ocr-workers 1` vs `N` equivalence; the
 tesserocr backend behind an import guard that skips when unavailable; assert the
 new `save_crops` default.
 
+**Implementation note.** `process_video()` now accepts `ocr_workers` (defaulting
+to CPU count, `1` for serial debugging), runs per-timestamp crop OCR through a
+`ThreadPoolExecutor`, and reassembles samples in template field order so
+`samples.jsonl` ordering remains stable. The worker count is recorded in
+`manifest.json` and is threaded through `run_game`, `run_youtube_game`,
+`run_playlist_batch`, and the CLI as `--ocr-workers N`. Added optional
+`--ocr tesserocr` / backend name `tesserocr`: when the `ocr` extra is installed,
+it uses a thread-local `PyTessBaseAPI` per worker; when unavailable, it falls
+back to the existing subprocess backend after the normal Tesseract availability
+check. End-to-end run commands now default to not writing crop PNGs, with opt-in
+`--save-crops`; the old `--no-crops` spelling remains accepted as a compatibility
+no-op. The low-level `process` audit command keeps its crop-saving default.
+Added regression coverage for serial-vs-parallel row equivalence/order, invalid
+worker counts, shared CLI parsing, the new run crop default, and the guarded
+`tesserocr` fallback path.
+
 ### 42. Tesseract Version Capture and Compatibility Check
 
 Source: Architect review 2026-07-02 / support
-Status: Ready to implement (precede item 38)
+Status: Ready for Review
 
 **Problem:** [`ensure_tesseract_available`](src/sidelinehd_extractor/ocr.py) checks
 only that the binary exists. OCR output differs meaningfully between Tesseract 4
@@ -3155,6 +3201,16 @@ likely "works on my machine" support issue.
 
 **Testing:** mock `--version` output for 4.x and 5.x → parsed correctly;
 garbled/absent → returns `None` and warns; manifest records the version.
+
+**Implementation note.** Added `tesseract_version() -> Optional[str]`, parsing the
+first `tesseract --version` line into a version string such as `5.3.0`.
+`create_ocr_backend("tesseract")` and the `tesserocr` path now capture that
+version onto the backend callable/object and emit only non-fatal stderr warnings
+when the version is missing, unrecognized, or below `MIN_SUPPORTED_TESSERACT_VERSION`
+(`4.1`). `process_video()` records the captured value as `tesseract_version` in
+`manifest.json`, making it available to item 38's feedback log. Tests cover
+version parsing, unrecognized output, old-version warning without backend
+failure, and manifest persistence.
 
 ### 43. OCR Accuracy Follow-ons — Multi-PSM Voting and Per-Field Preprocessing
 
@@ -3504,7 +3560,7 @@ flagged the gap rather than silently adding generation.
 
 ### 48. Generate `review_report.md` During Runs
 
-Status: Ready to implement
+Status: Ready for review (implemented by Fable 5)
 Source: Item 47 review (Pass 16). Depends on item 45 (manifest warnings, Done) and
 item 47 (consumer, Done).
 
@@ -3547,6 +3603,300 @@ producer.
    real jobs (no longer the degraded path).
 3. Report-generation failure degrades gracefully; the run still succeeds.
 4. `review-report` CLI behavior is unchanged.
+
+### 49. Local Web App — Phase 39c: Exception Review + Corrections UI
+
+Status: Ready for review (implemented by Fable 5)
+Source: Promoted from item 39 (epic), phase 39c. Depends on item 46 (web skeleton,
+Done), item 47 (results page, Done), item 48 (review report as a run artifact,
+Ready for Review) — and the existing `review.py` / `corrections.py` / `exports.py`.
+
+A browser front-end for the corrections workflow that today is a hand-edited CSV.
+For a completed run, show the **flagged events** the review pass surfaced, let the
+user resolve each one — edit a field, delete a false positive, or add a missing
+event — persist those resolutions to the run's corrections file, and **re-export
+the chapters/at-bats with corrections applied**, without re-running download,
+OCR, or detection. The re-exported files are the same ones item 47's results page
+reads, so a correction immediately improves the copy kits.
+
+**Reuse the pipeline; do not reinvent correction or export logic.** Every piece
+below already exists:
+- `collect_event_review_rows(events, kind="all", options, roster)` →
+  `List[ReviewRow(index, event, flags)]` in [review.py](src/sidelinehd_extractor/review.py)
+  is the flag source. A row is "flagged" when `row.flags` is non-empty.
+- `EventCorrection` + `load_event_corrections(path)` + `apply_event_corrections(events, corrections)`
+  in [corrections.py](src/sidelinehd_extractor/corrections.py) are the correction
+  model, reader, and applier. Do not write a new correction format.
+- `load_events(events.jsonl)` + `export_youtube_chapters(...)` /
+  `export_at_bat_comment(...)` in [exports.py](src/sidelinehd_extractor/exports.py)
+  are the re-export path. `run_game` already does exactly
+  `load_events → apply_event_corrections → export_*` (see
+  [workflow.py](src/sidelinehd_extractor/workflow.py) ~L155-176).
+
+**Correction semantics (from `corrections.py`, do not change them).**
+- **Edit** an event: `field` ∈ {`label`, `timestamp_seconds`, `player_number`,
+  `player_name`, `inning`, `half`, `event_type`}, with the new value in `value`.
+- **Delete** a false positive: `field` ∈ {`delete`, `remove`, `skip`}.
+- **Add** a missing event: `field` ∈ {`add`, `insert`}, requires `event_type` and
+  a `label` (or `player_number`/`player_name` to synthesize one).
+- A correction targets an event by nearest `timestamp_seconds` within
+  `match_window_seconds` (default 0.5), optionally constrained by `event_type`.
+  **The UI must pre-fill the corrected event's exact `timestamp_seconds` and
+  `event_type`** so each correction targets precisely the intended event.
+
+**Persistence — corrections live in the run dir.**
+- Write corrections to `<run_dir>/corrections.csv`. This makes them a run artifact:
+  diffable, and directly usable by the existing CLI
+  (`export --corrections <run_dir>/corrections.csv`). The web reads this file on
+  load and rewrites it on each change.
+- **Canonical columns** (superset that `load_event_corrections` already accepts):
+  `event_type,timestamp,field,value,match_window_seconds,reason,label,player_number,player_name,inning,half`.
+  Emit the full header; leave unused cells blank.
+- **De-dup on write** so the file stays clean and idempotent: key a correction by
+  `(event_type, timestamp_seconds, field)`. Saving a correction with an existing
+  key replaces that row rather than appending a duplicate; a "clear correction"
+  removes it. (Deletes and adds are keyed the same way; a second delete of the
+  same target is a no-op replace.) Never let the web corrupt a hand-edited file:
+  round-trip through `load_event_corrections` / the writer, preserving unknown-but-
+  valid rows.
+
+**Faithful re-export — reuse the run's export options (altitude).** The exports
+`run_game` produced depend on formatting options (`include_chapter_intro`,
+`chapter_intro_label`, `include_inning_score`, `include_at_bat_inning_headers`,
+…). Re-exporting with different options would silently reformat the files.
+Resolve this by **extracting `run_game`'s corrections-apply → export → review-report
+tail into one shared helper** — e.g. `finalize_run_exports(run_dir, *, corrections,
+output_prefix, export_options, roster)` in `workflow.py` — and calling it from both
+`run_game` and the web corrections endpoint. Persist the `export_options` the run
+used into `manifest.json` (a small section) so the helper can re-export faithfully
+even after a restart. This generalizes the mechanism instead of special-casing the
+web path, and it means the re-export and the original run can never drift. For v1
+the persisted values equal `run_game`'s defaults (web jobs use them), but persisting
+them now is what makes the helper self-sufficient.
+- After re-export, also regenerate `review_report.md` via item 48's path (same
+  helper), so the results page's flagged count/warnings and the review UI's flag
+  list both reflect the corrected events.
+
+**Roster for flags.** `collect_event_review_rows` takes the roster to compute
+roster-aware flags (`missing-player`, `unrostered-card-number=…`, etc.). Load it
+the same way the job did — via `default_pipeline_kwargs()` / the project config
+(item 46). Record the roster path in the manifest if convenient so the review page
+is exact; otherwise re-derive from config and note the assumption.
+
+**Routes (extend the item 46/47 FastAPI app).**
+- `GET /jobs/{id}/review` → `review.html`: the exception review page for a `done`
+  job. List the flagged events (default) — index, `mm:ss` timestamp, event type,
+  current label, player number/name, and the `flags`. Each row carries an inline
+  correction form (edit fields pre-filled from the event; a delete button) posting
+  via HTMX. A separate "add missing event" form. A toggle to show all events, not
+  just flagged. Link to `/jobs/{id}/results`. 404 on unknown id; if not `done`,
+  link back to `/jobs/{id}`.
+- `POST /jobs/{id}/corrections` → apply one correction: validate, upsert it into
+  `<run_dir>/corrections.csv` (de-dup by key), re-apply all corrections + re-export
+  + regenerate the review report via the shared helper, then return the refreshed
+  flagged-events partial (HTMX swaps it) showing the now-corrected flags. On a bad
+  correction (e.g. no event within the match window, invalid `event_type`), return
+  a 400 inline error and do not modify the file.
+- `POST /jobs/{id}/corrections/clear` (or a `field=""`/remove action) → drop a
+  correction row by key and re-export.
+- Keep player names **local only**: the review UI may display OCR'd/roster names
+  (single-user local tool), but nothing here writes names to anything that leaves
+  the machine — that egress path is item 38 / phase 39e exclusively.
+
+**Testing** (`TestClient` + fakes; never re-run OCR/detection):
+- Seed a temp run dir with a real `events.jsonl` (a mix that produces at least one
+  flag) and a manifest; drive the routes against it.
+- `GET /jobs/{id}/review` lists the flagged events with their flags; the show-all
+  toggle includes unflagged events.
+- `POST` an **edit** (e.g. fix a `player_number`) → `corrections.csv` gains one
+  row with the canonical columns, the exports are rewritten with the corrected
+  value, and the refreshed partial shows the flag resolved.
+- `POST` a **delete** of a false positive → event drops from exports; `POST` an
+  **add** → event appears in exports at the right spot.
+- Re-`POST` the same edit with a new value → the CSV row is replaced, not
+  duplicated (de-dup by key); `clear` removes it and reverts the export.
+- A correction that matches no event in-window → 400 inline error, file unchanged.
+- Round-trip safety: loading a hand-written `corrections.csv`, saving one change,
+  and reloading preserves the other rows.
+- The extracted `finalize_run_exports` helper: `run_game`'s existing export/review
+  tests still pass unchanged (behavior-preserving extraction), and a direct test
+  re-exports a run dir faithfully using manifest-persisted options.
+
+**Acceptance criteria.**
+1. For a completed run, `/jobs/{id}/review` shows the review-flagged events with
+   their flags, reusing `collect_event_review_rows`.
+2. Editing, deleting, or adding an event writes a valid `<run_dir>/corrections.csv`
+   (loadable by `load_event_corrections`), de-duplicated by key, and re-exports the
+   chapters/at-bats — no download/OCR/detection re-run.
+3. The re-exported files match the run's original formatting (shared helper +
+   manifest-persisted export options); item 47's results page reflects the
+   corrections, and the review page's flags recompute on the corrected events.
+4. Bad corrections are rejected with an inline error and leave the file intact;
+   hand-edited rows survive round-trips.
+5. No player names leave the machine; full suite passes; no real names in fixtures.
+
+**Out of scope (later phases):** roster editing (39d), feedback egress (39e),
+undo/history beyond the flat corrections file, and exposing export-format toggles
+in the UI (the options are persisted and reused, not yet user-editable).
+
+### 50. Local Web App — Phase 39d: Roster Management UI
+
+Status: Ready to implement
+Source: Promoted from item 39 (epic), phase 39d. Depends on item 46 (web skeleton,
+Done) and the existing `roster.py` / `config.py` roster machinery. Independent of
+the OCR track and of items 48/49.
+
+A browser front-end for the roster CSVs that today are created by
+`make-roster` / `setup-roster` (item 27) and hand-edited. Let a user view, create,
+edit, and delete the roster(s) under `rosters/`, using the **paste-a-team-list**
+flow the CLI already supports, plus per-player row editing. A better roster
+directly improves detection (roster-aware review flags, name resolution), so this
+closes the loop with item 49's review UI.
+
+**Reuse the roster machinery; do not reinvent parsing or the CSV format.**
+- `parse_team_list(text, team_name)` in [roster.py](src/sidelinehd_extractor/roster.py)
+  parses pasted `#26 Amelia V.` lines into a `Roster` (dedupes numbers, raises on
+  bad lines) — this is the create/bulk-edit path.
+- `write_roster_csv(roster, output_path)` writes the exact CSV `load_roster`
+  consumes (`number,full_name,preferred_name,display_name,aliases`).
+- `load_roster_csv(path, team_name)` / `load_roster(path)` in
+  [config.py](src/sidelinehd_extractor/config.py) read existing rosters.
+- `default_roster_path(team_name)` → `rosters/<slug>.csv` is the canonical location.
+- `RosterPlayer` fields (`number`, `full_name`, `preferred_name`, `display_name`,
+  `aliases`) are the row model.
+- The project config (`sidelinehd.cfg`, item 28) records the active roster path +
+  team name; surface which roster is the configured default and allow setting it.
+
+**Persistence.** Rosters remain plain CSVs under `rosters/`, one per team, the same
+files the CLI and pipeline already use. The UI reads and rewrites them in place via
+`write_roster_csv` — no new store, no DB. Writes go through `parse_team_list` /
+`write_roster_csv` so the file stays in the canonical format and dedupe/validation
+is enforced centrally (never hand-serialize CSV in the web layer).
+
+**Routes (extend the item 46 FastAPI app).**
+- `GET /rosters` → `rosters.html`: list the CSVs under `rosters/` (team name +
+  player count + which one is the configured default), with links to edit each and
+  a "new roster" form (team name + paste box).
+- `GET /rosters/{slug}` → `roster_edit.html`: the roster's players in an editable
+  table (number, full name, preferred name, aliases), an add-player row, a
+  per-row delete, and a "replace from pasted list" box (re-`parse_team_list`).
+- `POST /rosters` → create from a team name + pasted list: `parse_team_list` →
+  `write_roster_csv(default_roster_path(team_name))`. On a parse error (bad line,
+  duplicate number) return a 400 inline error naming the line; create nothing.
+- `POST /rosters/{slug}` → save edits: rebuild the `Roster` from the submitted rows
+  (or the pasted list) and `write_roster_csv` back to the same path. Validate
+  numbers are unique and names non-empty; 400 inline on failure, file untouched.
+- `POST /rosters/{slug}/delete` → remove the CSV (guard: confirm; do not delete a
+  roster referenced as the config default without a warning).
+- Optionally `POST /rosters/{slug}/set-default` → update `sidelinehd.cfg` to point
+  at this roster (reuse item 28's config writer; do not hand-edit the cfg).
+
+**Security — this UI handles real names, all local.** Rosters are private local
+files under `rosters/` (already git-ignored / never committed per the project
+security constraint). Editing and displaying real names in a single-user localhost
+tool is expected and fine. The hard rule: **nothing in this UI writes names to any
+egress surface** — the only sanctioned outbound path is item 51 / 39e's sanitizer.
+Do not add roster data to job results, the feedback log, or any shared output here.
+
+**Testing** (`TestClient`; temp `rosters/` dir):
+- `GET /rosters` lists existing CSVs with counts and marks the configured default.
+- Create via paste → a CSV appears at `default_roster_path`, loadable by
+  `load_roster_csv`, with the parsed players.
+- Edit a player (change a number/name) and save → the CSV round-trips through
+  `write_roster_csv` with the change; reload shows it.
+- Duplicate number / unparseable line → 400 inline error, no write.
+- Delete removes the file; set-default updates `sidelinehd.cfg` (assert via the
+  config loader, not by reading raw text).
+- No real names in fixtures — use placeholders like `#26 Amelia V.`.
+
+**Acceptance criteria.**
+1. `/rosters` lists the roster CSVs; a user can create one from a pasted team list
+   (via `parse_team_list` + `write_roster_csv`) at the canonical path.
+2. A user can edit/add/delete players and save back to the same CSV in the format
+   `load_roster` consumes; validation errors are shown inline and never corrupt the
+   file.
+3. The configured default roster is visible and settable (through item 28's config
+   writer).
+4. All roster data stays local; no names reach any egress surface; full suite
+   passes with placeholder-only fixtures.
+
+**Out of scope:** multi-team merging, alias auto-suggestion from OCR, and wiring a
+just-edited roster into an already-completed run's review (item 49 already re-reads
+the configured roster on each review render).
+
+### 51. Local Web App — Phase 39e: Send-Feedback UI
+
+Status: Needs item 38 first (feedback log). Design ready.
+Source: Promoted from item 39 (epic), phase 39e. Depends on item 46 (web skeleton,
+Done) and **item 38 (feedback log)** — which is the sanitizer this UI wraps. Do
+not start until item 38 is approved and on `main`.
+
+The single sanctioned egress surface: for a completed run, preview the **sanitized**
+Markdown feedback log in the browser, let the user add a note, then hand off to a
+GitHub issue or email with the sanitized text pre-filled. **No new sanitization
+logic lives in the web layer** — it renders exactly what item 38 produces.
+
+**Reuse item 38 end to end; add nothing to the sanitization path.**
+- `load_feedback_data(run_path, note)` → `build_name_sanitizer(data)` →
+  `sanitize_feedback(data, sanitizer)` → `render_feedback_log(log)` in
+  [feedback.py](src/sidelinehd_extractor/feedback.py) is the whole pipeline. The
+  browser only ever receives the output of `render_feedback_log(...)` — i.e. the
+  **post-redaction** Markdown (player names replaced with pseudonyms, jersey
+  numbers kept).
+- `write_feedback_log(run_path, note=…)` writes `feedback.md` to the run dir; the
+  UI can persist alongside previewing.
+
+**The security invariant (state it in code and the design).** Raw player names
+must never reach the egress surface. The route builds the preview by calling the
+**sanitizer pipeline only** — it must not read roster names, `events.jsonl`
+labels, or samples directly into the response. Add a test that seeds a run whose
+artifacts contain a known real-looking name and asserts that name is **absent**
+from the preview response, the GitHub-issue body, and the email body, while the
+jersey number is present. This is the one place a bug leaks PII, so the test is
+mandatory, not optional.
+
+**Routes (extend the item 46 FastAPI app).**
+- `GET /jobs/{id}/feedback` → `feedback.html`: render the sanitized log
+  (`render_feedback_log`) in a read-only preview panel, a note textarea, and two
+  actions — "Open GitHub issue" and "Copy for email" / "Open email". 404 unknown
+  id; if not `done`, link back to `/jobs/{id}`.
+- `POST /jobs/{id}/feedback/preview` → re-render the sanitized preview with the
+  submitted note included (the note is user-authored text; include it verbatim in
+  the sanitized log via item 38's `note` path — do not run names through it, but do
+  not sanitize the user's own words either).
+- **Hand-off (no server-side network calls).** Build client-side links from the
+  sanitized text:
+  - GitHub issue: a prefilled `https://github.com/<repo>/issues/new?title=…&body=…`
+    URL with the sanitized Markdown URL-encoded as the body (repo from
+    `PROJECT_URL`). Opens in a new tab; the user reviews and submits.
+  - Email: a `mailto:?subject=…&body=…` link (or a one-click "copy" of the
+    sanitized text) — long bodies may exceed `mailto` limits, so provide copy as
+    the reliable path and `mailto` as convenience.
+  The app itself performs **no outbound request** — it only constructs links the
+  user chooses to open, keeping the local-first, no-egress-without-consent posture.
+
+**Testing** (`TestClient`, fakes):
+- Seed a run dir with manifest/events/samples containing a placeholder that looks
+  like a real name; `GET /jobs/{id}/feedback` preview contains the pseudonym and
+  the jersey number and **not** the seeded name (the mandatory leak test, repeated
+  for the issue-body and email-body strings).
+- The note is included in the rendered preview.
+- The GitHub-issue link is well-formed (URL-encoded sanitized body, correct repo);
+  the email/copy path carries the same sanitized text.
+- Not-done job links back; unknown id → 404.
+- No server-side HTTP is made (assert the handler doesn't call out).
+
+**Acceptance criteria.**
+1. For a completed run, `/jobs/{id}/feedback` previews the sanitized feedback log
+   (item 38's `render_feedback_log` output) with an editable note.
+2. The user can hand the **sanitized** text to a GitHub issue (prefilled URL) or
+   email/clipboard; the app makes no outbound request itself.
+3. A real-looking name seeded into the run artifacts never appears in the preview
+   or either hand-off body; the jersey number does (mandatory PII-leak test).
+4. No new sanitization logic in the web layer; full suite passes.
+
+**Out of scope:** authenticated GitHub API submission, attachments, and any
+telemetry — hand-off is user-initiated links only.
 
 ## Discussion / Later Deliverables
 

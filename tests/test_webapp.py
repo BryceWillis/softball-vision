@@ -404,6 +404,320 @@ def test_results_not_done_job_links_back_to_detail_and_unknown_404s():
     assert client.get("/jobs/deadbeef/results").status_code == 404
 
 
+def test_results_page_lights_up_from_report_generated_by_run_game(tmp_path, monkeypatch):
+    """Item 48 end-to-end: run_game writes review_report.md as a run artifact and
+    the item 47 results page renders its flagged count and run warnings — no
+    hand-written report fixture."""
+
+    from unittest.mock import patch
+
+    from sidelinehd_extractor.events import EventDetectionResult
+    from sidelinehd_extractor.models import Event, EventType, HalfInning
+    from sidelinehd_extractor.processing import ProcessResult, write_json, write_jsonl
+    from sidelinehd_extractor.state import StateParseResult
+    from sidelinehd_extractor.workflow import run_game
+
+    run_dir = tmp_path / "runs" / "game-run"
+    run_dir.mkdir(parents=True)
+    process_result = ProcessResult(
+        run_dir=run_dir,
+        manifest_path=run_dir / "manifest.json",
+        samples_path=run_dir / "samples.jsonl",
+        sample_count=1,
+        crop_count=1,
+        warnings=[],
+    )
+    state_result = StateParseResult(
+        input_path=run_dir / "samples.jsonl",
+        output_path=run_dir / "states.jsonl",
+        state_count=1,
+    )
+    event_result = EventDetectionResult(
+        input_path=run_dir / "states.jsonl",
+        output_path=run_dir / "events.jsonl",
+        event_count=2,
+    )
+    write_json(
+        process_result.manifest_path,
+        {"warnings": [{"code": "field-never-read", "field": "right_score", "message": "empty"}]},
+    )
+    events = [
+        Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP),
+        # OCR/roster disagreement makes this at-bat a flagged review row.
+        Event(
+            EventType.AT_BAT_START,
+            605,
+            "#22",
+            inning=1,
+            player_number="22",
+            metadata={"ocr_player_number": "28"},
+        ),
+    ]
+    write_jsonl(event_result.output_path, events)
+
+    with patch("sidelinehd_extractor.workflow.process_video", return_value=process_result):
+        with patch("sidelinehd_extractor.workflow.parse_samples_file", return_value=state_result):
+            with patch(
+                "sidelinehd_extractor.workflow.detect_events_file", return_value=event_result
+            ):
+                with patch("sidelinehd_extractor.workflow.load_events", return_value=events):
+                    run = run_game(
+                        video_path=tmp_path / "game.mp4",
+                        output_dir=tmp_path / "runs",
+                        output_prefix=tmp_path / "scratch" / "full",
+                    )
+
+    assert (run_dir / "review_report.md").exists()
+
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "single",
+            "run_dir": str(run.run_dir),
+            "chapters_path": str(run.chapters_path),
+            "at_bats_path": str(run.at_bats_path),
+        },
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert "Flagged events: 1" in response.text
+    assert "right_score" in response.text
+    assert "No review report found" not in response.text
+    assert 'data-copy-target="game-0-chapters-text"' in response.text
+
+
+def _seed_review_run(tmp_path):
+    """Run dir with a flagged at-bat, an unflagged at-bat, and real exports."""
+
+    from sidelinehd_extractor.models import Event, EventType, HalfInning
+    from sidelinehd_extractor.processing import write_json, write_jsonl
+    from sidelinehd_extractor.workflow import finalize_run_exports
+
+    run_dir = tmp_path / "runs" / "game-run"
+    run_dir.mkdir(parents=True)
+    prefix = run_dir / "full"
+    write_json(
+        run_dir / "manifest.json",
+        {
+            "export": {
+                "include_chapter_intro": True,
+                "chapter_intro_label": "Pregame",
+                "include_inning_score": True,
+                "include_at_bat_inning_headers": True,
+                "output_prefix": str(prefix),
+            }
+        },
+    )
+    events = [
+        Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP),
+        # OCR read 28 but the event says 22 -> "ocr-number=28" review flag.
+        Event(
+            EventType.AT_BAT_START,
+            605,
+            "Maya R. (#22)",
+            inning=1,
+            player_number="22",
+            player_name="Maya R.",
+            metadata={"ocr_player_number": "28"},
+        ),
+        Event(
+            EventType.AT_BAT_START,
+            700,
+            "Zoe H. (#7)",
+            inning=1,
+            player_number="7",
+            player_name="Zoe H.",
+        ),
+    ]
+    write_jsonl(run_dir / "events.jsonl", events)
+    chapters_path, at_bats_path = finalize_run_exports(run_dir)
+    return run_dir, chapters_path, at_bats_path
+
+
+def _make_review_client(tmp_path, monkeypatch):
+    from sidelinehd_extractor.webapp import app as app_module
+
+    # Flags must not depend on whatever project config exists in the CWD.
+    monkeypatch.setattr(app_module, "load_configured_roster", lambda: None)
+    run_dir, chapters_path, at_bats_path = _seed_review_run(tmp_path)
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "single",
+            "run_dir": str(run_dir),
+            "chapters_path": str(chapters_path),
+            "at_bats_path": str(at_bats_path),
+        },
+    )
+    return client, job, run_dir, at_bats_path
+
+
+def test_review_page_lists_flagged_events_with_show_all_toggle(tmp_path, monkeypatch):
+    client, job, _, _ = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.get(f"/jobs/{job.id}/review")
+    assert response.status_code == 200
+    assert "ocr-number=28" in response.text
+    assert "Maya R." in response.text
+    assert "Zoe H." not in response.text  # unflagged, hidden by default
+    assert "Flagged events: 1 of 3" in response.text
+    assert f"/jobs/{job.id}/results" in response.text
+
+    everything = client.get(f"/jobs/{job.id}/review?show=all")
+    assert "Zoe H." in everything.text
+
+
+def test_review_edit_writes_csv_resolves_flag_and_rewrites_exports(tmp_path, monkeypatch):
+    from sidelinehd_extractor.corrections import CORRECTION_CSV_COLUMNS
+
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "player_number",
+            "value": "28",
+        },
+    )
+    assert response.status_code == 200
+    assert "ocr-number=28" not in response.text  # flag resolved in the partial
+
+    csv_text = (run_dir / "corrections.csv").read_text(encoding="utf-8")
+    lines = csv_text.splitlines()
+    assert lines[0] == ",".join(CORRECTION_CSV_COLUMNS)
+    assert len(lines) == 2
+
+    # A label edit changes the exported text via the shared finalize helper.
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "label",
+            "value": "Maya R. (#28)",
+        },
+    )
+    assert response.status_code == 200
+    assert "10:05 Maya R. (#28)" in at_bats_path.read_text(encoding="utf-8")
+    assert len((run_dir / "corrections.csv").read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_review_reposting_same_key_replaces_row_and_clear_reverts(tmp_path, monkeypatch):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+    edit = {
+        "timestamp": "605.0",
+        "event_type": "at_bat_start",
+        "field": "label",
+        "value": "Maya R. (#28)",
+    }
+    client.post(f"/jobs/{job.id}/corrections", data=edit)
+    client.post(f"/jobs/{job.id}/corrections", data={**edit, "value": "Maya R. (#26)"})
+
+    csv_text = (run_dir / "corrections.csv").read_text(encoding="utf-8")
+    assert len(csv_text.splitlines()) == 2  # replaced, not appended
+    assert "Maya R. (#26)" in csv_text
+    assert "Maya R. (#28)" not in csv_text
+    assert "10:05 Maya R. (#26)" in at_bats_path.read_text(encoding="utf-8")
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections/clear",
+        data={"timestamp": "605.0", "event_type": "at_bat_start", "field": "label"},
+    )
+    assert response.status_code == 200
+    assert len((run_dir / "corrections.csv").read_text(encoding="utf-8").splitlines()) == 1
+    assert "10:05 Maya R. (#22)" in at_bats_path.read_text(encoding="utf-8")  # reverted
+
+
+def test_review_delete_and_add_update_exports_in_order(tmp_path, monkeypatch):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={"timestamp": "700", "event_type": "at_bat_start", "field": "delete"},
+    )
+    assert response.status_code == 200
+    assert "Zoe H. (#7)" not in at_bats_path.read_text(encoding="utf-8")
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "10:30",
+            "event_type": "at_bat_start",
+            "field": "add",
+            "player_number": "26",
+        },
+    )
+    assert response.status_code == 200
+    at_bats_text = at_bats_path.read_text(encoding="utf-8")
+    assert "10:30 #26" in at_bats_text
+    assert at_bats_text.index("10:05") < at_bats_text.index("10:30")
+
+
+def test_review_rejects_correction_with_no_matching_event(tmp_path, monkeypatch):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+    before = at_bats_path.read_text(encoding="utf-8")
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "900",
+            "event_type": "at_bat_start",
+            "field": "label",
+            "value": "Nope",
+        },
+    )
+    assert response.status_code == 400
+    assert "no event matched correction" in response.text
+    assert not (run_dir / "corrections.csv").exists()  # file untouched
+    assert at_bats_path.read_text(encoding="utf-8") == before
+
+
+def test_review_preserves_hand_written_correction_rows(tmp_path, monkeypatch):
+    client, job, run_dir, _ = _make_review_client(tmp_path, monkeypatch)
+    (run_dir / "corrections.csv").write_text(
+        "event_type,timestamp,field,value,reason\n"
+        "at_bat_start,10:05,label,Maya R. (#28),hand-written\n",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={"timestamp": "700", "event_type": "at_bat_start", "field": "delete"},
+    )
+    assert response.status_code == 200
+    csv_text = (run_dir / "corrections.csv").read_text(encoding="utf-8")
+    assert "Maya R. (#28)" in csv_text  # hand-written row survived the rewrite
+    assert "hand-written" in csv_text
+    assert "delete" in csv_text
+
+
+def test_review_not_done_links_back_and_bad_ids_404(tmp_path, monkeypatch):
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running")
+
+    response = client.get(f"/jobs/{job.id}/review")
+    assert response.status_code == 200
+    assert "not finished" in response.text
+    assert f"/jobs/{job.id}" in response.text
+
+    assert client.get("/jobs/deadbeef/review").status_code == 404
+
+    done = store.create(kind="single", url="https://youtu.be/def456")
+    store.update(done.id, status="done", result={"kind": "single", "run_dir": None})
+    assert client.get(f"/jobs/{done.id}/review").status_code == 404  # no run dir
+    assert client.get(f"/jobs/{done.id}/review?entry=5").status_code == 404
+
+
 def test_index_error_clear_is_scoped_to_the_submit_request():
     """CR-51: the afterRequest clear must be gated on the /jobs submit path so
     the 1s status polls cannot wipe a validation message."""

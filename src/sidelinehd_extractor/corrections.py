@@ -28,6 +28,89 @@ class EventCorrection:
     half: Optional[HalfInning] = None
 
 
+# Canonical column order for written corrections files — a superset of what
+# load_event_corrections accepts, so hand-edited files round-trip.
+CORRECTION_CSV_COLUMNS = (
+    "event_type",
+    "timestamp",
+    "field",
+    "value",
+    "match_window_seconds",
+    "reason",
+    "label",
+    "player_number",
+    "player_name",
+    "inning",
+    "half",
+)
+
+
+def correction_key(correction: EventCorrection) -> tuple:
+    """Identity for de-duplication: one correction per (type, timestamp, field)."""
+
+    return (
+        correction.event_type.value if correction.event_type else "",
+        round(correction.timestamp_seconds, 3),
+        correction.field_name.strip(),
+    )
+
+
+def upsert_event_correction(
+    corrections: Iterable[EventCorrection],
+    correction: EventCorrection,
+) -> List[EventCorrection]:
+    """Replace the correction with the same key, or append; preserves order."""
+
+    key = correction_key(correction)
+    result = list(corrections)
+    for index, existing in enumerate(result):
+        if correction_key(existing) == key:
+            result[index] = correction
+            return result
+    result.append(correction)
+    return result
+
+
+def remove_event_correction(
+    corrections: Iterable[EventCorrection],
+    key: tuple,
+) -> List[EventCorrection]:
+    """Drop the correction matching the (type, timestamp, field) key, if any."""
+
+    return [existing for existing in corrections if correction_key(existing) != key]
+
+
+def write_event_corrections(path: Path, corrections: Iterable[EventCorrection]) -> None:
+    """Write corrections as CSV with the full canonical header."""
+
+    destination = path.expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(CORRECTION_CSV_COLUMNS), lineterminator="\n")
+        writer.writeheader()
+        for correction in corrections:
+            writer.writerow(
+                {
+                    "event_type": correction.event_type.value if correction.event_type else "",
+                    "timestamp": _format_seconds(correction.timestamp_seconds),
+                    "field": correction.field_name,
+                    "value": correction.value,
+                    "match_window_seconds": _format_seconds(correction.match_window_seconds),
+                    "reason": correction.reason or "",
+                    "label": correction.label or "",
+                    "player_number": correction.player_number or "",
+                    "player_name": correction.player_name or "",
+                    "inning": "" if correction.inning is None else str(correction.inning),
+                    "half": correction.half.value if correction.half else "",
+                }
+            )
+
+
+def _format_seconds(value: float) -> str:
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def load_event_corrections(path: Path) -> List[EventCorrection]:
     """Load event corrections from CSV."""
 

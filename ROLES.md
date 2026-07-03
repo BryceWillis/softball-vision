@@ -39,6 +39,14 @@ An implementer does **not** write designs, move CRs to Resolved, or conduct code
 
 **Independent review is preserved.** The Architect (Opus) reviews all implementations regardless of which implementer wrote them. No agent reviews or approves its own work: Fable 5 implements but never runs a review pass on code it wrote. Review and the approval commit stay with the Opus architect.
 
+**Worktree isolation is mandatory when both implementers are active (learned Pass 16→17).** Two implementers editing the same uncommitted working tree co-mingle unrelated items in the same files (e.g. items 41 and 48 both landed in one uncommitted `workflow.py`), which makes per-item review and the "commit = approval" model impossible. Therefore:
+
+- **One item (or CR) per branch, in its own git worktree**, branched off the latest approved `main`. Never implement directly in the shared `main` working tree while another implementer is active.
+  - `git worktree add ../sv-item-<N> -b impl/item-<N> main`
+- **Submit for review from that branch.** The architect reviews the branch diff against `main` (`git diff main...impl/item-<N>`) and, on approval, commits/merges it. Only reviewed branches reach `main`.
+- **If two items must touch the same file, sequence them** — the first merges to `main`, the second rebases onto it — rather than editing the same file in two live worktrees.
+- Keep the `main` working tree clean between approvals so the next branch starts from a reviewed base.
+
 ---
 
 ## Workflow Loop

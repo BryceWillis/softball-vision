@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-03
-**Review passes:** 16 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged)
+**Review passes:** 17 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -23,7 +23,11 @@ _No items ready for review._
 
 ## Open Items
 
-_No open items._
+#### CR-52 — Feedback sanitizer only redacts names it can register as a source; a label-only or non-`name` field name can leak
+**File:** [feedback.py](src/sidelinehd_extractor/feedback.py) — `build_name_sanitizer` / `NameSanitizer.sanitize_text`
+**Pass:** 17 — correctness/privacy (non-blocking follow-up to item 38)
+
+`build_name_sanitizer` registers replacement sources from the roster, `event.player_name`, `"name"`-keyed metadata, and samples whose `field_name` contains `"name"`. `sanitize_text` then only masks those registered strings/tokens. A real name that appears **only** in an `event.label` or in a sample field whose name does not contain `"name"` — and never as a registered source — passes through unchanged into the feedback log, which is the one sanctioned egress surface. In practice labels are derived from the same `player_name` that is registered, so the gap is narrow and the guard tests cover the common paths, but a miss here leaks PII. Harden by also registering names parsed from `event.label` (e.g. the `"Name (#NN)"` pattern) into the sanitizer, and/or add a stricter net; extend the leak-guard test to seed a name that exists *only* in a label. Approved item 38 regardless — this is defense-in-depth on an already-guarded surface, not a demonstrated leak in current fixtures.
 
 ## Deferred Items
 

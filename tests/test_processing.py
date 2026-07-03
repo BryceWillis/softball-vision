@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -138,6 +139,7 @@ class ProcessingTests(unittest.TestCase):
                 return OCRBackendResult(
                     text="26\n",
                     normalized_text="26",
+                    confidence=0.82,
                     backend="test",
                     source_detail="lineup_highlight",
                 )
@@ -160,6 +162,7 @@ class ProcessingTests(unittest.TestCase):
                 '"source_detail": "lineup_highlight"',
                 result.samples_path.read_text(encoding="utf-8"),
             )
+            self.assertIn('"confidence": 0.82', result.samples_path.read_text(encoding="utf-8"))
 
     def test_field_read_warnings_flags_configured_field_that_never_reads(self):
         samples = [
@@ -191,6 +194,8 @@ class ProcessingTests(unittest.TestCase):
                 text = "1" if field_name == "left_score" else ""
                 return OCRBackendResult(text=text, normalized_text=text, backend="test")
 
+            ocr.tesseract_version = "5.3.0"
+
             with patch(
                 "sidelinehd_extractor.processing.probe_video",
                 return_value=Video(Path("game.mp4"), duration_seconds=0.0, width=10, height=10, fps=30),
@@ -212,7 +217,89 @@ class ProcessingTests(unittest.TestCase):
             )
             self.assertEqual(manifest["warnings"][0]["code"], "field-never-read")
             self.assertEqual(manifest["warnings"][0]["field"], "right_score")
+            self.assertEqual(manifest["tesseract_version"], "5.3.0")
             self.assertEqual(result.warnings, manifest["warnings"])
+
+    def test_process_video_parallel_ocr_matches_serial_sample_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={
+                    "slow": RegionFraction(0, 0, 0.1, 0.1),
+                    "fast": RegionFraction(0.1, 0, 0.1, 0.1),
+                },
+            )
+
+            def ocr(_image, field_name):
+                if field_name == "slow":
+                    time.sleep(0.01)
+                return OCRBackendResult(
+                    text=f"{field_name}\n",
+                    normalized_text=field_name,
+                    backend="test",
+                )
+
+            def run(workers):
+                with patch(
+                    "sidelinehd_extractor.processing.probe_video",
+                    return_value=Video(
+                        Path("game.mp4"), duration_seconds=5.0, width=10, height=10, fps=30
+                    ),
+                ):
+                    with patch(
+                        "sidelinehd_extractor.processing.read_frames_at",
+                        return_value=[(0.0, object()), (5.0, object())],
+                    ):
+                        with patch(
+                            "sidelinehd_extractor.processing.crop_frame", return_value=object()
+                        ):
+                            result = process_video(
+                                video_path=Path("game.mp4"),
+                                output_dir=Path(directory),
+                                template=template,
+                                save_crops=False,
+                                ocr=ocr,
+                                ocr_workers=workers,
+                            )
+                rows = [
+                    json.loads(line)
+                    for line in result.samples_path.read_text(encoding="utf-8").splitlines()
+                ]
+                return [
+                    (
+                        row["timestamp_seconds"],
+                        row["field_name"],
+                        row["raw_text"],
+                        row["normalized_text"],
+                        row.get("crop_path"),
+                    )
+                    for row in rows
+                ]
+
+            serial_rows = run(1)
+            parallel_rows = run(2)
+
+        self.assertEqual(serial_rows, parallel_rows)
+        self.assertEqual(
+            [row[1] for row in parallel_rows],
+            ["slow", "fast", "slow", "fast"],
+        )
+
+    def test_process_video_rejects_invalid_ocr_workers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={"count": RegionFraction(0, 0, 0.1, 0.1)},
+            )
+
+            with self.assertRaises(ValueError):
+                process_video(
+                    video_path=Path("game.mp4"),
+                    output_dir=Path(directory),
+                    template=template,
+                    save_crops=False,
+                    ocr_workers=0,
+                )
 
     def test_process_video_does_not_warn_for_no_ocr_debug_runs(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -66,6 +66,7 @@
       {% else %}
         <section class="game-block">
           <h2>{{ block.label }}</h2>
+          <p><a href="/jobs/{{ job.id }}/review?entry={{ loop.index0 }}">Review flagged events</a></p>
           {% if block.flagged_count is not none %}
             <p class="review-summary">Flagged events: {{ block.flagged_count }}
               {% if block.report_path %}(from <code>{{ block.report_path }}</code>){% endif %}</p>
