@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-02
-**Review passes:** 14 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened)
+**Review passes:** 15 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -22,6 +22,12 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 _No items ready for review._
 
 ## Open Items
+
+#### CR-51 — Web submit-error slot is cleared by every successful HTMX request, including the 1s status polls
+**File:** [index.html](src/sidelinehd_extractor/webapp/templates/index.html) — `htmx:afterRequest` handler
+**Pass:** 15 — correctness (low severity, non-blocking follow-up to item 46)
+
+The `htmx:afterRequest` listener clears `#form-error` on any `evt.detail.successful` request. Because each non-terminal job row polls `GET /jobs/{id}/status` `every 1s`, a successful poll fires that handler and wipes a just-shown 400 validation message within ~1s whenever any job is running — so the inline submit error effectively disappears on its own. Scope the clear to the submit request (e.g. gate on `evt.detail.requestConfig.path === "/jobs"` / the form element via `evt.detail.elt`, or bind the handler to the form rather than `document.body`) so only a subsequent submit clears the error. Add a note/test if practical. Approved item 46 regardless — this is a UI-polish defect, not a pipeline or data issue, and folds naturally into item 47's UI work.
 
 #### CR-50 — `write_review_report` now reads `manifest.json` with an unguarded `json.loads`, adding a new throw path on the report command
 **File:** [review_report.py](src/sidelinehd_extractor/review_report.py) — `_manifest_warnings`

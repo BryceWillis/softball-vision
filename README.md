@@ -30,6 +30,20 @@ For contributor tooling, install the optional development dependencies:
 python -m pip install -e ".[dev]"
 ```
 
+For the local web UI (`sidelinehd-extractor serve`), install the optional web
+dependencies:
+
+```sh
+python -m pip install -e ".[web]"
+```
+
+Then start the app and open the printed URL (loopback only; the app has no
+auth and must not be exposed beyond `127.0.0.1`):
+
+```sh
+sidelinehd-extractor serve
+```
+
 Install the external OCR engine. The primary `run-game` and `run-youtube`
 commands use Tesseract OCR by default; pass `--ocr none` only when you are
 running a non-OCR/debug workflow:

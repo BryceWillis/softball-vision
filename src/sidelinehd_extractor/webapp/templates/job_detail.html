@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job {{ job.id[:8] }} — SidelineHD Extractor</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           max-width: 52rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; }
+    .job-url { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem;
+               word-break: break-all; }
+    .job-kind { color: #555; font-size: 0.8rem; text-transform: uppercase;
+                letter-spacing: 0.04em; margin-right: 0.5rem; }
+    .status-badge { display: inline-block; font-size: 0.8rem; padding: 0.1rem 0.5rem;
+                    border-radius: 999px; }
+    .status-queued { background: #f0f0f0; color: #444; }
+    .status-running { background: #e5f0ff; color: #1447a3; }
+    .status-done { background: #e4f7e6; color: #1a6e2a; }
+    .status-error { background: #fdeaea; color: #a3131f; }
+    .current-stage { color: #555; font-size: 0.85rem; margin-left: 0.5rem; }
+    .job-warnings { color: #8a5a00; }
+    .job-error { color: #a3131f; }
+    ol.stage-log li { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
+    pre { background: #f6f6f6; padding: 0.7rem; border-radius: 6px; overflow-x: auto;
+          font-size: 0.8rem; }
+    a { color: #1447a3; }
+  </style>
+</head>
+<body>
+  <p><a href="/">&larr; All jobs</a></p>
+  <h1><span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
+
+  {% include "_job_status.html" %}
+
+  <h2>Stage log</h2>
+  {% if job.stages %}
+    <ol class="stage-log">
+      {% for stage in job.stages %}<li>{{ stage }}</li>{% endfor %}
+    </ol>
+  {% else %}
+    <p>No stages recorded yet.</p>
+  {% endif %}
+
+  {% if job.warnings %}
+    <h2>Warnings</h2>
+    <ul class="job-warnings">
+      {% for warning in job.warnings %}<li>{{ warning }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if job.status == "done" %}
+    <h2>Result</h2>
+    <p><a href="/jobs/{{ job.id }}/results">View results</a></p>
+    <pre>{{ job.result | tojson(indent=2) }}</pre>
+  {% elif job.status == "error" %}
+    <h2>Error</h2>
+    <p class="job-error">{{ job.error }}</p>
+  {% endif %}
+</body>
+</html>

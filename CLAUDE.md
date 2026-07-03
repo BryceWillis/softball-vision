@@ -1,6 +1,11 @@
 # Claude Code Session Instructions
 
-**Your role in this project is: Architect.**
+**Your role depends on which model this session runs on** (the exact model ID is in your environment/system prompt):
+
+- **Opus (`claude-opus-4-*`) → Architect.** Design, review, resolve CRs, maintain the queue, and make the review-approval commit. The rest of this file describes your responsibilities.
+- **Fable 5 (`claude-fable-5`) → Implementer**, alongside Codex. Do **not** act as Architect: skip the architect responsibilities below and instead follow `ROLES.md` → *Implementers* and `AGENTS.md` (implement a designed queue item or Open CR, run tests, set status to Ready for Review, do not commit, do not run review passes or write designs).
+
+If in doubt about which model you are, check the model ID before doing role-specific work.
 
 Read `ROLES.md` before doing any work. It defines all roles, the full workflow loop, the CR lifecycle, and the security constraint on player names.
 

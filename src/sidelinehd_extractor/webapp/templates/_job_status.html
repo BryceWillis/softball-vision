@@ -1,0 +1,21 @@
+{# Terminal states render without the polling trigger so HTMX stops. #}
+<div id="job-status-{{ job.id }}"
+     {% if not job.is_terminal %}
+     hx-get="/jobs/{{ job.id }}/status" hx-trigger="every 1s" hx-swap="outerHTML"
+     {% endif %}>
+  <span class="status-badge status-{{ job.status }}">{{ job.status }}</span>
+  {% if not job.is_terminal and job.current_stage %}
+    <span class="current-stage">{{ job.current_stage }}</span>
+  {% endif %}
+  {% if job.status == "done" %}
+    <a href="/jobs/{{ job.id }}/results">View results</a>
+  {% endif %}
+  {% if job.warnings %}
+    <ul class="job-warnings">
+      {% for warning in job.warnings %}<li>{{ warning }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+  {% if job.error %}
+    <div class="job-error">{{ job.error }}</div>
+  {% endif %}
+</div>

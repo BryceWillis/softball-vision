@@ -736,6 +736,29 @@ def _cmd_publish_helper(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from sidelinehd_extractor.webapp.app import create_app  # noqa: F401
+    except ImportError as error:
+        print(
+            "Error: the local web app requires the optional web dependencies "
+            f"({error}). Install them with: pip install -e \".[web]\"",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"Serving on http://{args.host}:{args.port}", file=sys.stderr, flush=True)
+    uvicorn.run(
+        "sidelinehd_extractor.webapp.app:create_app",
+        factory=True,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return 0
+
+
 def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", "-o", type=Path, default=Path("runs"))
     parser.add_argument("--template", type=Path, help="Overlay template JSON file.")
@@ -1212,6 +1235,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--game-name", help="Override game name used in the kit title and folder."
     )
     publish_helper.set_defaults(func=_cmd_publish_helper)
+
+    serve = subparsers.add_parser(
+        "serve",
+        help="Run the local web UI. Requires the optional web extra: pip install -e '.[web]'.",
+    )
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address. Loopback by default; the app has no auth, so do not expose it.",
+    )
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="Auto-reload on source changes (development only).",
+    )
+    serve.set_defaults(func=_cmd_serve)
 
     return parser
 

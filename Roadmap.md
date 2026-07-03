@@ -24,15 +24,17 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
-| 2 | **41** — OCR Pipeline Performance | Ready to implement | Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
-| 3 | **40** — OCR Confidence Capture | Ready to implement | Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
-| 4 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
-| 5 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
-| 6 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
-| 7 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. Depends on items 37, 38, 20. Cloud is a later seam. |
-| 8 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
-| 9 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort. |
-| 10 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. |
+| — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
+| 2 | **47** — Web App 39b: Results + Paste Kits | Ready to implement | **Web track (Fable 5).** After item 46. Stacked per-game copy kits + review-report/warnings; reuses `render_publish_kit_html` (item 20 Done). |
+| 3 | **41** — OCR Pipeline Performance | Ready to implement | **OCR track (Codex).** Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
+| 4 | **40** — OCR Confidence Capture | Ready to implement | **OCR track (Codex).** Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
+| 5 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
+| 6 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
+| 7 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 8 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. 39a/39b promoted to items 46/47; 39c–39e follow. Depends on items 37, 38, 20. Cloud is a later seam. |
+| 9 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
+| 10 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
+| 11 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
 | — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
 | — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
@@ -3033,13 +3035,14 @@ functions. HTMX (not a React SPA) keeps a single-user local tool low-complexity;
 revisit only if this ever becomes a hosted product.
 
 **Phases** (each becomes its own item with a full design when picked up):
-- **39a — Web skeleton + job runner.** FastAPI app; submit a single video URL or
-  a playlist; background job runner reusing item 37's batch orchestrator; live
-  status via HTMX polling. Proves the hardest new plumbing.
-- **39b — Results + multi-game paste kits.** Render chapter and at-bat exports
-  for every game in a batch on a single page — multiple copy-kit blocks stacked,
-  one per game, each with one-click copy. Reuses item 20's HTML paste-kit
-  machinery.
+- **39a — Web skeleton + job runner.** → **Promoted to item 46** (full design below).
+  FastAPI app; submit a single video URL or a playlist; background job runner
+  reusing item 37's batch orchestrator; live status via HTMX polling. Proves the
+  hardest new plumbing.
+- **39b — Results + multi-game paste kits.** → **Promoted to item 47** (full design
+  below). Render chapter and at-bat exports for every game in a batch on a single
+  page — multiple copy-kit blocks stacked, one per game, each with one-click copy.
+  Reuses item 20's HTML paste-kit machinery.
 - **39c — Exception review UI.** Surface `review.py` flags, resolve them into
   `corrections.py`, and re-export — a friendly front-end for the corrections
   workflow that today is hand-edited CSV.
@@ -3314,6 +3317,181 @@ This is the region shipped in
 `warnings` in `manifest.json`; `run-game` / `run-youtube` surface warnings via
 the existing stage-progress callback; and `review_report` renders manifest
 warnings under "Run Warnings".
+
+### 46. Local Web App — Phase 39a: Web Skeleton + Job Runner
+
+Status: Done (Pass 15, implemented by Fable 5; approved with follow-up CR-51)
+Source: Promoted from item 39 (epic), phase 39a. Depends on item 37 (Done).
+
+The foundational slice of the local web app (item 39): a `localhost` FastAPI app
+that accepts a single video URL or a playlist URL, runs it in a background job,
+and streams live status via HTMX polling. This proves the hardest new plumbing
+(long-running work behind a responsive UI) and is the base every later phase
+(47/39c/39d/39e) builds on. **Reuse the pipeline; do not reimplement it** — the
+web layer only calls existing `workflow` / `batch` functions and presents their
+output.
+
+**Package layout (new).** Create `src/sidelinehd_extractor/webapp/`:
+- `app.py` — `create_app()` factory returning a `FastAPI` instance; route
+  handlers. Keep route handlers thin — they call into `jobs.py`.
+- `jobs.py` — `Job` dataclass + `JobStore` (in-memory registry) + a single-worker
+  background runner.
+- `templates/` — Jinja2 templates (`index.html`, `job_detail.html`, and HTMX
+  partials `_job_row.html`, `_job_status.html`).
+- `static/htmx.min.js` — **vendored** HTMX (no CDN; the app must work offline and
+  the artifact CSP/local-first constraint forbids external fetches).
+
+**Dependencies.** Add an optional extra `web` in `pyproject.toml`
+(`fastapi`, `uvicorn[standard]`, `jinja2`) so the core CLI install stays
+dependency-light. Document `pip install -e ".[web]"`. Import of `webapp` must
+fail with a clear "install the web extra" message if FastAPI is missing (guard
+the `serve` CLI command, not module import at package top level).
+
+**Job model (`jobs.py`).**
+- `Job`: `id: str` (uuid4 hex), `kind: Literal["single","playlist"]`, `url: str`,
+  `status: Literal["queued","running","done","error"]`, `stages: list[str]`
+  (append-only, fed by the pipeline's `stage_progress` callback),
+  `current_stage: Optional[str]`, `warnings: list[str]` (stage strings that start
+  with `"warning "` — item 45 surfaces `field-never-read` here), `result:
+  Optional[dict]` (run dir(s) + export paths + per-entry summaries), `error:
+  Optional[str]`, `created_at`, `finished_at`.
+- `JobStore`: thread-safe dict of `id → Job` with `create()`, `get()`, `list()`
+  (newest first), and `update()` under a `threading.Lock`. Define it behind a tiny
+  interface so a later phase can swap in the epic's SQLite index without touching
+  routes — but **do not build SQLite now**; in-memory is the correct scope for the
+  skeleton (single user, single process). Note this deferral in a comment.
+- Runner: one dedicated worker via `ThreadPoolExecutor(max_workers=1)` so heavy
+  download+OCR jobs serialize on a laptop rather than contend. **Do not use
+  FastAPI `BackgroundTasks`** — those are tied to the request lifecycle and are
+  wrong for multi-minute jobs. On submit, the route creates the Job (status
+  `queued`), submits it to the executor, and returns immediately.
+- Execution: the worker sets status `running`, then calls
+  `run_youtube_game(...)` for `kind == "single"` or `run_playlist_batch(...)` for
+  `kind == "playlist"`, passing a `stage_progress` callback that appends to
+  `job.stages`, updates `job.current_stage`, and routes `"warning …"` strings into
+  `job.warnings` (all under the store lock). On success set `result` and status
+  `done`; on any exception set `error` (str) and status `error`. Never let the
+  worker thread crash silently — wrap the body in try/except.
+
+**Routes.**
+- `GET /` → `index.html`: a form (URL text field + single/playlist selector +
+  submit) and the recent-jobs list (`JobStore.list()` rendered as `_job_row`
+  partials).
+- `POST /jobs` (form-encoded `url`, `kind`) → validate `url` is non-empty and
+  looks like an http(s) URL (reject otherwise with a 400 + inline error partial);
+  create + enqueue the job; return the `_job_row` partial for the new job (HTMX
+  swaps it into the list). The row polls its own status.
+- `GET /jobs/{id}` → `job_detail.html`: full stage log, warnings, and — when
+  `done` — a link forward to the results page (item 47 provides
+  `/jobs/{id}/results`; for 39a just link to it / show the raw result dict).
+  404 if unknown id.
+- `GET /jobs/{id}/status` → `_job_status.html` partial for HTMX polling. While
+  `queued`/`running`, include `hx-get` + `hx-trigger="every 1s"` so it keeps
+  polling; when `done`/`error`, render the terminal state **without** the polling
+  trigger so HTMX stops. 404 if unknown id.
+
+**CLI.** Add a `serve` subparser: `sidelinehd serve [--host 127.0.0.1]
+[--port 8000] [--reload]`. It imports `create_app` and runs `uvicorn.run(...)`.
+Bind `127.0.0.1` by default (local-first, no auth — never default to `0.0.0.0`).
+Print the `http://127.0.0.1:PORT` URL on startup.
+
+**Security.** No auth, single user, loopback bind only. Exports carry jersey
+numbers, not names, so nothing new leaves the machine — but do not add any route
+that renders roster *names*; the send-feedback sanitizer (item 38 / phase 39e) is
+the only sanctioned egress path. Vendored assets only (no CDN).
+
+**Testing** (FastAPI `TestClient`; never hit the network or OCR):
+- Monkeypatch `run_youtube_game` / `run_playlist_batch` with fakes that emit a
+  few stage strings (including one `"warning field-never-read: right_score"`) and
+  return a canned result dict.
+- `POST /jobs` with a valid single URL → 200, job appears in `JobStore`,
+  transitions `queued → running → done` (drive the executor to completion
+  deterministically — e.g. inject a synchronous/inline executor in tests).
+- `GET /jobs/{id}/status` reflects stages and surfaces the warning; the terminal
+  partial omits the `every 1s` trigger.
+- `kind == "playlist"` dispatches to `run_playlist_batch`; a fake that raises sets
+  status `error` with the message.
+- `POST /jobs` with an empty/invalid URL → 400 + inline error, no job created.
+- `create_app()` builds without binding a socket; `serve` wiring is unit-tested by
+  asserting the app factory + uvicorn args, not by starting a server.
+
+**Acceptance criteria.**
+1. `sidelinehd serve` starts a loopback FastAPI app; `/` renders the submit form.
+2. Submitting a single URL or playlist creates a background job that runs the real
+   pipeline via the existing workflow functions (verified with fakes in tests).
+3. Job status (including item 45 warnings) streams to the browser via HTMX polling
+   and stops polling at a terminal state.
+4. Core CLI install is unaffected; web deps live behind the `[web]` extra.
+5. Full suite passes; no real player names introduced in fixtures or templates.
+
+**Out of scope (later phases):** rich results/paste kits (item 47), corrections
+UI (39c), roster UI (39d), feedback egress (39e), SQLite persistence.
+
+### 47. Local Web App — Phase 39b: Results + Multi-Game Paste Kits
+
+Status: Ready to implement (after item 46)
+Source: Promoted from item 39 (epic), phase 39b. Depends on item 46 and item 20 (Done).
+
+The presentation slice: for a completed job, render a results page that stacks one
+copy-kit block per game (chapters + at-bat jump links with one-click copy),
+alongside the review-report summary. For a playlist job, one block per game in
+batch order. **This is a thin view over existing renderers — reuse, do not
+rebuild the paste kit or the report.**
+
+**Reuse targets (do not reimplement).**
+- `render_publish_kit_html(...)` in [publish.py:125](src/sidelinehd_extractor/publish.py#L125)
+  already renders export text into HTML with working one-click copy buttons
+  (`navigator.clipboard`). Call it per game and embed the fragments. If it renders
+  a full standalone document rather than an embeddable fragment, refactor it to
+  expose a fragment-returning helper and have the existing callers wrap it — do
+  **not** copy-paste its clipboard JS into the web layer.
+- `write_review_report` / `render_review_report` in
+  [review_report.py](src/sidelinehd_extractor/review_report.py) for the flagged-event
+  count and the "Run Warnings" section (item 45). Render its Markdown to the page
+  (or surface the structured counts) rather than recomputing.
+- Job `result` from item 46 provides the run dir(s) and export paths; read the
+  already-written `full_chapters.txt` / at-bat / `review_report.md` artifacts —
+  do not re-run detection.
+
+**Route.**
+- `GET /jobs/{id}/results` → `results.html`. For a single job, one game block; for
+  a playlist job, iterate the batch entries (reuse the per-entry result shape
+  `run_playlist_batch` returns) and stack a block per successful game, with a
+  clearly-marked error block for any entry that failed. 404 if unknown id; if the
+  job is not yet `done`, redirect/link back to `/jobs/{id}`.
+- Wire the "view results" link from item 46's `job_detail.html` to this route.
+
+**Each game block contains:** game label (playlist title/index or video name),
+the chapters copy kit and the at-bats copy kit (via `render_publish_kit_html`),
+the flagged-event count, and the run-warnings list. Keep names out of it — blocks
+show jersey numbers and timestamps only, matching current export content.
+
+**Testing** (`TestClient`, fakes):
+- Build a fake `done` job whose `result` points at a temp run dir containing
+  `full_chapters.txt`, the at-bats file, and `review_report.md` (with a Run
+  Warnings section). Assert the page contains the chapters, the at-bats, the
+  copy-button markup from `render_publish_kit_html`, the flagged count, and the
+  warning text.
+- Playlist job with two entries (one success, one failure) → two blocks, the
+  failure rendered as an error block, in batch order.
+- `GET /jobs/{id}/results` on a not-yet-done job links back to the detail page;
+  unknown id → 404.
+- If `render_publish_kit_html` is refactored to a fragment helper, its existing
+  publish tests still pass unchanged.
+
+**Acceptance criteria.**
+1. A completed single or playlist job renders a results page with one copy-kit
+   block per game, each with functioning one-click copy (reusing
+   `render_publish_kit_html`).
+2. The review-report flagged count and item 45 run warnings appear per game.
+3. Batch results preserve order and clearly mark failed entries.
+4. No new clipboard/paste logic and no re-run of the pipeline; artifacts are read
+   from the run dir.
+5. Full suite passes; publish reuse refactor (if any) leaves existing tests green;
+   no real player names in fixtures.
+
+**Out of scope:** corrections editing (39c), roster editing (39d), feedback egress
+(39e).
 
 ## Discussion / Later Deliverables
 
