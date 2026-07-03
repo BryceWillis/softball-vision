@@ -208,6 +208,7 @@ def summarize_result(result: object) -> dict:
                 "sample_count": run.sample_count,
                 "state_count": run.state_count,
                 "event_count": run.event_count,
+                "health_warning": run.health_warning,
                 "video_path": result.download.video_path,
             }
         )

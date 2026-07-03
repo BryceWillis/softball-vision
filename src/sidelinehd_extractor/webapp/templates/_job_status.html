@@ -5,14 +5,30 @@
      {% endif %}>
   <span class="status-badge status-{{ job.status }}">{{ job.status }}</span>
   {% if not job.is_terminal and job.current_stage %}
-    <span class="current-stage">{{ job.current_stage }}</span>
+    <span class="current-stage">
+      {% if job.current_stage == "process" and job.frames_total %}
+        Processing: {{ job.frames_done }} / {{ job.frames_total }} frames
+        ({{ (100 * job.frames_done / job.frames_total) | round | int }}%)
+      {% else %}
+        {{ job.current_stage }}
+      {% endif %}
+    </span>
   {% endif %}
   {% if job.status == "done" %}
     <a href="/jobs/{{ job.id }}/results">View results</a>
   {% endif %}
-  {% if job.warnings %}
+  {# Item 54 P2: the no-scoreboard health warning must be impossible to miss —
+     it gets a loud banner instead of a line in the amber warning list. #}
+  {% for warning in job.warnings if warning.startswith("warning no-scoreboard-detected") %}
+    <div class="health-banner">&#9888;&#65039; {{ warning | replace("warning no-scoreboard-detected: ", "", 1) }}</div>
+  {% endfor %}
+  {% set plain_warnings = [] %}
+  {% for warning in job.warnings if not warning.startswith("warning no-scoreboard-detected") %}
+    {% set _ = plain_warnings.append(warning) %}
+  {% endfor %}
+  {% if plain_warnings %}
     <ul class="job-warnings">
-      {% for warning in job.warnings %}<li>{{ warning }}</li>{% endfor %}
+      {% for warning in plain_warnings %}<li>{{ warning }}</li>{% endfor %}
     </ul>
   {% endif %}
   {% if job.error %}

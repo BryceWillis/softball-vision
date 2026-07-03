@@ -457,6 +457,87 @@ def test_results_playlist_renders_blocks_in_order_with_error_block(tmp_path):
     assert 'data-copy-target="game-1-chapters-text"' not in response.text
 
 
+def test_results_page_shows_loud_health_banner_from_job_summary(tmp_path):
+    from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING
+
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={"kind": "single", "health_warning": NO_SCOREBOARD_WARNING, **paths},
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' in response.text
+    assert "No scoreboard detected" in response.text
+
+
+def test_results_page_reads_health_from_manifest_for_playlist_entries(tmp_path):
+    import json as json_module
+
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    (tmp_path / "run" / "manifest.json").write_text(
+        json_module.dumps(
+            {
+                "health": {
+                    "event_count": 0,
+                    "no_scoreboard_detected": True,
+                    "message": "No scoreboard detected — the template may not match "
+                    "this video's overlay.",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    job = store.create(kind="playlist", url="https://youtube.com/playlist?list=PL1")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "playlist",
+            "entries": [{"video_id": "vid1", "title": "Game 1", "status": "done", **paths}],
+        },
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' in response.text
+    assert "No scoreboard detected" in response.text
+
+
+def test_results_page_has_no_health_banner_for_healthy_run(tmp_path):
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"kind": "single", **paths})
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' not in response.text
+
+
+def test_job_status_and_detail_show_health_banner_from_stage_warning():
+    from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING
+
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.record_stage(job.id, f"warning no-scoreboard-detected: {NO_SCOREBOARD_WARNING}")
+    store.record_stage(job.id, "warning field-never-read: right_score")
+    store.update(job.id, status="done")
+
+    for path in (f"/jobs/{job.id}/status", f"/jobs/{job.id}"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert 'class="health-banner"' in response.text
+        assert "No scoreboard detected" in response.text
+        # Ordinary warnings still render in the plain list, not the banner.
+        assert "field-never-read: right_score" in response.text
+
+
 def test_results_not_done_job_links_back_to_detail_and_unknown_404s():
     client, store = _make_client()
     job = store.create(kind="single", url="https://youtu.be/abc123")

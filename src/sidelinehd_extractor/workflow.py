@@ -73,6 +73,43 @@ class RunGameResult:
     state_count: int
     event_count: int
     batting_half_inference: Optional[BattingHalfInference] = None
+    health_warning: Optional[str] = None
+
+
+#: The scorebug fields whose reads prove the template actually matched the
+#: overlay. If every one of them came back empty for the whole run, OCR was
+#: reading the wrong pixels regardless of how many samples were taken.
+KEY_SCOREBUG_FIELDS = ("left_score", "right_score", "count", "inning")
+
+NO_SCOREBOARD_WARNING = (
+    "No scoreboard detected — the template may not match this video's overlay. "
+    "The run finished but produced no usable scoreboard reads, so the chapter "
+    "and at-bat exports are empty or unreliable. Check that the video shows the "
+    "SidelineHD overlay and that the overlay template matches its layout."
+)
+
+
+def scoreboard_health_warning(
+    event_count: int,
+    field_read_stats: dict,
+) -> Optional[str]:
+    """Post-run health check: a warning string when the run read no scoreboard.
+
+    Fires when the run produced zero events, or when every key scorebug field
+    (``KEY_SCOREBUG_FIELDS``) read empty across the whole run — a field missing
+    from the stats counts as empty. Item 54 P2: a run must never report "done"
+    with silently useless output.
+    """
+
+    if event_count == 0:
+        return NO_SCOREBOARD_WARNING
+    all_key_fields_empty = all(
+        (field_read_stats.get(field_name) or {}).get("non_empty_count", 0) == 0
+        for field_name in KEY_SCOREBUG_FIELDS
+    )
+    if all_key_fields_empty:
+        return NO_SCOREBOARD_WARNING
+    return None
 
 
 @dataclass(frozen=True)
@@ -177,6 +214,25 @@ def run_game(
     )
     event_count = len(events)
 
+    # Item 54 P2: never finish silently useless. Skip when OCR was disabled
+    # (no_ocr runs are calibration/dry runs and read nothing by design).
+    health_warning = None
+    if ocr is not no_ocr:
+        health_warning = scoreboard_health_warning(
+            event_count, process_result.field_read_stats
+        )
+        update_manifest_section(
+            process_result.manifest_path,
+            "health",
+            {
+                "event_count": event_count,
+                "no_scoreboard_detected": health_warning is not None,
+                "message": health_warning,
+            },
+        )
+        if health_warning is not None:
+            _stage(stage_progress, f"warning no-scoreboard-detected: {health_warning}")
+
     chapters_path, at_bats_path = finalize_run_exports(
         process_result.run_dir,
         corrections=corrections,
@@ -204,6 +260,7 @@ def run_game(
         state_count=state_result.state_count,
         event_count=event_count,
         batting_half_inference=batting_half_inference,
+        health_warning=health_warning,
     )
 
 

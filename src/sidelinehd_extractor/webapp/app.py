@@ -11,6 +11,7 @@ offline.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -52,7 +53,7 @@ from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
-from sidelinehd_extractor.workflow import finalize_run_exports
+from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -120,6 +121,9 @@ def _game_block(index: int, label: str, result: dict) -> dict:
     flagged_count = None
     warnings: list = []
     run_dir = result.get("run_dir")
+    health_warning = result.get("health_warning") or (
+        _run_health_warning(Path(run_dir)) if run_dir else None
+    )
     report_path = Path(run_dir) / REVIEW_REPORT_FILENAME if run_dir else None
     if report_path is not None and report_path.exists():
         try:
@@ -136,8 +140,26 @@ def _game_block(index: int, label: str, result: dict) -> dict:
         "fragment": fragment,
         "flagged_count": flagged_count,
         "warnings": warnings,
+        "health_warning": health_warning,
         "report_path": str(report_path) if report_path is not None else None,
     }
+
+
+def _run_health_warning(run_dir: Path) -> Optional[str]:
+    """The item 54 P2 no-scoreboard message from the run manifest, if any.
+
+    Playlist entries do not carry ``health_warning`` in the job summary, so the
+    results page falls back to the ``health`` section ``run_game`` wrote.
+    """
+
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    health = manifest.get("health")
+    if isinstance(health, dict) and health.get("no_scoreboard_detected"):
+        return str(health.get("message") or NO_SCOREBOARD_WARNING)
+    return None
 
 
 def build_result_blocks(job: Job) -> list:
