@@ -29,9 +29,12 @@ name leak, so:
 
 ## Prerequisites
 
-- `pip install -e ".[web]"` (FastAPI + uvicorn + jinja2 + python-multipart).
+- `pip install -e ".[web]"` — installs the web stack **and** the core deps,
+  including `yt-dlp` and `opencv-python`. No separate yt-dlp step: it is a
+  declared dependency and lands on PATH with the install (item 53 also adds a
+  `python -m yt_dlp` fallback so it works even where the console script isn't on
+  PATH). Only needed for the YouTube path; a local video file needs neither.
 - **Tesseract** on PATH (5.x recommended; item 42 warns non-fatally if old/missing).
-- **yt-dlp** on PATH — only for the YouTube path; not needed for a local file.
 - A **real game**: a YouTube URL (single or playlist) or a local video file.
 - A **template** matching the scorebug (the default `640x360 active`, or a
   calibrated one) — a mismatched region is the usual cause of empty OCR.

@@ -36,6 +36,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **38** — Feedback Log | Done (Pass 17) | Added CLI-first sanitized Markdown feedback logs with stable player pseudonyms, preserved jersey numbers, environment/version metadata, review flags, and guard tests against name leakage. |
 | 9 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
 | 9b | **52** — Persist Roster Display Name | Ready to implement | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
+| 9c | **53** — Make declared `yt-dlp` dep sufficient | Ready to implement | Small. yt-dlp is already a core dep (auto-installed); add a `python -m yt_dlp` fallback + clear error so it works even where the console script isn't on PATH. Surfaced by live-fire prep. |
 | — | **39** — Local Web App | Epic complete (Pass 20) | All phases done: 39a/39b/39c/39d/39e = items 46/47/49/50/51. Local-first FastAPI + HTMX. Cloud/hosted is a later seam (see deferred CSRF hardening). |
 | 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
 | 12 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
@@ -3928,6 +3929,49 @@ the pretty name and just needs the writer to keep it. Verify `feedback.py`
 2. Roster files written before this change still load (stem fallback), and the
    `number,full_name,…` column contract is unchanged.
 3. Full suite passes; placeholder-only fixtures.
+
+### 53. Make the Declared `yt-dlp` Dependency Sufficient (module fallback)
+
+Status: Ready to implement
+Source: Live-fire prep (2026-07-03). Small.
+
+`yt-dlp>=2025.1` is already a core dependency, so `pip install -e .` /
+`.[web]` installs it — there is no manual install step. The gap is robustness:
+`youtube.py` invokes the **`yt-dlp` console script** (`build_ytdlp_command` /
+`build_ytdlp_playlist_command` default `executable=["yt-dlp"]`). In install
+layouts where the module is importable but the script isn't on PATH (pipx, some
+`--user`/CI setups), that subprocess raises a bare `FileNotFoundError` even though
+the declared dependency is present.
+
+**Change.** Resolve the yt-dlp invocation so the declared dependency is always
+sufficient:
+1. A helper (e.g. `default_ytdlp_executable()`) that returns `["yt-dlp"]` when the
+   console script is found (`shutil.which("yt-dlp")`), else falls back to
+   `[sys.executable, "-m", "yt_dlp"]` when the module is importable
+   (`importlib.util.find_spec("yt_dlp")`).
+2. If neither is available, raise a clear, actionable error ("yt-dlp is required
+   and ships with this package — reinstall with `pip install -e .`") instead of a
+   raw `FileNotFoundError`.
+3. Route `build_ytdlp_command` / `build_ytdlp_playlist_command`'s default
+   `executable` through the helper. Keep the explicit-`executable` override intact
+   (tests pass a fake).
+
+Do not add yt-dlp to `dependencies` again (already there) or pin it tighter —
+yt-dlp needs to float so users can update it as YouTube changes.
+
+**Testing.**
+- `default_ytdlp_executable()` returns the script path when `which` finds it; the
+  `python -m yt_dlp` form when only the module is importable; raises the actionable
+  error when neither (monkeypatch `shutil.which` / `find_spec`).
+- `build_ytdlp_command` uses the resolved default and still honors an explicit
+  `executable` override.
+
+**Acceptance criteria.**
+1. With yt-dlp installed as a Python package but its console script not on PATH,
+   the download path still runs (via `python -m yt_dlp`).
+2. With yt-dlp entirely absent, the user gets a clear reinstall message, not a raw
+   `FileNotFoundError`.
+3. Existing youtube/download/batch tests pass unchanged.
 
 ## Discussion / Later Deliverables
 
