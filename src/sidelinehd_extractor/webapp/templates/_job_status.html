@@ -1,6 +1,8 @@
-{# Terminal states render without the polling trigger so HTMX stops. #}
+{# Terminal states render without the polling trigger so HTMX stops. When
+   embedded in the job-detail body (which polls as a whole), the parent sets
+   no_status_poll so this fragment does not also poll. #}
 <div id="job-status-{{ job.id }}"
-     {% if not job.is_terminal %}
+     {% if not job.is_terminal and not no_status_poll %}
      hx-get="/jobs/{{ job.id }}/status" hx-trigger="every 1s" hx-swap="outerHTML"
      {% endif %}>
   <span class="status-badge status-{{ job.status }}">{{ job.status }}</span>

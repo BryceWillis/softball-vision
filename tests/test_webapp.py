@@ -196,6 +196,68 @@ def test_job_detail_shows_stage_log_and_404s():
     assert client.get("/jobs/deadbeef/status").status_code == 404
 
 
+def test_frame_progress_callback_updates_job_fields(monkeypatch):
+    client, store = _make_client()
+
+    def fake(url, video_dir, output_dir, stage_progress=None, progress=None, **kwargs):
+        stage_progress("process")
+        progress(3, 10, 15.0, 42, 140)
+        return {"kind": "single", "run_dir": "runs/fake"}
+
+    monkeypatch.setattr(jobs_module, "run_youtube_game", fake)
+
+    client.post("/jobs", data={"url": "https://youtu.be/abc123", "kind": "single"})
+    job = store.list()[0]
+    assert job.frames_done == 3
+    assert job.frames_total == 10
+
+
+def test_status_partial_shows_frame_progress_during_process_stage():
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running", frames_done=3, frames_total=10)
+    store.record_stage(job.id, "process")
+
+    response = client.get(f"/jobs/{job.id}/status")
+    assert response.status_code == 200
+    assert "Processing: 3 / 10 frames" in response.text
+    assert "(30%)" in response.text
+
+    # Outside the process stage the plain stage word still renders.
+    store.record_stage(job.id, "detect-events")
+    response = client.get(f"/jobs/{job.id}/status")
+    assert "Processing:" not in response.text
+    assert "detect-events" in response.text
+
+
+def test_job_detail_body_polls_in_place_and_stops_when_terminal():
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running")
+    store.record_stage(job.id, "download")
+
+    page = client.get(f"/jobs/{job.id}")
+    assert page.status_code == 200
+    # The whole detail body polls; the embedded status partial must not add a
+    # second poller of its own.
+    assert f'hx-get="/jobs/{job.id}/detail"' in page.text
+    assert f'hx-get="/jobs/{job.id}/status"' not in page.text
+    assert 'hx-trigger="every 1s"' in page.text
+
+    partial = client.get(f"/jobs/{job.id}/detail")
+    assert partial.status_code == 200
+    assert "Stage log" in partial.text
+    assert "download" in partial.text
+    assert 'hx-trigger="every 1s"' in partial.text
+
+    store.update(job.id, status="done", result={"run_dir": "runs/fake"})
+    finished = client.get(f"/jobs/{job.id}/detail")
+    assert "every 1s" not in finished.text
+    assert f"/jobs/{job.id}/results" in finished.text
+
+    assert client.get("/jobs/deadbeef/detail").status_code == 404
+
+
 def test_static_htmx_is_vendored():
     client, _ = _make_client()
     response = client.get("/static/htmx.min.js")

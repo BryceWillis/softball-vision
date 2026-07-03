@@ -35,34 +35,6 @@
   <p><a href="/">&larr; All jobs</a></p>
   <h1><span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
 
-  {% include "_job_status.html" %}
-
-  <h2>Stage log</h2>
-  {% if job.stages %}
-    <ol class="stage-log">
-      {% for stage in job.stages %}<li>{{ stage }}</li>{% endfor %}
-    </ol>
-  {% else %}
-    <p>No stages recorded yet.</p>
-  {% endif %}
-
-  {% if job.warnings %}
-    <h2>Warnings</h2>
-    <ul class="job-warnings">
-      {% for warning in job.warnings %}<li>{{ warning }}</li>{% endfor %}
-    </ul>
-  {% endif %}
-
-  {% if job.status == "done" %}
-    <h2>Result</h2>
-    <p>
-      <a href="/jobs/{{ job.id }}/results">View results</a> |
-      <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
-    </p>
-    <pre>{{ job.result | tojson(indent=2) }}</pre>
-  {% elif job.status == "error" %}
-    <h2>Error</h2>
-    <p class="job-error">{{ job.error }}</p>
-  {% endif %}
+  {% include "_job_detail_body.html" %}
 </body>
 </html>

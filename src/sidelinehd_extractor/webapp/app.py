@@ -540,6 +540,13 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         job = _get_job_or_404(job_id)
         return templates.TemplateResponse(request, "_job_status.html", {"job": job})
 
+    @app.get("/jobs/{job_id}/detail", response_class=HTMLResponse)
+    def job_detail_body(request: Request, job_id: str) -> HTMLResponse:
+        """The live-updating body of the detail page (item 54 P3 HTMX poll)."""
+
+        job = _get_job_or_404(job_id)
+        return templates.TemplateResponse(request, "_job_detail_body.html", {"job": job})
+
     @app.get("/jobs/{job_id}/results", response_class=HTMLResponse)
     def job_results(request: Request, job_id: str) -> HTMLResponse:
         job = _get_job_or_404(job_id)

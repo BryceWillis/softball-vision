@@ -1,0 +1,31 @@
+{# Item 54 P3: the whole detail body (status, stage log, warnings, result)
+   polls and swaps in place while the job is active, so the page live-updates
+   without a manual reload. Terminal states render without the trigger. #}
+<div id="job-detail-{{ job.id }}"
+     {% if not job.is_terminal %}
+     hx-get="/jobs/{{ job.id }}/detail" hx-trigger="every 1s" hx-swap="outerHTML"
+     {% endif %}>
+  {% set no_status_poll = true %}
+  {% include "_job_status.html" %}
+
+  <h2>Stage log</h2>
+  {% if job.stages %}
+    <ol class="stage-log">
+      {% for stage in job.stages %}<li>{{ stage }}</li>{% endfor %}
+    </ol>
+  {% else %}
+    <p>No stages recorded yet.</p>
+  {% endif %}
+
+  {% if job.status == "done" %}
+    <h2>Result</h2>
+    <p>
+      <a href="/jobs/{{ job.id }}/results">View results</a> |
+      <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
+    </p>
+    <pre>{{ job.result | tojson(indent=2) }}</pre>
+  {% elif job.status == "error" %}
+    <h2>Error</h2>
+    <p class="job-error">{{ job.error }}</p>
+  {% endif %}
+</div>
