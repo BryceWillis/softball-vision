@@ -23,15 +23,16 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **41** — OCR Pipeline Performance | Ready to implement | Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
-| 2 | **40** — OCR Confidence Capture | Ready to implement | Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
-| 3 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
-| 4 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
-| 5 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
-| 6 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. Depends on items 37, 38, 20. Cloud is a later seam. |
-| 7 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
-| 8 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort. |
-| 9 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. |
+| 1 | **45** — Fix `right_score` Calibration + Empty-Field Guard | Ready to implement | Confirmed defect: home score reads empty on the whole Victor Vipers run, so no chapter shows a score. Recalibrate the example template's `right_score` region (Codex extracts a frame locally) and add a warning when a configured field reads empty for an entire run. |
+| 2 | **41** — OCR Pipeline Performance | Ready to implement | Was paired with item 37 (now done): parallelize per-crop OCR + optional in-process Tesseract backend; the playlist batch multiplies the current subprocess cost. |
+| 3 | **40** — OCR Confidence Capture | Ready to implement | Low-risk, high-value. Unblocks item 31's tiered gate and enriches the item 38 feedback log — do before item 38. |
+| 4 | **42** — Tesseract Version Capture | Ready to implement | Small support fix; record version for the feedback log and per-device installs. Precede item 38. |
+| 5 | **38** — Feedback Log | Ready to implement | Sanitized Markdown log (jersey numbers kept, player names redacted) for GitHub/email → Claude/Codex. Build CLI-first; the only data that leaves a user's machine. Benefits from items 40 and 42. |
+| 6 | **43** — OCR Accuracy Follow-ons | Ready to implement | Multi-PSM voting + per-field preprocessing. Depends on item 40 (needs confidence). |
+| 7 | **39** — Local Web App | Epic | Local-first, per-device, single-user; FastAPI + HTMX; phases 39a–39e. Depends on items 37, 38, 20. Cloud is a later seam. |
+| 8 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
+| 9 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort. |
+| 10 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. |
 | — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
 | — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
@@ -3250,6 +3251,62 @@ latched pregame read — which conditionally re-opens the item-34 / CR-36 guard.
 - `_normalize_game_status`: keep the pregame-variant coverage tests, add
   `"GAME 7:00 SOON"` → `"pregame"` (digit-guard removal), and a negative for a
   short-token false-positive that the tightened set now rejects.
+
+### 45. Fix `right_score` Region Calibration + Empty-Field Guard
+
+Source: Product QA (Pass 13 diagnosis). On the `9AaT4645z6s` / Victor Vipers run,
+chapters exported with no score suffix even though item 29 is Done and score
+display is on by default.
+
+**Root cause (diagnosed, not hypothetical).** In that run, `left_score` OCR'd
+successfully on 687 states, but `right_score` produced **empty OCR on all 1153
+states** — the home score is read **zero** times. `_score_snapshot` requires both
+scores to be non-None, so every one of the 13 `HALF_INNING_START` events got
+`(None, None)` and `_chapter_label` correctly dropped the suffix. Inspecting the
+saved crops confirmed it: the `left_score` crop shows a clean `11`, while the
+`right_score` crop is **empty background** (solid fill, no digit). The
+`right_score` region is miscalibrated — it crops the wrong part of the scorebug.
+
+This is the region shipped in
+`examples/sidelinehd_640x360_active.example.json` (`right_score` at
+`x: 0.612, y: 0.033, width: 0.05, height: 0.064`), so anyone using that template
+(or one derived from it) silently loses the home score.
+
+**Part A — recalibrate `right_score`.**
+- The home-score digit sits to the **right** of the current `x: 0.612`. Layout
+  hint from the same template: `left_score` center ≈ 0.40, `count` center ≈ 0.563;
+  mirroring the away score about the scorebug center puts the home score near
+  `x ≈ 0.70` (width ~0.05) — treat this as a **starting hypothesis to verify, not
+  a final value**.
+- Codex should extract a real frame from the game video (the calibration-frame
+  command / `calibration.py`) — neither the architect nor Ryan has a loose frame
+  to hand — locate the actual home-score digit, set the corrected coordinate in
+  the example template, and **verify by re-processing**: both `away_score` and
+  `home_score` populate, and exported chapters show `(a-b)` suffixes.
+- If the away/right layout turns out not to be mirror-symmetric (e.g. team-name
+  widths shift the digits), calibrate empirically from the frame rather than by
+  the mirror hint.
+
+**Part B — empty-field guard so this never fails silently again.**
+- The current behavior is *silent*: a field that reads empty for the entire run
+  produces no output and no warning; Ryan only caught it by noticing the missing
+  suffix. Add a guard that, after a run, detects any **configured field whose OCR
+  was empty across the whole run** (0 non-empty samples) and surfaces it:
+  a stderr warning during `run-*`, a flag in the manifest, and a line in the
+  review report (e.g. `field-never-read=right_score`).
+- Keep `_score_snapshot`'s both-scores-required rule as-is (don't emit a partial
+  `(4-?)`); the guard is what makes the partial-failure visible.
+- This dovetails with item 38 (the feedback log should include per-field
+  read-rate) and item 40 (confidence would further explain *why* a field is
+  empty vs. low-confidence).
+
+**Testing.**
+- Part A: a fixture/regression asserting the example template's `right_score`
+  region, once corrected, yields a parsed home score on a representative frame
+  (or a coordinate-sanity test if a full-frame fixture is impractical).
+- Part B: a run where one configured field has all-empty samples produces the
+  warning + manifest flag + review-report line; a run where every field reads at
+  least once does not.
 
 ## Discussion / Later Deliverables
 
