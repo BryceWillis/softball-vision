@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import shutil
 import subprocess
 import sys
-import json
 from dataclasses import dataclass
-from importlib.util import find_spec
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -15,6 +15,10 @@ from typing import List, Optional, Sequence
 DEFAULT_OUTPUT_TEMPLATE = "%(upload_date>%Y%m%d)s_%(id)s_%(title).200B.%(ext)s"
 DEFAULT_FORMAT_SELECTOR = "best[ext=mp4]/best"
 DEFAULT_YOUTUBE_CLIENT = "android"
+YTDLP_REINSTALL_MESSAGE = (
+    "yt-dlp is required and ships with this package. Reinstall with "
+    "`pip install -e .` so the declared dependency is available."
+)
 
 
 @dataclass(frozen=True)
@@ -68,7 +72,8 @@ def build_ytdlp_command(
 ) -> List[str]:
     """Build the yt-dlp command used by the CLI."""
 
-    command = list(executable or ["yt-dlp"]) + [
+    command_prefix = list(executable) if executable is not None else default_ytdlp_executable()
+    command = command_prefix + [
         "--paths",
         str(output_dir.expanduser()),
         "--output",
@@ -99,7 +104,8 @@ def build_ytdlp_playlist_command(
 ) -> List[str]:
     """Build a cheap flat-playlist enumeration command."""
 
-    command = list(executable or ["yt-dlp"]) + [
+    command_prefix = list(executable) if executable is not None else default_ytdlp_executable()
+    command = command_prefix + [
         "--flat-playlist",
         "--dump-single-json",
         "--no-warnings",
@@ -110,18 +116,21 @@ def build_ytdlp_playlist_command(
     return command
 
 
-def resolve_ytdlp_executable() -> List[str]:
-    """Return a runnable yt-dlp command prefix."""
+def default_ytdlp_executable() -> List[str]:
+    """Return the default runnable yt-dlp command prefix."""
 
     executable = shutil.which("yt-dlp")
     if executable is not None:
         return [executable]
-    if find_spec("yt_dlp") is not None:
+    if importlib.util.find_spec("yt_dlp") is not None:
         return [sys.executable, "-m", "yt_dlp"]
-    raise FileNotFoundError(
-        "yt-dlp was not found on PATH or as a Python module. Install it first, then rerun the "
-        "download command."
-    )
+    raise RuntimeError(YTDLP_REINSTALL_MESSAGE)
+
+
+def resolve_ytdlp_executable() -> List[str]:
+    """Return a runnable yt-dlp command prefix."""
+
+    return default_ytdlp_executable()
 
 
 def parse_downloaded_video_path(stdout: str) -> Optional[Path]:
@@ -151,7 +160,6 @@ def download_youtube_video(
 ) -> DownloadResult:
     """Download a YouTube URL with yt-dlp and return the resulting local path."""
 
-    executable = resolve_ytdlp_executable()
     destination = output_dir.expanduser()
     destination.mkdir(parents=True, exist_ok=True)
     command = build_ytdlp_command(
@@ -163,7 +171,6 @@ def download_youtube_video(
         write_info_json=write_info_json,
         no_playlist=no_playlist,
         youtube_client=youtube_client,
-        executable=executable,
     )
     completed = runner(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -187,11 +194,9 @@ def list_playlist_videos(
 ) -> List[PlaylistEntry]:
     """Return YouTube playlist entries without downloading video media."""
 
-    executable = resolve_ytdlp_executable()
     command = build_ytdlp_playlist_command(
         playlist_url=playlist_url,
         youtube_client=youtube_client,
-        executable=executable,
     )
     completed = runner(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
