@@ -279,6 +279,7 @@ def build_name_sanitizer(data: RunFeedbackData) -> NameSanitizer:
             )
     for event in data.events:
         sanitizer.add_player_variants([event.player_name])
+        sanitizer.add_player_variants([_player_name_from_label(event.label)])
         for key, value in event.metadata.items():
             if "name" in str(key).lower():
                 sanitizer.add_player_variants([str(value)])
@@ -347,6 +348,14 @@ def _player_label(index: int) -> str:
 
 def _name_tokens(value: str) -> List[str]:
     return [token for token in re.findall(r"[A-Za-z]+", value) if len(token) >= 3]
+
+
+def _player_name_from_label(value: str) -> Optional[str]:
+    match = re.match(r"\s*(?P<name>.+?)\s*\(#\s*\d+\s*\)\s*$", value)
+    if not match:
+        return None
+    name = match.group("name").strip()
+    return name or None
 
 
 def _normalize_replacement_key(value: str) -> str:
