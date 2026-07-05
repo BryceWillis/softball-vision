@@ -10,7 +10,67 @@ YouTube paste kit.
 For a non-technical overview of what this project does and why it exists, see
 [PROJECT-EXPLANATION.md](PROJECT-EXPLANATION.md).
 
-## Setup
+## Quickstart (Mac — no coding needed)
+
+You need to do this once. Afterward, starting the app is a single command.
+
+**1. Open the Terminal app** (press `Cmd+Space`, type `Terminal`, press Enter).
+
+**2. Install the two helpers** — copy each line into the Terminal and press
+Enter. The first installs [Homebrew](https://brew.sh) if you don't have it
+(skip if you do); the second installs the text reader the app uses:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install tesseract
+```
+
+**3. Download this project**: click the green **Code** button on the GitHub
+page, choose **Download ZIP**, and double-click the ZIP to unpack it (or use
+`git clone` if you're comfortable with that).
+
+**4. Install the app** — in the Terminal, go into the unpacked folder and
+install (copy all four lines together):
+
+```sh
+cd ~/Downloads/softball-vision-main
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[web]"
+```
+
+**5. Start it:**
+
+```sh
+sidelinehd-extractor start
+```
+
+Your browser opens the app automatically. The first page explains the rest:
+add your team's roster, paste the YouTube link to your game, and wait — a
+full game takes roughly 30–45 minutes to read. When it's done, copy the
+timestamps into your video's YouTube description.
+
+To stop the app, go back to the Terminal window and press `Ctrl+C` (or just
+close the window). To start it again later:
+
+```sh
+cd ~/Downloads/softball-vision-main && source .venv/bin/activate && sidelinehd-extractor start
+```
+
+**If something doesn't work:**
+
+- `command not found: sidelinehd-extractor` — run
+  `source .venv/bin/activate` first (step 4 put the app inside that folder).
+- "Port 8000 is already in use" — run `sidelinehd-extractor start --port 8001`.
+- A yellow "One-time setup needed" card in the app — it shows the exact
+  install command to copy; run it in the Terminal, then click Re-check.
+- Anything else: use the app's **Send feedback** button (player names are
+  removed automatically) or open a GitHub issue.
+
+Windows support is planned (see Roadmap item 19); the sections below cover
+the developer/CLI workflow.
+
+## Developer Setup
 
 Python 3.10 or newer is recommended. Python 3.9 may work, but recent `yt-dlp`
 versions warn that Python 3.9 support is deprecated.
@@ -66,7 +126,7 @@ dependencies:
 python -m pip install -r requirements.txt
 ```
 
-## Quick Start
+## CLI Quick Start
 
 For a fresh game, use the checklist in [NEW_GAME_CHECKLIST.md](NEW_GAME_CHECKLIST.md).
 
