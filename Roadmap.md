@@ -25,7 +25,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
-| 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | Epic — schedule 54a next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -4077,6 +4077,28 @@ priority order on one branch (each its own commit):
   backward compatibility.
 - **P5 — Template auto-detection** was *not* implemented; it is designed as
   item 55 (Ready to implement, pending architect validation of the design).
+
+**Phases 54a + 54b (2026-07-05, branch `impl/turnkey-launch`, by Fable 5) —
+Ready for review.**
+
+- **54a — Automatic dependencies.** `imageio-ffmpeg` is now a core dependency;
+  `resolve_ffmpeg_location()` in `youtube.py` prefers a system `ffmpeg` on
+  PATH, falls back to the pip-bundled static build, else `None` — never
+  raises (mirrors the item-53 yt-dlp resolver). Both yt-dlp command builders
+  append `--ffmpeg-location <path>` automatically when resolved. New
+  `preflight.py` module: `preflight_dependencies()` reports
+  yt-dlp/ffmpeg/tesseract with ok/detail and an OS-specific install hint,
+  reusing item 53's resolver and item 42's `tesseract_version()`. The web
+  index renders a plain-language setup card (exact copy-paste install + a
+  Re-check button) only when something is missing; healthy installs show
+  nothing.
+- **54b — One-command launch.** New `sidelinehd-extractor start` command:
+  prints the preflight report (a missing Tesseract prints its install hint
+  but does not block), refuses a busy port with a clear `--port` suggestion,
+  prints "Open http://127.0.0.1:PORT — press Ctrl+C here to stop.",
+  auto-opens the browser (`--no-browser` to opt out), and shuts down cleanly
+  on Ctrl+C. `serve` is unchanged for development use.
+- Verified live: real launch, index 200, port-collision exit, clean Ctrl+C.
 
 ### 55. Overlay Template Auto-Detection (Probe Pass)
 

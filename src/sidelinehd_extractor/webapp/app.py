@@ -48,6 +48,7 @@ from sidelinehd_extractor.feedback import (
     sanitize_feedback,
 )
 from sidelinehd_extractor.models import EventType, HalfInning, Roster, RosterPlayer
+from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish_kit_fragment
 from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
@@ -526,7 +527,14 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "index.html", {"jobs": store.list()})
+        # Item 54a: surface missing external dependencies as an actionable
+        # setup card. A healthy install renders nothing.
+        missing = [status for status in preflight_dependencies() if not status["ok"]]
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {"jobs": store.list(), "missing_dependencies": missing},
+        )
 
     @app.post("/jobs", response_class=HTMLResponse)
     def submit_job(

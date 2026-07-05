@@ -13,6 +13,9 @@ from typing import List, Optional, Sequence
 
 
 DEFAULT_OUTPUT_TEMPLATE = "%(upload_date>%Y%m%d)s_%(id)s_%(title).200B.%(ext)s"
+# Sentinel default: builders resolve ffmpeg automatically unless the caller
+# passes an explicit location (or None to omit the flag entirely).
+_AUTO_FFMPEG = object()
 DEFAULT_FORMAT_SELECTOR = "best[ext=mp4]/best"
 DEFAULT_YOUTUBE_CLIENT = "android"
 YTDLP_REINSTALL_MESSAGE = (
@@ -69,6 +72,7 @@ def build_ytdlp_command(
     no_playlist: bool = True,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
     executable: Optional[Sequence[str]] = None,
+    ffmpeg_location: object = _AUTO_FFMPEG,
 ) -> List[str]:
     """Build the yt-dlp command used by the CLI."""
 
@@ -93,6 +97,7 @@ def build_ytdlp_command(
         command.append("--write-info-json")
     if youtube_client:
         command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
+    _extend_with_ffmpeg_location(command, ffmpeg_location)
     command.append(url)
     return command
 
@@ -101,6 +106,7 @@ def build_ytdlp_playlist_command(
     playlist_url: str,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
     executable: Optional[Sequence[str]] = None,
+    ffmpeg_location: object = _AUTO_FFMPEG,
 ) -> List[str]:
     """Build a cheap flat-playlist enumeration command."""
 
@@ -112,8 +118,38 @@ def build_ytdlp_playlist_command(
     ]
     if youtube_client:
         command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
+    _extend_with_ffmpeg_location(command, ffmpeg_location)
     command.append(playlist_url)
     return command
+
+
+def _extend_with_ffmpeg_location(command: List[str], ffmpeg_location: object) -> None:
+    if ffmpeg_location is _AUTO_FFMPEG:
+        ffmpeg_location = resolve_ffmpeg_location()
+    if ffmpeg_location:
+        command.extend(["--ffmpeg-location", str(ffmpeg_location)])
+
+
+def resolve_ffmpeg_location() -> Optional[str]:
+    """Return a usable ffmpeg path: system binary, else the pip-bundled build.
+
+    Prefers an ``ffmpeg`` already on PATH; otherwise falls back to the static
+    build shipped by the ``imageio-ffmpeg`` dependency. Returns ``None`` when
+    neither is available so callers can degrade to guidance instead of failing.
+    Mirrors the item-53 yt-dlp resolver: safe to call with the module absent.
+    """
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg is not None:
+        return system_ffmpeg
+    if importlib.util.find_spec("imageio_ffmpeg") is None:
+        return None
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, OSError, RuntimeError):
+        return None
 
 
 def default_ytdlp_executable() -> List[str]:

@@ -35,6 +35,14 @@
     .health-banner { background: #fdeaea; border: 2px solid #a3131f; color: #a3131f;
                      border-radius: 8px; padding: 0.6rem 0.8rem; margin: 0.4rem 0;
                      font-weight: 700; }
+    .setup-card { background: #fff8e6; border: 2px solid #b98a00; border-radius: 8px;
+                  padding: 0.8rem 1rem; margin: 0.8rem 0 1.2rem; }
+    .setup-card h2 { margin: 0 0 0.4rem; font-size: 1.05rem; color: #7a5b00; }
+    .setup-card p { margin: 0.3rem 0; }
+    .setup-card code { background: #f3ead0; padding: 0.15rem 0.4rem; border-radius: 4px;
+                       font-size: 0.85rem; user-select: all; }
+    .setup-card form { display: inline; }
+    .setup-card button { padding: 0.35rem 0.7rem; border-radius: 4px; margin-top: 0.4rem; }
     a { color: #1447a3; }
     pre { background: #f6f6f6; padding: 0.7rem; border-radius: 6px; overflow-x: auto;
           font-size: 0.8rem; }
@@ -42,6 +50,20 @@
 </head>
 <body>
   <h1>SidelineHD Extractor</h1>
+
+  {% if missing_dependencies %}
+  <div class="setup-card" id="setup-card">
+    <h2>One-time setup needed</h2>
+    <p>This app needs a helper program that is not installed yet. Copy the line
+       below into the Terminal app, press Enter, then click Re-check.</p>
+    {% for dependency in missing_dependencies %}
+    <p><strong>{{ dependency.name }}</strong> — {{ dependency.detail }}.<br>
+       {% if dependency.install_hint %}{{ dependency.install_hint }}{% endif %}</p>
+    {% endfor %}
+    <form action="/" method="get"><button type="submit">Re-check</button></form>
+  </div>
+  {% endif %}
+
   <p><a href="/rosters">Manage rosters</a></p>
 
   <form class="submit-form" hx-post="/jobs" hx-target="#job-list" hx-swap="afterbegin">
