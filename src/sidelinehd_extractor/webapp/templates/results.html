@@ -73,6 +73,7 @@
             <div class="health-banner">&#9888;&#65039; {{ block.health_warning }}</div>
           {% endif %}
           <p>
+            <a href="/jobs/{{ job.id }}/game?entry={{ loop.index0 }}"><strong>Manage this game</strong></a> |
             <a href="/jobs/{{ job.id }}/review?entry={{ loop.index0 }}">Review flagged events</a> |
             <a href="/jobs/{{ job.id }}/feedback?entry={{ loop.index0 }}">Send feedback</a>
           </p>

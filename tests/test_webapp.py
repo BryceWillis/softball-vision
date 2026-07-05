@@ -161,7 +161,8 @@ def test_status_partial_polls_while_active_and_stops_when_done(monkeypatch):
     assert response.status_code == 200
     assert "every 1s" not in response.text
     assert "warning field-never-read: right_score" in response.text
-    assert f"/jobs/{done.id}/results" in response.text
+    # Item 54 P4: a done single job links straight to the consolidated game page.
+    assert f"/jobs/{done.id}/game" in response.text
 
 
 def test_index_renders_form_and_jobs():
@@ -980,6 +981,84 @@ def test_review_preserves_hand_written_correction_rows(tmp_path, monkeypatch):
     assert "Maya R. (#28)" in csv_text  # hand-written row survived the rewrite
     assert "hand-written" in csv_text
     assert "delete" in csv_text
+
+
+def test_game_page_consolidates_copy_kit_exceptions_roster_and_reexport(
+    tmp_path, monkeypatch
+):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.get(f"/jobs/{job.id}/game")
+    assert response.status_code == 200
+    text = response.text
+    # Copy kit panels render inline.
+    assert 'data-copy-target="game-0-chapters-text"' in text
+    assert "navigator.clipboard.writeText" in text
+    # Flagged exceptions with edit/delete/add, embedded on the same page.
+    assert "ocr-number=28" in text
+    assert "Add a missing event" in text
+    assert "Save correction" in text
+    # Correction forms and the show toggle stay on the game page after swaps.
+    assert 'name="page" value="game"' in text
+    assert f"/jobs/{job.id}/game?entry=0&amp;show=all" in text
+    # Roster panel (no roster configured in this fixture) links to management.
+    assert "No roster is configured" in text
+    assert "/rosters" in text
+    # One-click re-export action.
+    assert f"/jobs/{job.id}/reexport" in text
+
+
+def test_game_page_correction_swap_keeps_game_page_links(tmp_path, monkeypatch):
+    client, job, run_dir, _ = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "player_number",
+            "value": "28",
+            "page": "game",
+        },
+    )
+    assert response.status_code == 200
+    assert f"/jobs/{job.id}/game?entry=0&amp;show=all" in response.text
+    assert 'name="page" value="game"' in response.text
+
+
+def test_reexport_rewrites_exports_and_redirects_to_game_page(tmp_path, monkeypatch):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+    client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "label",
+            "value": "Maya R. (#28)",
+        },
+    )
+    at_bats_path.write_text("stale\n", encoding="utf-8")
+
+    response = client.post(
+        f"/jobs/{job.id}/reexport", data={"entry": "0"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/jobs/{job.id}/game?entry=0"
+    # The export was rebuilt from events + saved corrections, not left stale.
+    assert "10:05 Maya R. (#28)" in at_bats_path.read_text(encoding="utf-8")
+
+
+def test_game_page_pending_out_of_range_and_unknown_ids(tmp_path, monkeypatch):
+    client, job, _, _ = _make_review_client(tmp_path, monkeypatch)
+    assert client.get(f"/jobs/{job.id}/game?entry=5").status_code == 404
+    assert client.get("/jobs/deadbeef/game").status_code == 404
+
+    running_client, store = _make_client()
+    running = store.create(kind="single", url="https://youtu.be/xyz")
+    store.update(running.id, status="running")
+    response = running_client.get(f"/jobs/{running.id}/game")
+    assert response.status_code == 200
+    assert "not finished" in response.text
 
 
 def test_review_not_done_links_back_and_bad_ids_404(tmp_path, monkeypatch):

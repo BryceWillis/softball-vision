@@ -20,6 +20,9 @@
   {% if job.status == "done" %}
     <h2>Result</h2>
     <p>
+      {% if job.kind == "single" %}
+        <a href="/jobs/{{ job.id }}/game">Manage game</a> |
+      {% endif %}
       <a href="/jobs/{{ job.id }}/results">View results</a> |
       <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
     </p>

@@ -17,7 +17,13 @@
     </span>
   {% endif %}
   {% if job.status == "done" %}
-    <a href="/jobs/{{ job.id }}/results">View results</a>
+    {# Single games go straight to the consolidated game page (item 54 P4);
+       playlists keep the multi-game results overview. #}
+    {% if job.kind == "single" %}
+      <a href="/jobs/{{ job.id }}/game">View results</a>
+    {% else %}
+      <a href="/jobs/{{ job.id }}/results">View results</a>
+    {% endif %}
   {% endif %}
   {# Item 54 P2: the no-scoreboard health warning must be impossible to miss —
      it gets a loud banner instead of a line in the amber warning list. #}

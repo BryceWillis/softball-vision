@@ -9,10 +9,10 @@
     Flagged events: {{ flagged_count }} of {{ total_count }}.
     {% if show_all %}
       Showing all events —
-      <a href="/jobs/{{ job.id }}/review?entry={{ entry }}&amp;show=flagged">show flagged only</a>
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=flagged">show flagged only</a>
     {% else %}
       Showing flagged only —
-      <a href="/jobs/{{ job.id }}/review?entry={{ entry }}&amp;show=all">show all events</a>
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=all">show all events</a>
     {% endif %}
   </p>
 
@@ -29,6 +29,7 @@
                   hx-target="#review-rows" hx-swap="outerHTML">
               <input type="hidden" name="entry" value="{{ entry }}">
               <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="page" value="{{ page }}">
               <input type="hidden" name="event_type" value="{{ correction.event_type }}">
               <input type="hidden" name="timestamp" value="{{ correction.timestamp }}">
               <input type="hidden" name="field" value="{{ correction.field }}">
@@ -62,6 +63,7 @@
                   hx-target="#review-rows" hx-swap="outerHTML">
               <input type="hidden" name="entry" value="{{ entry }}">
               <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="page" value="{{ page }}">
               <input type="hidden" name="timestamp" value="{{ row.event.timestamp_seconds }}">
               <input type="hidden" name="event_type" value="{{ row.event.event_type.value }}">
               <select name="field" aria-label="Field to correct">
@@ -76,6 +78,7 @@
                   hx-target="#review-rows" hx-swap="outerHTML">
               <input type="hidden" name="entry" value="{{ entry }}">
               <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+              <input type="hidden" name="page" value="{{ page }}">
               <input type="hidden" name="timestamp" value="{{ row.event.timestamp_seconds }}">
               <input type="hidden" name="event_type" value="{{ row.event.event_type.value }}">
               <input type="hidden" name="field" value="delete">
