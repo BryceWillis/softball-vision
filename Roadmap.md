@@ -25,7 +25,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
-| 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
+| 2 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -4187,6 +4188,41 @@ Sequencing: Ready to implement now for the fail-fast value; it blocks nothing,
 and item 26 unlocks its full selection value. Note (separate follow-up): the
 `inning` misread on real 640×360 streams is its own calibration bug worth a small
 item — the current `inning` region likely overlaps adjacent digits.
+
+### 57. Persistent Run History (view completed runs across restarts)
+
+Status: Ready to implement — HIGH priority (breaks the basic local flow)
+Source: Live-fire (2026-07-05). The web JobStore is in-memory, so after the app
+restarts, every completed run 404s in the UI even though its artifacts are intact
+on disk (`runs/<...>/` with events.jsonl + exports + manifest). A user who runs a
+game, closes the app, and reopens it loses access to results — unacceptable for a
+start/stop local tool. (Confirmed: a real 62-event run became unviewable purely
+because the server was restarted.)
+
+**Design.** Make `runs/` the source of truth the UI reads, rather than only the
+ephemeral in-memory store.
+1. `rehydrate_jobs_from_runs(store, runs_dir)` — scan `runs/` for completed runs
+   (has `events.jsonl` + `manifest.json`), reconstruct a done `Job` per run
+   (kind=single; `result` = the `summarize_result` single-shape from run_dir +
+   exports + event_count; recover a display label/date from the dir name/manifest
+   youtube section), and seed the store. Skip incomplete/in-flight run dirs.
+2. Call it at web-app startup (create_app / the `start` command) so the index lists
+   past runs and `/game` `/results` `/review` `/feedback` all resolve for them.
+3. De-dupe against live in-session jobs (don't double-list a run that's also a live
+   job). Order newest-first.
+4. Playlist runs: rehydrate per-entry where the batch state file records them.
+
+Keep it disk-first (runs/ is canonical); a SQLite index (the epic's original 39a
+note) is NOT required for this — reconstructing from run dirs is simpler and
+sufficient. A throwaway bridge (`scratch/serve_with_history.py`) already proves the
+approach end-to-end.
+
+**Acceptance criteria.**
+1. After a restart, the index lists prior completed runs and their results/exports/
+   review/feedback pages all load (no 404).
+2. In-flight/partial run dirs are skipped; live jobs are not duplicated.
+3. Recovered runs show a sensible label (team/date), not a raw hash.
+4. No real names in fixtures; full suite + ruff green.
 
 ## Discussion / Later Deliverables
 
