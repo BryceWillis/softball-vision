@@ -27,7 +27,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
 | 2 | **58** — Exception Review Triage + Plain-Language Flags | Ready to implement — HIGH | **Local web.** Review page flags nearly every at-bat in cryptic jargon; triage flags into needs-action/review/informational, default to action-worthy, explain each in plain language. Live-fire feedback. |
-| 3 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| 3 | **59** — Reduce `possible-substitute` false positives | Ready to implement (Codex; events.py, isolated) | **Detection.** Order validator flags every non-seed batter incl. roster-confirmed ones → noise. Suppress the flag when the number is on the roster. Complements item 58. |
+| 4 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -4269,6 +4270,30 @@ fixes the UX regardless.
 2. Every shown flag has a plain-language title + meaning + action; no raw
    `flag=value` jargon in the default view.
 3. Unit tests cover the tier mapping for each known flag.
+4. Placeholder-only fixtures; suite + ruff green.
+
+### 59. Reduce `possible-substitute` False Positives (roster-confirmed batters)
+
+Status: Ready to implement — isolated to events.py (safe alongside Fable's webapp batch)
+Source: Live-fire 2026-07-05. The order validator flags `possible-substitute`
+whenever a batter's number is not in the inferred seed batting-order cycle
+([events.py](src/sidelinehd_extractor/events.py) ~L334). The seed rarely captures
+every player in youth ball, so legitimate, correctly-identified batters — often
+**on the roster** — are flagged on nearly every at-bat, burying the genuinely
+suspicious ones. (The owner confirmed the tool's picks were correct; the flag was
+just noise.) This is the detection-side complement to item 58's UI triage.
+
+**Change.** In `validate_batting_order`, when `player_number not in cycle`, do NOT
+emit `possible-substitute` if the number is **roster-confirmed** (roster provided
+and number present on it) — a known player is not a suspicious substitution. Keep
+flagging genuinely-unexplained numbers (not in cycle AND not on roster). Optionally
+also suppress a number seen ≥N times (a regular the seed missed) even without a
+roster. Do not change the synthesized inferred-missing events or any other flag.
+
+**Acceptance criteria.**
+1. A roster-confirmed batter outside the seed cycle produces NO `possible-substitute`.
+2. An unrostered/unknown number outside the cycle is still flagged.
+3. Existing order-validator (item 32/34) tests stay green; add tests for both cases.
 4. Placeholder-only fixtures; suite + ruff green.
 
 ## Discussion / Later Deliverables
