@@ -26,7 +26,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
-| 2 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| 2 | **58** — Exception Review Triage + Plain-Language Flags | Ready to implement — HIGH | **Local web.** Review page flags nearly every at-bat in cryptic jargon; triage flags into needs-action/review/informational, default to action-worthy, explain each in plain language. Live-fire feedback. |
+| 3 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -4210,6 +4211,11 @@ ephemeral in-memory store.
    past runs and `/game` `/results` `/review` `/feedback` all resolve for them.
 3. De-dupe against live in-session jobs (don't double-list a run that's also a live
    job). Order newest-first.
+5. **Legacy/incomplete runs:** only rehydrate runs with the COMPLETE modern
+   artifact set (events + exports + manifest with the fields the pages read).
+   Pre-web-app or partial run dirs that would render broken must be SKIPPED
+   (hidden), not listed. A run with 0 events is skipped from the results list
+   (nothing to show) but its health warning still applies where surfaced.
 4. Playlist runs: rehydrate per-entry where the batch state file records them.
 
 Keep it disk-first (runs/ is canonical); a SQLite index (the epic's original 39a
@@ -4223,6 +4229,47 @@ approach end-to-end.
 2. In-flight/partial run dirs are skipped; live jobs are not duplicated.
 3. Recovered runs show a sensible label (team/date), not a raw hash.
 4. No real names in fixtures; full suite + ruff green.
+
+### 58. Exception Review Triage + Plain-Language Flags
+
+Status: Ready to implement — HIGH (usability)
+Source: Live-fire 2026-07-05. The review/game page flags nearly every at-bat, the
+flags are cryptic (`possible-substitute`, `card-vs-lineup=batter_card=12 lineup=2`,
+`lineup-recovered`), and the corrections the tool already made look correct — so
+noise buries the few exceptions that need a human. The owner couldn't tell what
+each flag meant or what to do.
+
+**Design.**
+1. **Triage each review flag into an action tier** (mapping in review.py / a new
+   `review_triage.py`):
+   - **needs-action** (tool could NOT resolve — user should fix): `missing-player`,
+     `unrostered-card-number`, `garbled-card-name`, `ocr-number`.
+   - **review** (tool resolved an ambiguity; glance advised): `card-vs-lineup`,
+     `lineup-had-rostered-candidate`, `close-at-bat`, `repeat-player`.
+   - **informational** (normal/success — usually ignore): `possible-substitute`
+     (order jumps are normal with subs), `lineup-recovered` (a success signal).
+2. **Default the review/game page to needs-action (+ review) only**, with an
+   at-a-glance summary ("3 need your attention · 40 look fine") and the
+   informational flags collapsed behind the existing show-all toggle.
+3. **Plain language per flag**: render a human title + one-line meaning +
+   recommended action from a `{flag: (title, meaning, action)}` table, replacing
+   the raw `flag=value` strings. E.g. `unrostered-card-number` -> "Jersey #N isn't
+   on your roster — add it to the roster or fix the number." `possible-substitute`
+   -> "Batting order jumped — normal for a substitution; only check if the batter
+   looks wrong." Keep raw flags available on expand/tooltip; the review CSV/report
+   is unchanged.
+
+Note (separate, not required here): the volume of `possible-substitute` suggests
+item 32's order validator over-fires; tuning it is its own detection item — triage
+fixes the UX regardless.
+
+**Acceptance criteria.**
+1. The page defaults to only likely-action exceptions with a clear count summary;
+   informational flags are collapsed, not deleted.
+2. Every shown flag has a plain-language title + meaning + action; no raw
+   `flag=value` jargon in the default view.
+3. Unit tests cover the tier mapping for each known flag.
+4. Placeholder-only fixtures; suite + ruff green.
 
 ## Discussion / Later Deliverables
 
