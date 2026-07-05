@@ -19,6 +19,29 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
+#### Item 56 — Recalibrate the `inning` region (branch `impl/item-56`, by Fable 5)
+**Files:** [data/sidelinehd_640x360_active.json](src/sidelinehd_extractor/data/sidelinehd_640x360_active.json), [examples/sidelinehd_640x360_active.example.json](examples/sidelinehd_640x360_active.example.json), new [tests/test_template_data.py](tests/test_template_data.py); design written into Roadmap item 56
+**Status:** Ready for Review — **design pending architect validation** (new item, formalized by the implementer at the owner's direction)
+
+Real-frame diagnosis across three 640x360 videos (~107 truth-labeled frames):
+the reported "72"/"43"/"720" strings are mostly the half-arrow fusing into
+the digits, which `parse_inning` already decodes; the real defect is the
+`inning` region starting at x=0.424 while `left_score` extends to 0.425 —
+the overlap produced junk reads ("17", "71-") and wrong innings on one video.
+Recalibrated to `x 0.428, y 0.033, w 0.040, h 0.064` (starts clear of
+left_score, keeps the arrow, matches the score-row height): 103/107 correct
+vs 102, wrong reads 2 vs 3, and the only video with wrong innings went 1→0.
+Trade-off flagged: −3 of 114 weak half-arrow reads on one video (half from
+this field is a documented weak guess; events use inning + half inference).
+Both template copies updated and pinned identical by a new regression test,
+plus a no-overlap invariant test and exact-coordinate pins.
+
+**Deviations:** none beyond the item being implementer-designed (per the
+owner's session instruction); full measurement table is in the Roadmap
+design for the architect to validate.
+
+Tests: 400 pass, ruff clean.
+
 _No items ready for review._
 
 ## Open Items

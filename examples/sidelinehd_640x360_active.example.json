@@ -5,27 +5,27 @@
   "regions": {
     "scorebug_full": {
       "x": 0.139,
-      "y": 0.030,
+      "y": 0.03,
       "width": 0.722,
       "height": 0.139
     },
     "left_team": {
       "x": 0.145,
       "y": 0.033,
-      "width": 0.220,
+      "width": 0.22,
       "height": 0.064
     },
     "left_score": {
       "x": 0.375,
       "y": 0.033,
-      "width": 0.050,
+      "width": 0.05,
       "height": 0.064
     },
     "inning": {
-      "x": 0.424,
-      "y": 0.036,
-      "width": 0.044,
-      "height": 0.056
+      "x": 0.428,
+      "y": 0.033,
+      "width": 0.04,
+      "height": 0.064
     },
     "count": {
       "x": 0.536,
@@ -40,9 +40,9 @@
       "height": 0.083
     },
     "right_score": {
-      "x": 0.580,
+      "x": 0.58,
       "y": 0.025,
-      "width": 0.050,
+      "width": 0.05,
       "height": 0.064
     },
     "right_team": {
@@ -52,22 +52,22 @@
       "height": 0.064
     },
     "lineup_strip": {
-      "x": 0.200,
+      "x": 0.2,
       "y": 0.106,
-      "width": 0.230,
+      "width": 0.23,
       "height": 0.061
     },
     "batter_number": {
       "x": 0.265,
       "y": 0.111,
       "width": 0.039,
-      "height": 0.050
+      "height": 0.05
     },
     "on_deck_number": {
       "x": 0.306,
       "y": 0.111,
       "width": 0.039,
-      "height": 0.050
+      "height": 0.05
     },
     "batter_card": {
       "x": 0.006,

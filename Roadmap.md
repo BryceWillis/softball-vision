@@ -24,7 +24,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
-| 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
+| 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready for review (`impl/item-55`, Fable 5) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
+| 2b | **56** — Recalibrate `inning` region (left_score overlap) | Ready for review (`impl/item-56`, Fable 5; design pending architect validation) | Item 55 validation follow-up: the packaged template's inning crop clipped left_score's right edge, producing junk reads on real streams. Measured recalibration across three real games; regression tests pin the no-overlap invariant. |
 | 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
 | 2 | **58** — Exception Review Triage + Plain-Language Flags | Ready to implement — HIGH | **Local web.** Review page flags nearly every at-bat in cryptic jargon; triage flags into needs-action/review/informational, default to action-worthy, explain each in plain language. Live-fire feedback. |
 | 3 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
@@ -4189,6 +4190,55 @@ Sequencing: Ready to implement now for the fail-fast value; it blocks nothing,
 and item 26 unlocks its full selection value. Note (separate follow-up): the
 `inning` misread on real 640×360 streams is its own calibration bug worth a small
 item — the current `inning` region likely overlaps adjacent digits.
+
+### 56. Recalibrate the `inning` Region (eliminate left_score overlap)
+
+Status: Implemented — design + coordinates pending architect validation
+Source: Item 55 architect validation note (Pass 23): "the `inning` misread on
+real 640x360 streams is its own calibration bug worth a small item." Design
+drafted by the implementer (Fable 5) with real-frame measurements; validate
+before merge.
+
+**Diagnosis (measured, 2026-07-05, three real 640x360 SidelineHD videos).**
+Two distinct phenomena were behind the reported "72"/"43"/"720" misreads:
+
+1. **Arrow fusion — already handled, not a bug.** The half-inning arrow
+   (▲/▼) OCRs as a digit fused to the inning ("7"→bottom, "4"→top);
+   `parse_inning` decodes these by design. Most "weird" raw strings parse to
+   the correct inning.
+2. **Region overlap — the real defect.** `inning` started at x=0.424 while
+   `left_score` extends to x=0.425 (left_score.x 0.375 + width 0.050), so the
+   inning crop clipped the score's right edge. On real frames this produced
+   junk ("17", "71-") and wrong parsed innings.
+
+Sweeping ~107 truth-labeled frames across three games (truth = a narrow
+digit-only crop at x=0.442 that reads the bare inning digit at ~98%):
+
+| Region | Inning correct | Wrong | Half-arrow read |
+|---|---|---|---|
+| current `x .424 y .036 w .044 h .056` | 102/107 | 3 | 87/114 |
+| **new `x .428 y .033 w .040 h .064`** | **103/107** | **2** | 84/114 |
+
+The new region starts right of left_score's edge (kills the overlap: the only
+video showing wrong-inning reads went 1 wrong → 0), keeps the arrow in-crop,
+and matches the score/count row height. Trade-off: −3 weak half-arrow reads
+out of 114 on one video — acceptable because `parse_inning`'s half output is
+documented as a weak guess and event detection relies on inning number +
+batting-half inference (items 17/32), not this arrow.
+
+**Changed.** `inning` → `x 0.428, y 0.033, width 0.040, height 0.064` in both
+`src/sidelinehd_extractor/data/sidelinehd_640x360_active.json` (packaged
+default) and `examples/sidelinehd_640x360_active.example.json`.
+
+**Tests.** New `tests/test_template_data.py`: pins the recalibrated
+coordinates; asserts the inning/left_score no-overlap invariant; asserts the
+example and packaged copies stay numerically identical across all regions.
+
+**Acceptance criteria.**
+1. `inning` region does not overlap `left_score` (regression-tested).
+2. Measured inning accuracy on the three reference videos is no worse than
+   the previous region (measured: 103 vs 102 correct, 2 vs 3 wrong).
+3. Example and packaged template copies agree numerically.
 
 ### 57. Persistent Run History (view completed runs across restarts)
 
