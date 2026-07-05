@@ -38,7 +38,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **42** — Tesseract Version Capture | Done (Pass 17) | Captures `tesseract --version`, warns non-fatally for missing/old/unrecognized versions, and records the version in `manifest.json`. |
 | — | **38** — Feedback Log | Done (Pass 17) | Added CLI-first sanitized Markdown feedback logs with stable player pseudonyms, preserved jersey numbers, environment/version metadata, review flags, and guard tests against name leakage. |
 | — | **43** — OCR Accuracy Follow-ons | Done (Pass 21) | **Fable 5.** Multi-PSM voting (psm 7 vs 10, higher item-40 confidence wins) for the six numeric fields + `OCRFieldConfig.preprocess` dispatch. Measured deviation: shipped `numeric_glyph_pad` (Otsu + pad); the design's hard-threshold/adaptive examples regressed and were dropped. |
-| 9b | **52** — Persist Roster Display Name | Ready to implement | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
+| 9b | **52** — Persist Roster Display Name | Ready for review (`impl/item-52`, Fable 5; based on `impl/item-55`) | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
 | — | **53** — Make declared `yt-dlp` dep sufficient | Done (Pass 22) | Small. yt-dlp is already a core dep (auto-installed); add a `python -m yt_dlp` fallback + clear error so it works even where the console script isn't on PATH. Surfaced by live-fire prep. |
 | — | **39** — Local Web App | Epic complete (Pass 20) | All phases done: 39a/39b/39c/39d/39e = items 46/47/49/50/51. Local-first FastAPI + HTMX. Cloud/hosted is a later seam (see deferred CSRF hardening). |
 | 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
@@ -3933,6 +3933,11 @@ the pretty name and just needs the writer to keep it. Verify `feedback.py`
 2. Roster files written before this change still load (stem fallback), and the
    `number,full_name,…` column contract is unchanged.
 3. Full suite passes; placeholder-only fixtures.
+
+**Implementation (2026-07-05, branch `impl/item-52`, by Fable 5, based on
+`impl/item-55`) — Ready for review.** `write_roster_csv` emits a leading
+`# team_name:` comment; `load_roster_csv` skips leading comments and resolves
+explicit arg > header > stem. Old files unaffected; column contract unchanged.
 
 ### 53. Make the Declared `yt-dlp` Dependency Sufficient (module fallback)
 

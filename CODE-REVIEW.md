@@ -19,6 +19,28 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
+#### Item 52 — Persist Roster Display Name (branch `impl/item-52`, by Fable 5)
+**Files:** [roster.py](src/sidelinehd_extractor/roster.py) (`write_roster_csv` + `ROSTER_TEAM_NAME_PREFIX`), [config.py](src/sidelinehd_extractor/config.py) (`load_roster_csv`)
+**Status:** Ready for Review
+
+`write_roster_csv` now emits a leading `# team_name: <pretty name>` comment
+line; `load_roster_csv` skips leading `#` comment lines, parses the team name
+back, and resolves as explicit `team_name` arg > header comment > file stem —
+so pre-item-52 files (no comment) load exactly as before and the
+`number,full_name,…` column contract is untouched. "St. Mary's 12U" now
+reloads as "St. Mary's 12U" in both the CLI and the web roster pages (the web
+edit/save path round-trips through the same writer/reader pair, so re-saving
+preserves it too). `feedback.py`'s `_roster_from_manifest` reads the manifest
+snapshot, not the CSV — unaffected.
+
+**Branch note:** based on `impl/item-55` (both touch `config.py`); merge 55
+first, then this fast-forwards.
+
+**Deviations:** none.
+
+Tests: 422 pass, ruff clean. New: pretty-name round-trip incl. file-content
+check, explicit-arg override, pre-item-52 stem fallback.
+
 #### Item 55 — Overlay Template Auto-Detection / pre-run fail-fast guard (branch `impl/item-55`, by Fable 5)
 **Files:** new [template_probe.py](src/sidelinehd_extractor/template_probe.py); [config.py](src/sidelinehd_extractor/config.py) (`candidate_overlay_templates`), [workflow.py](src/sidelinehd_extractor/workflow.py), [batch.py](src/sidelinehd_extractor/batch.py), [cli.py](src/sidelinehd_extractor/cli.py)
 **Status:** Ready for Review
