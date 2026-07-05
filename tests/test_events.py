@@ -2028,7 +2028,11 @@ class EventDetectionTests(unittest.TestCase):
 
         self.assertIn("out-of-order-candidate", flagged.metadata["order_flags"])
 
-    def test_validate_batting_order_flags_possible_substitute_for_unknown_player(self):
+    def test_validate_batting_order_does_not_flag_roster_confirmed_player_outside_seed_cycle(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="99", full_name="Emma B.", display_name="Emma B.")],
+        )
         events = [
             self._at_bat("26", 100),
             self._at_bat("2", 160),
@@ -2038,7 +2042,26 @@ class EventDetectionTests(unittest.TestCase):
             self._at_bat("26", 360, inning=2),
         ]
 
-        validated = validate_batting_order(events)
+        validated = validate_batting_order(events, roster=roster)
+        roster_confirmed = [event for event in validated if event.player_number == "99"][0]
+
+        self.assertNotIn("order_flags", roster_confirmed.metadata)
+
+    def test_validate_batting_order_flags_possible_substitute_for_unknown_player(self):
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="8", full_name="Olivia M.", display_name="Olivia M.")],
+        )
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(290, inning=2),
+            self._at_bat("99", 300, inning=2),
+            self._at_bat("26", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events, roster=roster)
         substitute = [event for event in validated if event.player_number == "99"][0]
 
         self.assertIn("possible-substitute", substitute.metadata["order_flags"])

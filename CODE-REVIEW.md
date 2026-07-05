@@ -19,7 +19,13 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 59 — Reduce `possible-substitute` false positives
+**Status:** Ready for Review
+**Branch:** `impl/item-59`
+
+**Implementation note.** `validate_batting_order()` now suppresses `possible-substitute` when an out-of-cycle batter number is present on the provided roster, while still flagging numbers that are absent from both the seed cycle and the roster. Added regression coverage for a roster-confirmed out-of-cycle batter and for an unrostered out-of-cycle batter with a roster present.
+
+**Deviations:** User-visible output changes by design: roster-confirmed batters outside the inferred seed cycle now produce fewer `possible-substitute` flags, per owner feedback and item 59. Did not implement the optional repeated-without-roster suppression.
 
 ## Open Items
 

@@ -331,7 +331,10 @@ def validate_batting_order(
 
         player_number = event.player_number
         if player_number not in cycle:
-            result.append(_with_order_flag(event, "possible-substitute"))
+            if _roster_has_number(roster, player_number):
+                result.append(event)
+            else:
+                result.append(_with_order_flag(event, "possible-substitute"))
             prev_ts = event.timestamp_seconds
             at_seed_half_start = False
             continue
@@ -418,6 +421,13 @@ def _player_name_lookup(
                 if roster_name:
                     number_to_name[number] = roster_name
     return number_to_name
+
+
+def _roster_has_number(roster: Optional[Roster], number: str) -> bool:
+    if roster is None:
+        return False
+    normalized = str(number).strip().lstrip("#")
+    return any(player.number.strip().lstrip("#") == normalized for player in roster.players)
 
 
 def _with_order_flag(event: Event, flag: str) -> Event:
