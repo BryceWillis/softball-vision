@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-05
-**Review passes:** 23 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation)
+**Review passes:** 24 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation) (Pass 24: item 54 phases 54a+54b by Fable 5 — automatic ffmpeg via bundled imageio-ffmpeg + dependency preflight/setup card, and a one-command `start` that launches+opens the browser+stops cleanly — approved; deviations local-tier)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,59 +19,7 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### Item 54a + 54b — Turnkey launch: automatic dependencies + one-command start
-**Branch:** `impl/turnkey-launch` (Fable 5) — review `git diff origin/main...impl/turnkey-launch`
-**Status:** Ready for Review
-
-**54a:** `imageio-ffmpeg` added to core dependencies. `resolve_ffmpeg_location()`
-([youtube.py](src/sidelinehd_extractor/youtube.py)) prefers system `ffmpeg` on
-PATH, falls back to the bundled `imageio_ffmpeg.get_ffmpeg_exe()`, else `None`;
-never raises, safe with the module absent (item-53 pattern). Both
-`build_ytdlp_command` and `build_ytdlp_playlist_command` auto-append
-`--ffmpeg-location <path>` when resolved. New
-[preflight.py](src/sidelinehd_extractor/preflight.py):
-`preflight_dependencies()` returns per-dep dicts (`name`, `ok`, `detail`,
-`install_hint`) reusing `default_ytdlp_executable`, `resolve_ffmpeg_location`,
-and item 42's `tesseract_version()`. Web index renders a setup card (plain
-language, copy-paste install line, Re-check button) only when a dep is
-missing.
-
-**54b:** New `start` CLI command: prints the preflight report (missing
-Tesseract → hint printed, server still starts), pre-checks the port and exits
-1 with a `--port` suggestion when busy, prints "Open http://HOST:PORT — press
-Ctrl+C here to stop.", opens the browser via `webbrowser.open` (skipped with
-`--no-browser`), and prints "Stopped." after a clean Ctrl+C shutdown. `serve`
-unchanged.
-
-**Tests:** 397 passing, ruff clean. New coverage: ffmpeg resolver (system /
-bundled / absent / bundled-build-error), builders include/omit
-`--ffmpeg-location`, explicit `ffmpeg_location=None` skips resolution,
-preflight with each dep stubbed present/absent, index card shown only when a
-dep is missing, `start` wiring (monkeypatched `uvicorn.run` +
-`webbrowser.open`: host/port/URL, `--no-browser` skip, missing-Tesseract
-still serves, busy-port exit 1). No real names in fixtures. Also verified
-live: real `start` launch → index 200 → second start on same port exits 1 →
-clean Ctrl+C shutdown.
-
-**Deviations:** (all local-tier, per the tiered policy)
-1. Builders auto-resolve ffmpeg via a module sentinel default
-   (`_AUTO_FFMPEG`) instead of requiring callers to pass a location — this is
-   what makes existing `workflow.py`/`batch.py` call sites automatic with no
-   signature churn; explicit `ffmpeg_location=None` opts out.
-2. `--ffmpeg-location` receives the ffmpeg *executable path*, not its
-   directory: the imageio-ffmpeg binary has a versioned filename
-   (`ffmpeg-osx64-v…`) a directory lookup would miss, and yt-dlp accepts
-   either form (substring-matches the basename).
-3. Added a public `tesseract_install_hint()` wrapper in `ocr.py` so
-   `preflight.py` reuses the existing private per-OS hint without importing
-   an underscore name.
-4. `preflight_dependencies()` lives in a new `preflight.py` module (design
-   left the location open) so both `cli.py` and `webapp/app.py` import it
-   without a dependency cycle; includes a small `missing_dependencies()`
-   helper.
-5. `start` is a new command alongside an unchanged `serve` (design offered
-   either); the Re-check button is a plain page reload, and the busy-port
-   check is a pre-bind socket test rather than parsing uvicorn's error.
+_No items ready for review._
 
 ## Open Items
 
