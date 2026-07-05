@@ -53,6 +53,7 @@
     .add-form { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 0.8rem;
                 margin: 1rem 0; }
     .add-form .grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+    .local-note { color: #555; font-size: 0.85rem; }
     /* Publish-kit fragment styling (classes come from render_publish_kit_fragment). */
     .sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 16px; align-items: start; }
@@ -79,22 +80,23 @@
 </head>
 <body>
   <p>
-    <a href="/">&larr; All jobs</a> |
-    <a href="/jobs/{{ job.id }}">Job detail</a>
+    <a href="/">&larr; All games</a> |
+    <a href="/jobs/{{ job.id }}">Progress</a>
     {% if not pending and entry_count > 1 %} | <a href="/jobs/{{ job.id }}/results">All games in this batch</a>{% endif %} |
-    <a href="/jobs/{{ job.id }}/feedback?entry={{ entry }}">Send feedback</a>
+    <a href="/jobs/{{ job.id }}/feedback?entry={{ entry }}">Send feedback</a> |
+    <a href="/#how-it-works">How this works</a>
   </p>
 
   {% if pending %}
-    <h1>Game <span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
-    <p>This job is not finished yet (status: {{ job.status }}).
-       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+    <h1>Game <span class="job-kind">{{ kind_label(job.kind) }}</span> <span class="job-url">{{ job.url }}</span></h1>
+    <p>This game is not finished yet ({{ status_label(job.status) | lower }}).
+       Follow along on the <a href="/jobs/{{ job.id }}">progress page</a>.</p>
   {% elif block.kind == "error" %}
     <h1>{{ block.label }}</h1>
     <p class="block-error">Failed: {{ block.error }}</p>
   {% else %}
     <h1>{{ block.label }}
-      <span class="job-kind">{{ job.kind }}</span>
+      <span class="job-kind">{{ kind_label(job.kind) }}</span>
       <span class="job-url">{{ job.url }}</span>
     </h1>
 
@@ -103,12 +105,18 @@
     {% endif %}
 
     <section class="game-section">
-      <h2>Copy kits</h2>
+      <h2>Your YouTube timestamps</h2>
+      <p>Copy each box below and paste it into the video's description on
+         YouTube. The chapter list splits the video by inning; the at-bat list
+         lets viewers jump to each batter.</p>
       {{ block.fragment | safe }}
     </section>
 
     <section class="game-section">
-      <h2>Flagged exceptions</h2>
+      <h2>Plays to double-check</h2>
+      <p>The app wasn't fully sure about these. Fix anything that looks wrong
+         (or delete a play that shouldn't be there), then press
+         &ldquo;Apply changes&rdquo; below to refresh the timestamps.</p>
       <div id="correction-error"></div>
       {% include "_review_rows.html" %}
       {% include "_add_event_form.html" %}
@@ -123,21 +131,22 @@
              <a href="{{ roster_panel.edit_url }}">View or update this roster</a> |
            {% endif %}
            <a href="/rosters">Manage all rosters</a></p>
-        <p>After changing the roster, use the re-export button below to refresh
-           the copy kits and flags with the updated names.</p>
+        <p>After changing the roster, press &ldquo;Apply changes&rdquo; below to
+           refresh the timestamps with the updated names.</p>
       {% else %}
-        <p>No roster is configured. Names in the exports come from OCR only.
-           <a href="/rosters">Add a roster</a>, then re-export this game.</p>
+        <p>No roster is set up, so player names come only from what could be
+           read off the screen. <a href="/rosters">Add a roster</a>, then press
+           &ldquo;Apply changes&rdquo; below to fill in names for this game.</p>
       {% endif %}
     </section>
 
     <section class="game-section">
-      <h2>Re-export</h2>
-      <p>Re-writes the chapter and at-bat exports for this game using the saved
-         corrections and the currently configured roster.</p>
+      <h2>Apply changes</h2>
+      <p>Rebuilds the timestamps above using your saved fixes and the current
+         roster. Use this after fixing plays or updating the roster.</p>
       <form class="reexport-form" method="post" action="/jobs/{{ job.id }}/reexport">
         <input type="hidden" name="entry" value="{{ entry }}">
-        <button type="submit">Re-export / accept changes</button>
+        <button type="submit">Apply changes</button>
       </form>
     </section>
 

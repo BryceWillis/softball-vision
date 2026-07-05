@@ -65,6 +65,42 @@ CORRECTIONS_FILENAME = "corrections.csv"
 EVENTS_FILENAME = "events.jsonl"
 FEEDBACK_ISSUE_TITLE = "SidelineHD Extractor Feedback"
 
+# Item 54c: the primary UI speaks coach, not pipeline. Internal status/stage/
+# kind codes stay stable (CSS classes, tests, the manifest) — only the words a
+# non-technical user reads are mapped here. Unknown codes fall through raw so
+# a new pipeline stage is still visible, just not yet translated.
+STATUS_LABELS = {
+    "queued": "Waiting to start",
+    "running": "Working",
+    "done": "Done",
+    "error": "Something went wrong",
+}
+
+STAGE_LABELS = {
+    "download": "Downloading the video",
+    "probe": "Checking the video",
+    "process": "Reading the scoreboard",
+    "parse-states": "Making sense of the scoreboard",
+    "detect-events": "Finding at-bats and innings",
+    "export": "Writing the timestamps",
+    "review-report": "Checking the results",
+}
+
+KIND_LABELS = {"single": "game", "playlist": "playlist"}
+
+
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, status)
+
+
+def stage_label(stage: str) -> str:
+    return STAGE_LABELS.get(stage, stage)
+
+
+def kind_label(kind: str) -> str:
+    return KIND_LABELS.get(kind, kind)
+
+
 EDIT_FIELDS = (
     "label",
     "timestamp_seconds",
@@ -518,6 +554,9 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
     app.state.runner = runner
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     templates = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
+    templates.env.globals.update(
+        status_label=status_label, stage_label=stage_label, kind_label=kind_label
+    )
 
     def _get_job_or_404(job_id: str) -> Job:
         job = store.get(job_id)
@@ -530,10 +569,23 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         # Item 54a: surface missing external dependencies as an actionable
         # setup card. A healthy install renders nothing.
         missing = [status for status in preflight_dependencies() if not status["ok"]]
+        jobs = store.list()
+        # Item 54c: roster-first prompt. Runs snapshot the configured roster at
+        # run time, so a roster added afterward does not backfill names — the
+        # submit page must say so *before* the run and offer a one-click add.
+        roster = load_configured_roster()
         return templates.TemplateResponse(
             request,
             "index.html",
-            {"jobs": store.list(), "missing_dependencies": missing},
+            {
+                "jobs": jobs,
+                "missing_dependencies": missing,
+                "roster_configured": roster is not None,
+                "roster_team_name": roster.team_name if roster else None,
+                "roster_player_count": len(roster.players) if roster else 0,
+                "has_rosters": bool(list_roster_summaries()),
+                "how_open": not jobs,
+            },
         )
 
     @app.post("/jobs", response_class=HTMLResponse)
@@ -833,7 +885,13 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         request: Request,
         team_name: str = Form(default=""),
         team_list: str = Form(default=""),
+        set_default: str = Form(default=""),
+        next: str = Form(default=""),
     ) -> HTMLResponse:
+        # Item 54c: the submit page's roster-first prompt posts here with
+        # set_default=1 and next=/ so one click creates the roster, makes it
+        # the one runs use, and returns to the submit flow. Both fields are
+        # optional; the /rosters page's own form is unchanged.
         cleaned_name = team_name.strip()
 
         def _error(message: str) -> HTMLResponse:
@@ -857,6 +915,11 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         except ValueError as exc:
             return _error(str(exc))
         write_roster_csv(roster, path)
+        if set_default:
+            _write_default_roster_config(path, team_name=cleaned_name)
+        # Only same-app paths are honored so the redirect cannot leave the UI.
+        if next.startswith("/") and not next.startswith("//"):
+            return RedirectResponse(url=next, status_code=303)
         return RedirectResponse(url=f"/rosters/{path.stem}", status_code=303)
 
     @app.get("/rosters/{slug}", response_class=HTMLResponse)
@@ -902,18 +965,22 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         path.unlink()
         return RedirectResponse(url="/rosters", status_code=303)
 
-    @app.post("/rosters/{slug}/set-default", response_class=HTMLResponse)
-    def set_default_roster(slug: str) -> RedirectResponse:
-        path = _existing_roster_path(slug)
+    def _write_default_roster_config(path: Path, team_name: Optional[str] = None) -> None:
         # Reuse the item 28 config writer; preserve the other keys verbatim.
+        # The 54c one-click path passes the just-typed team name so the pretty
+        # name survives (the CSV itself only stores the stem until item 52).
         values = load_project_config_values()
         write_project_config(
             ProjectConfig(
                 roster=path,
                 template=Path(values["template"]) if values.get("template") else None,
-                team_name=values.get("team_name"),
+                team_name=team_name or values.get("team_name"),
             )
         )
+
+    @app.post("/rosters/{slug}/set-default", response_class=HTMLResponse)
+    def set_default_roster(slug: str) -> RedirectResponse:
+        _write_default_roster_config(_existing_roster_path(slug))
         return RedirectResponse(url="/rosters", status_code=303)
 
     return app

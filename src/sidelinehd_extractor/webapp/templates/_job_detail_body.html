@@ -8,27 +8,32 @@
   {% set no_status_poll = true %}
   {% include "_job_status.html" %}
 
-  <h2>Stage log</h2>
+  <h2>Progress</h2>
   {% if job.stages %}
     <ol class="stage-log">
-      {% for stage in job.stages %}<li>{{ stage }}</li>{% endfor %}
+      {% for stage in job.stages %}<li>{{ stage_label(stage) }}</li>{% endfor %}
     </ol>
   {% else %}
-    <p>No stages recorded yet.</p>
+    <p>Waiting for the first step to start&hellip; this page updates by itself.</p>
   {% endif %}
 
   {% if job.status == "done" %}
-    <h2>Result</h2>
+    <h2>Finished</h2>
     <p>
       {% if job.kind == "single" %}
-        <a href="/jobs/{{ job.id }}/game">Manage game</a> |
+        <a href="/jobs/{{ job.id }}/game"><strong>Open this game</strong></a> — copy
+        your timestamps and double-check flagged plays. |
+      {% else %}
+        <a href="/jobs/{{ job.id }}/results"><strong>Open these games</strong></a> |
       {% endif %}
-      <a href="/jobs/{{ job.id }}/results">View results</a> |
       <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
     </p>
-    <pre>{{ job.result | tojson(indent=2) }}</pre>
+    <details>
+      <summary>Technical details</summary>
+      <pre>{{ job.result | tojson(indent=2) }}</pre>
+    </details>
   {% elif job.status == "error" %}
-    <h2>Error</h2>
+    <h2>Something went wrong</h2>
     <p class="job-error">{{ job.error }}</p>
   {% endif %}
 </div>

@@ -309,3 +309,53 @@ def test_unloadable_csv_degrades_on_list_and_400s_on_edit(client, tmp_path):
 def test_index_links_to_rosters(client):
     response = client.get("/")
     assert '/rosters' in response.text
+
+
+# --- Item 54c: one-click create-and-set-default from the submit page ---
+
+
+def test_create_roster_with_set_default_configures_and_returns_home(client, tmp_path):
+    response = client.post(
+        "/rosters",
+        data={
+            "team_name": "Blue Thunder",
+            "team_list": TEAM_LIST,
+            "set_default": "1",
+            "next": "/",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    path = default_roster_path("Blue Thunder")
+    assert path.exists()
+    values = load_project_config_values()
+    assert values["roster"] == str(path)
+    # The typed team name is preserved in the config so the default roster
+    # shows its pretty name, not the file stem.
+    assert values["team_name"] == "Blue Thunder"
+
+
+def test_create_roster_without_54c_fields_is_unchanged(client, tmp_path):
+    response = client.post(
+        "/rosters",
+        data={"team_name": "Blue Thunder", "team_list": TEAM_LIST},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/rosters/")
+    assert load_project_config_values().get("roster") is None
+
+
+def test_create_roster_rejects_offsite_next_redirect(client, tmp_path):
+    response = client.post(
+        "/rosters",
+        data={
+            "team_name": "Blue Thunder",
+            "team_list": TEAM_LIST,
+            "next": "//evil.example.com/",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/rosters/")

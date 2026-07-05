@@ -1,6 +1,8 @@
-{# Shared "add a missing event" form (review page and game page). #}
+{# Shared "add a missing play" form (review page and game page). #}
 <section class="add-form">
-  <h2>Add a missing event</h2>
+  <h2>Add a missing play</h2>
+  <p class="local-note">If an at-bat or inning change never showed up, add it
+     here with the time it happens in the video.</p>
   <form hx-post="/jobs/{{ job.id }}/corrections" hx-target="#review-rows" hx-swap="outerHTML">
     <input type="hidden" name="entry" value="{{ entry }}">
     <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
@@ -22,7 +24,7 @@
           <option value="{{ half }}">{{ half }}</option>
         {% endfor %}
       </select>
-      <button type="submit">Add event</button>
+      <button type="submit">Add play</button>
     </div>
   </form>
 </section>

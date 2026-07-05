@@ -6,19 +6,19 @@
   {% endif %}
 
   <p class="review-summary">
-    Flagged events: {{ flagged_count }} of {{ total_count }}.
+    Plays to double-check: {{ flagged_count }} of {{ total_count }}.
     {% if show_all %}
-      Showing all events —
-      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=flagged">show flagged only</a>
+      Showing every play —
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=flagged">show only flagged plays</a>
     {% else %}
-      Showing flagged only —
-      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=all">show all events</a>
+      Showing only flagged plays —
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=all">show every play</a>
     {% endif %}
   </p>
 
   {% if corrections %}
     <section class="applied-corrections">
-      <h2>Applied corrections</h2>
+      <h2>Your saved fixes</h2>
       <ul>
         {% for correction in corrections %}
           <li>
@@ -72,7 +72,7 @@
                 {% endfor %}
               </select>
               <input name="value" value="{{ row.event.label }}" aria-label="Corrected value">
-              <button type="submit">Save correction</button>
+              <button type="submit">Save fix</button>
             </form>
             <form class="inline-form" hx-post="/jobs/{{ job.id }}/corrections"
                   hx-target="#review-rows" hx-swap="outerHTML">
@@ -82,13 +82,18 @@
               <input type="hidden" name="timestamp" value="{{ row.event.timestamp_seconds }}">
               <input type="hidden" name="event_type" value="{{ row.event.event_type.value }}">
               <input type="hidden" name="field" value="delete">
-              <button type="submit" class="danger">Delete event</button>
+              <button type="submit" class="danger">Delete play</button>
             </form>
           </div>
         </li>
       {% endfor %}
     </ul>
   {% else %}
-    <p>No {{ 'events' if show_all else 'flagged events' }} for this run.</p>
+    {% if show_all %}
+      <p>No plays were detected for this game.</p>
+    {% else %}
+      <p>Nothing to double-check — every play looked good. Your timestamps are
+         ready to copy.</p>
+    {% endif %}
   {% endif %}
 </div>

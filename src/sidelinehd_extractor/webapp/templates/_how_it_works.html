@@ -1,0 +1,27 @@
+{# Item 54c: the persistent plain-language explainer. Included on the home
+   page; open on first run (no games yet), collapsed afterwards. Other pages
+   link to /#how-it-works instead of duplicating it. #}
+<details id="how-it-works" class="how-it-works" {% if how_open %}open{% endif %}>
+  <summary>How this works</summary>
+  <p>This app watches a SidelineHD game video, reads the scoreboard in the
+     corner, and builds a list of timestamps — one per inning and one per
+     at-bat — that you can paste into the video's YouTube description. Viewers
+     can then jump straight to any at-bat.</p>
+  <ol>
+    <li><strong>Add your team's roster.</strong> Jersey numbers and names, so
+        the timestamps can say who was at bat. Do this <em>before</em> running
+        a game — names are matched while the game is being read.</li>
+    <li><strong>Paste a game link.</strong> A YouTube link to your SidelineHD
+        game video (or a playlist of games) and press Start.</li>
+    <li><strong>Wait while it reads the game.</strong> A full game takes
+        roughly 30&ndash;45 minutes. You can leave this page open and watch
+        the progress.</li>
+    <li><strong>Copy your timestamps.</strong> When it finishes, open the game
+        page, double-check anything it flags, and copy the finished text into
+        your YouTube description. You can also send (anonymized) feedback to
+        help improve the app.</li>
+  </ol>
+  <p class="local-note">Everything runs on this computer. Player names stay in
+     local files and are never uploaded; the feedback report replaces names
+     with placeholders before anything leaves this machine.</p>
+</details>

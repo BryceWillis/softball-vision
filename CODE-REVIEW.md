@@ -19,7 +19,23 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 54c — In-app onboarding + plain language (branch `impl/item-54c`, by Fable 5)
+**Files:** [webapp/app.py](src/sidelinehd_extractor/webapp/app.py), all templates under [webapp/templates/](src/sidelinehd_extractor/webapp/templates/)
+**Status:** Ready for Review
+
+Implemented per the item 54 epic's 54c phase:
+
+- **First-run explainer:** new `_how_it_works.html` partial on the home page — what the tool does, the four-step roster → submit → results → feedback flow, the ~30–45 min expectation, and a names-stay-local privacy note. Open when no games exist, collapsed after; other pages link to `/#how-it-works` (the "persistent panel" without duplicating content).
+- **Roster-first prompt (owner live-fire requirement):** when no default roster is configured, the submit page shows a "Step 1: add your team's roster" card explaining that names are matched at run time and do not backfill, with an inline paste form that creates the roster, sets it as the default, and returns to the submit page in one click (`POST /rosters` gains optional `set_default` + `next` form fields; `next` is restricted to same-app paths). When configured, a "Roster ready: <team>" line renders instead.
+- **Plain language:** `status_label`/`stage_label`/`kind_label` maps registered as Jinja globals (raw codes preserved in CSS classes/ids/tests). "Jobs"→"Your games", "Stage log"→"Progress", "Exception review"→"Double-check plays", "Copy kits"→"Your YouTube timestamps", "Flagged events"→"Plays to double-check", "Re-export"→"Apply changes", "OCR"→plain wording; raw result JSON moved behind a "Technical details" disclosure. A regression test asserts primary pages contain no "OCR"/"manifest".
+- **Empty states:** games list ("Nothing here yet…", removed on first submit), review rows ("Nothing to double-check — every play looked good"), rosters page intro, progress page ("Waiting for the first step to start…").
+
+**Deviations (local tier, flagged):**
+1. `POST /rosters` gains two *optional* form fields (`set_default`, `next`); omitted, behavior is byte-identical to item 50's contract. Additive, needed for the design's "one-click path to add the roster from the submit flow".
+2. The one-click path also writes the typed team name into `sidelinehd.cfg`'s `team_name` (via the shared set-default helper) — found via live smoke test: without it the index greeted the user with the file stem (`blue_thunder`), the exact item 52 symptom. Item 52 (CSV header) remains needed for the general reload path.
+3. Existing tests pinning old UI strings ("Processing: N / M frames", "Flagged events: N", links to `/results` for done single jobs) were updated to the new wording/targets.
+
+Tests: 406 pass (`PYTHONPATH=src python3 -m pytest tests/`), ruff clean. New tests: explainer open/collapsed, roster prompt shown/hidden, one-click create-sets-default-and-redirects (incl. offsite-`next` rejection and no-fields backward compat), plain status/stage words, jargon guard, technical-details disclosure.
 
 ## Open Items
 
