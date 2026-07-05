@@ -520,6 +520,20 @@ Run lint checks after installing the development dependencies:
 ruff check .
 ```
 
+## Prior Art and Independence
+
+A related MIT-licensed project exists: [`jcspeegs/loups`](https://github.com/jcspeegs/loups),
+which also generates YouTube chapters from fastpitch softball video. This
+project was built independently — no loups code was referenced or reused —
+and the designs differ substantially: we sample fixed SidelineHD scorebug
+regions on a time grid and drive a state machine over parsed field values
+(loups template-matches frames against a user image); we resolve batter
+identity through a roster CSV keyed on jersey number (loups OCRs text
+straight off the frame); we use Tesseract with per-field configs (loups uses
+EasyOCR); and we persist re-exportable run state with a corrections layer
+(loups is stateless). The full comparison and per-point rationale live in
+[docs/prior-art-loups.md](docs/prior-art-loups.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -19,47 +19,27 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### Item 52 — Persist Roster Display Name (branch `impl/item-52`, by Fable 5)
-**Files:** [roster.py](src/sidelinehd_extractor/roster.py) (`write_roster_csv` + `ROSTER_TEAM_NAME_PREFIX`), [config.py](src/sidelinehd_extractor/config.py) (`load_roster_csv`)
+#### Item 30 — Originality Audit vs. `jcspeegs/loups` (branch `impl/item-30`, by Fable 5)
+**Files:** new [docs/prior-art-loups.md](docs/prior-art-loups.md); [README.md](README.md) ("Prior Art and Independence" section)
 **Status:** Ready for Review
 
-`write_roster_csv` now emits a leading `# team_name: <pretty name>` comment
-line; `load_roster_csv` skips leading `#` comment lines, parses the team name
-back, and resolves as explicit `team_name` arg > header comment > file stem —
-so pre-item-52 files (no comment) load exactly as before and the
-`number,full_name,…` column contract is untouched. "St. Mary's 12U" now
-reloads as "St. Mary's 12U" in both the CLI and the web roster pages (the web
-edit/save path round-trips through the same writer/reader pair, so re-saving
-preserves it too). `feedback.py`'s `_roster_from_manifest` reads the manifest
-snapshot, not the CSV — unaffected.
-
-**Branch note:** based on `impl/item-55` (both touch `config.py`); merge 55
-first, then this fast-forwards.
+Docs/research only — no code changes. Delivered all acceptance criteria:
+side-by-side comparison table (ingestion, trigger, OCR layer, reading order,
+identity, state, output, event logic, CLI, UI, thumbnails); every convergence
+point resolved as *diverged* or *retained with rationale* (OCR engine, frame
+trigger, result ordering, title composition, at-bat logic, CLI flags —
+verified our `-t`/`-o` mean timestamp/output-dir, no `-q`/`--debug`;
+thumbnails not a feature); repo hygiene grep for `loups`/`easyocr`/`ssim`
+came back clean; README gains a short independence note linking the doc.
+**OCR-backend abstraction decision:** recorded as *done in substance*
+(`create_ocr_backend` seam exists) with EasyOCR support *declined* for now
+(100MB model download conflicts with item 54's zero-friction goal; Tesseract
+is calibrated). Sources: loups GitHub README + PyPI page only; loups source
+code deliberately not read.
 
 **Deviations:** none.
 
-Tests: 422 pass, ruff clean. New: pretty-name round-trip incl. file-content
-check, explicit-arg override, pre-item-52 stem fallback.
-
-#### Item 55 — Overlay Template Auto-Detection / pre-run fail-fast guard (branch `impl/item-55`, by Fable 5)
-**Files:** new [template_probe.py](src/sidelinehd_extractor/template_probe.py); [config.py](src/sidelinehd_extractor/config.py) (`candidate_overlay_templates`), [workflow.py](src/sidelinehd_extractor/workflow.py), [batch.py](src/sidelinehd_extractor/batch.py), [cli.py](src/sidelinehd_extractor/cli.py)
-**Status:** Ready for Review
-
-Implemented per the validated design including all three Pass 23 refinements:
-
-- **Registry:** `candidate_overlay_templates()` in config.py — index 0 is the packaged default (tie-break/floor fallback target); today it holds just `sidelinehd_640x360_active`, item 26 layouts join as calibrated.
-- **Probe** (`template_probe.py`): 5 frames at 10/15/20/25/30% of duration (fixed 30s steps under 10 min; fixed early offsets when duration is unknown); reuses `read_frames_at` + `crop_frame`; unreadable timestamps are skipped; no run-dir artifacts.
-- **Scoring with `inning` de-weighted (refinement 1):** primary fields `left_score`/`right_score`/`count` at weight 1.0; `inning`/`batter_card_name` at weight 0.25 tie-breaker. Validity reuses the pipeline's own `parse_score`/`parse_count`/`parse_inning`. A dedicated test proves a template whose `inning` always misreads ("720", the real 640×360 failure) still scores ≈0.92.
-- **Selection:** strictly-greater comparison keeps ties on the default; below the 0.25 floor the default is kept, `warning template-autodetect-low-score` fires through the P2 plumbing (web UI shows it via existing warning rendering), and the message says the run is continuing (refinement 2 — no hard block). Manifest gains a `template_autodetect` section (selected, per-candidate scores, floor, timestamps, frames probed).
-- **Wiring:** `run_game`/`run_youtube_game`/`run_playlist_batch` gain `auto_detect_template: bool = True`, consulted only when `template is None` and OCR is enabled (`no_ocr` runs never probe). Probe failure degrades to the default with `warning template-probe-failed` — it can never kill a run. CLI adds `--no-auto-template` to all three run commands; `--template` always wins. Web app needs no change (`default_pipeline_kwargs` already passes `template=None`).
-- **Cost (refinement 3):** probe fields are capped at the 3 primary + 2 low-weight fields per candidate. **Verified live** on the real 2.4h Victor Vipers video: probe took **1.9 s**, scored 0.70, selected the packaged template, no low-score flag.
-
-**Deviations (local tier, flagged):**
-1. Probe stage name is `probe` (not `probe-template`) so item 54c's plain-language stage map, which already defines `probe` → "Checking the video", covers it on merge without a follow-up.
-2. `auto_detect_template` is also threaded through `run_playlist_batch`/`_run_playlist_entry` (design only named `run_game`/`run_youtube_game`) so `--no-auto-template` works for `run-playlist` too; adds one more param to the CR-47 fan-out (noted for item 22).
-3. Unknown-duration videos probe at fixed 30–150s offsets rather than failing (design left this unspecified).
-
-Tests: 419 pass, ruff clean. New `tests/test_template_probe.py` (22 tests, OCR stubbed): validity parsing, scoring math incl. the de-weighted-inning case, selection floor, tie-break toward default, skipped unreadable frames, single-candidate acceptance case, and run_game wiring (probe manifest section, low-score warning with run proceeding, probe-failure degradation, and no-probe for template-given/no_ocr/opted-out runs).
+Tests: 397 pass, ruff clean (docs-only change).
 
 ## Open Items
 
