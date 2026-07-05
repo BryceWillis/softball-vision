@@ -4139,6 +4139,33 @@ run. Do not probe in `no_ocr` runs.
 lands, auto-detect is a one-candidate no-op that still validates the plumbing
 and manifest recording.
 
+**Architect validation (Pass 23).** Approach approved. Three required changes
+from live-fire evidence:
+
+1. **De-weight `inning` in scoring (evidence-based).** On the real 640×360
+   stream, the `inning` region misread even under the *correct* template
+   (values like "72"/"43"/"720"), while `left_score`/`right_score`/`count` read
+   148–179/181. Including `inning` at equal weight would penalize the right
+   template. Score primarily on `left_score`, `right_score`, `count`; treat
+   `inning` (and `batter_card_name`) as low-weight tie-breakers, not gates. This
+   also protects the ≥0.25 floor from a single unreliable field.
+2. **Frame the immediate deliverable as a pre-run fail-fast guard, not
+   multi-layout selection.** With one candidate, selection is a no-op — but
+   probing the single known template *before* the 40-minute OCR pass and warning
+   on a low score catches a mismatched overlay up front (a strict improvement
+   over item 54 P2, which only catches it after the full run wastes ~40 min).
+   That standalone value justifies building it now; multi-layout selection
+   matures as item 26 adds candidates. The low-score warning must say the run
+   *can still proceed* on the default — don't hard-block.
+3. **Cost note:** probe cost scales with candidate count (5 frames × ~15 regions
+   × N). Fine at N=1; when item 26 brings N≈10, cap probing to the three scoring
+   fields and keep frames at 5 so the probe stays well under a minute.
+
+Sequencing: Ready to implement now for the fail-fast value; it blocks nothing,
+and item 26 unlocks its full selection value. Note (separate follow-up): the
+`inning` misread on real 640×360 streams is its own calibration bug worth a small
+item — the current `inning` region likely overlaps adjacent digits.
+
 ## Discussion / Later Deliverables
 
 ### Web App — CSRF / same-origin hardening (deferred)
