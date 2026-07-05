@@ -19,7 +19,27 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 30 — Originality Audit vs. `jcspeegs/loups` (branch `impl/item-30`, by Fable 5)
+**Files:** new [docs/prior-art-loups.md](docs/prior-art-loups.md); [README.md](README.md) ("Prior Art and Independence" section)
+**Status:** Ready for Review
+
+Docs/research only — no code changes. Delivered all acceptance criteria:
+side-by-side comparison table (ingestion, trigger, OCR layer, reading order,
+identity, state, output, event logic, CLI, UI, thumbnails); every convergence
+point resolved as *diverged* or *retained with rationale* (OCR engine, frame
+trigger, result ordering, title composition, at-bat logic, CLI flags —
+verified our `-t`/`-o` mean timestamp/output-dir, no `-q`/`--debug`;
+thumbnails not a feature); repo hygiene grep for `loups`/`easyocr`/`ssim`
+came back clean; README gains a short independence note linking the doc.
+**OCR-backend abstraction decision:** recorded as *done in substance*
+(`create_ocr_backend` seam exists) with EasyOCR support *declined* for now
+(100MB model download conflicts with item 54's zero-friction goal; Tesseract
+is calibrated). Sources: loups GitHub README + PyPI page only; loups source
+code deliberately not read.
+
+**Deviations:** none.
+
+Tests: 397 pass, ruff clean (docs-only change).
 
 ## Open Items
 

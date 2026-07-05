@@ -43,7 +43,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | 9b | **52** — Persist Roster Display Name | Ready to implement | Small. Roster CSV doesn't store the pretty team name → reloads as the file stem (e.g. `st_mary_s_12u`). Persist via a `# team_name:` header line, stem fallback. Surfaced by item 50 review. |
 | — | **53** — Make declared `yt-dlp` dep sufficient | Done (Pass 22) | Small. yt-dlp is already a core dep (auto-installed); add a `python -m yt_dlp` fallback + clear error so it works even where the console script isn't on PATH. Surfaced by live-fire prep. |
 | — | **39** — Local Web App | Epic complete (Pass 20) | All phases done: 39a/39b/39c/39d/39e = items 46/47/49/50/51. Local-first FastAPI + HTMX. Cloud/hosted is a later seam (see deferred CSRF hardening). |
-| 11 | **30** — Originality Audit | Ready to implement | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
+| 11 | **30** — Originality Audit | Ready for review (`impl/item-30`, Fable 5) | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
 | 12 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
 | 13 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
 | — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
