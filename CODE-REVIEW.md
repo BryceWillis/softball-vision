@@ -19,6 +19,30 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
+#### Item 54e — Non-developer quickstart docs, Mac/local (branch `impl/item-54e`, by Fable 5)
+**Files:** [README.md](README.md)
+**Status:** Ready for Review
+
+New "Quickstart (Mac — no coding needed)" section at the top of the README,
+written for a coach: open Terminal, Homebrew + `brew install tesseract`
+(the only non-pip dependency after item 54a), Download ZIP, the four-line
+venv + `pip install -e ".[web]"` block, `sidelinehd-extractor start`, and a
+"start it again later" one-liner. Includes a plain troubleshooting list
+(activate-the-venv, busy port → `--port 8001`, the in-app setup card, Send
+feedback). Windows portions deliberately excluded (item 19), with a pointer.
+Existing developer content preserved: "Setup" retitled "Developer Setup",
+"Quick Start" retitled "CLI Quick Start"; no command content changed.
+
+**Branch note:** based on `impl/item-30` (both touch README.md); merge 30
+first.
+
+**Deviations:** screenshots called for by the epic text are omitted — the
+repo has no image assets pipeline and screenshots of the current UI would go
+stale against items 57/58; flagged for the architect to decide whether to
+require them.
+
+Tests: 397 pass (docs-only).
+
 #### Item 30 — Originality Audit vs. `jcspeegs/loups` (branch `impl/item-30`, by Fable 5)
 **Files:** new [docs/prior-art-loups.md](docs/prior-art-loups.md); [README.md](README.md) ("Prior Art and Independence" section)
 **Status:** Ready for Review
