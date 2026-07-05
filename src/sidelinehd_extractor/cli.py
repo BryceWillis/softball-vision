@@ -486,6 +486,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         min_game_final_observations=args.min_game_final_observations,
         order_validation=not args.no_order_validation,
+        auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -554,6 +555,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         min_game_final_observations=args.min_game_final_observations,
         order_validation=not args.no_order_validation,
+        auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -629,6 +631,7 @@ def _cmd_run_playlist(args: argparse.Namespace) -> int:
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         min_game_final_observations=args.min_game_final_observations,
         order_validation=not args.no_order_validation,
+        auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
@@ -846,6 +849,14 @@ def _cmd_start(args: argparse.Namespace) -> int:
 def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", "-o", type=Path, default=Path("runs"))
     parser.add_argument("--template", type=Path, help="Overlay template JSON file.")
+    parser.add_argument(
+        "--no-auto-template",
+        action="store_true",
+        help=(
+            "Skip the pre-run template probe and use the packaged default "
+            "template as-is (only relevant when --template is not given)."
+        ),
+    )
     parser.add_argument("--roster", type=Path, help="Roster CSV or JSON file.")
     parser.add_argument("--team-name", help="Team name override for roster CSV/JSON.")
     parser.add_argument(

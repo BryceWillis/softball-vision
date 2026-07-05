@@ -28,6 +28,8 @@ from sidelinehd_extractor.processing import (
 )
 from sidelinehd_extractor.review_report import write_review_report
 from sidelinehd_extractor.state import parse_samples_file
+from sidelinehd_extractor.template_probe import probe_template
+from sidelinehd_extractor.config import candidate_overlay_templates
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
     DEFAULT_YOUTUBE_CLIENT,
@@ -86,6 +88,13 @@ NO_SCOREBOARD_WARNING = (
     "The run finished but produced no usable scoreboard reads, so the chapter "
     "and at-bat exports are empty or unreliable. Check that the video shows the "
     "SidelineHD overlay and that the overlay template matches its layout."
+)
+
+TEMPLATE_LOW_SCORE_WARNING = (
+    "The scoreboard overlay in this video did not match the known layout well "
+    "in a quick pre-check, so the results may come out empty or unreliable. "
+    "The run is continuing with the standard layout — check that the video "
+    "shows the SidelineHD scoreboard overlay."
 )
 
 
@@ -149,8 +158,30 @@ def run_game(
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     generate_review_report: bool = True,
+    auto_detect_template: bool = True,
 ) -> RunGameResult:
     """Process video, detect events, and write both YouTube text exports."""
+
+    # Item 55: with no explicit template, probe a few frames before the long
+    # OCR pass — today a fail-fast guard against a mismatched overlay (warns
+    # up front instead of after ~40 wasted minutes), and the selection hook
+    # for item 26's additional layouts. Never blocks or fails the run.
+    template_probe_result = None
+    if template is None and auto_detect_template and ocr is not no_ocr:
+        _stage(stage_progress, "probe")
+        try:
+            template_probe_result = probe_template(
+                video_path, candidate_overlay_templates(), ocr
+            )
+        except Exception as exc:  # noqa: BLE001 - probe must never kill a run
+            _stage(stage_progress, f"warning template-probe-failed: {exc}")
+        else:
+            template = template_probe_result.template
+            if template_probe_result.low_score:
+                _stage(
+                    stage_progress,
+                    f"warning template-autodetect-low-score: {TEMPLATE_LOW_SCORE_WARNING}",
+                )
 
     _stage(stage_progress, "process")
     process_result = process_video(
@@ -169,6 +200,12 @@ def run_game(
         ocr_workers=ocr_workers,
     )
     _emit_process_warnings(stage_progress, process_result.warnings)
+    if template_probe_result is not None:
+        update_manifest_section(
+            process_result.manifest_path,
+            "template_autodetect",
+            template_probe_result.to_manifest(),
+        )
     _stage(stage_progress, "parse-states")
     state_result = parse_samples_file(process_result.samples_path)
     _stage(stage_progress, "detect-events")
@@ -294,6 +331,7 @@ def run_youtube_game(
     order_validation: bool = True,
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     generate_review_report: bool = True,
+    auto_detect_template: bool = True,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     merge_output_format: str = "mp4",
     write_info_json: bool = True,
@@ -344,6 +382,7 @@ def run_youtube_game(
         order_validation=order_validation,
         batting_half_inference_progress=batting_half_inference_progress,
         generate_review_report=generate_review_report,
+        auto_detect_template=auto_detect_template,
     )
     return RunYoutubeGameResult(download=download, run=run)
 
