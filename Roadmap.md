@@ -23,6 +23,8 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
+| 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | Epic — schedule 54a next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
@@ -4044,6 +4046,98 @@ friction from the current live-fire runs directly into 54a/54c acceptance criter
 **Deliberately out of scope (for now):** auto-updating the packaged app, code
 signing/notarization beyond what distribution requires (revisit at 54d), and the
 hosted/cloud seam (still deferred; see the CSRF hardening note).
+
+**Live-fire fixes (2026-07-05, branch `impl/turnkey-fixes`, by Fable 5) — Ready
+for review.** A real 2.4h-game run exposed four turnkey failures, fixed in
+priority order on one branch (each its own commit):
+
+- **P1 — Packaged default template (critical).** `default_overlay_template()`
+  returned a whole-frame stub, so an unconfigured run OCR'd frame mush and
+  "succeeded" with zero events. The calibrated
+  `sidelinehd_640x360_active` template (14 regions) now ships as package data
+  (`sidelinehd_extractor/data/`) and is the built-in default; the full-frame
+  stub survives only as the explicit `full_frame_overlay_template()` opt-in.
+  Verified in the built wheel.
+- **P2 — No-scoreboard health check (safety net).** `run_game` now runs
+  `scoreboard_health_warning()` after every OCR run: zero events, or all of
+  `left_score`/`right_score`/`count`/`inning` empty across the run, writes a
+  manifest `health` section and emits a `warning no-scoreboard-detected` stage
+  warning. The web app renders it as a loud red banner on job status, job
+  detail, results blocks, and the game page. `no_ocr` runs are exempt.
+- **P3 — OCR progress + live detail page.** `process_video`'s per-frame
+  callback is wired through the web `JobRunner` into `Job.frames_done/_total`;
+  the status partial shows "Processing: N / M frames (X%)" and the job-detail
+  body is now an HTMX-polled partial (`/jobs/{id}/detail`) that live-updates
+  the stage log in place.
+- **P4 — Consolidated game page.** `GET /jobs/{id}/game?entry=N` combines copy
+  kits, the inline flagged-exception editor (shared partials, page-aware
+  swaps), a roster panel, and a one-click `POST /jobs/{id}/reexport`
+  (corrections + current roster through `finalize_run_exports`). Done single
+  jobs link straight to it; `/results` and `/review` remain for playlists and
+  backward compatibility.
+- **P5 — Template auto-detection** was *not* implemented; it is designed as
+  item 55 (Ready to implement, pending architect validation of the design).
+
+### 55. Overlay Template Auto-Detection (Probe Pass)
+
+Source: Item 54 live-fire follow-up (P5), 2026-07-05. Design drafted by the
+implementer at the product owner's direction; **architect should validate
+before implementation.**
+Status: Ready to implement
+
+**Goal.** The user never configures a template. Before the full OCR pass, the
+pipeline samples a few frames, scores each known SidelineHD layout against
+them, and auto-selects the best match — falling back to the packaged default
+(item 54 P1) with a visible notice when nothing scores well.
+
+**Design.**
+
+1. **Candidate registry.** A packaged list of candidate templates under
+   `sidelinehd_extractor/data/`: today just `sidelinehd_640x360_active`
+   (Default/Bottom/Flip-ON); item 26's nine additional layout templates join
+   the registry as they are calibrated (Default vs Minimal × position/flip).
+   New helper `candidate_overlay_templates() -> list[OverlayTemplate]` in
+   `config.py`.
+2. **Probe sampling.** New `probe_template(video_path, candidates, ocr,
+   probe_timestamps=None)` in a new `template_probe.py`. Sample ~5 frames
+   spread across the first third of the video (e.g. 10%, 15%, 20%, 25%, 30% of
+   duration — avoids pregame dead air at 0:00 while staying cheap). Reuse
+   `read_frames_at` + `crop_frame`; do NOT write a run dir.
+3. **Scoring.** For each candidate, OCR only the key scorebug regions
+   (`left_score`, `right_score`, `count`, `inning`, plus `batter_card_name`
+   when present) on each probe frame. Score = fraction of (region × frame)
+   reads that are *valid* for that field: scores parse as small ints (0–30),
+   `count` matches the `B-S` pattern, `inning` matches `T#`/`B#`/arrow forms —
+   reuse the existing per-field normalizers in `state.py`/`ocr.py` rather than
+   new validators.
+4. **Selection.** Pick the highest-scoring candidate above a floor (e.g.
+   ≥ 0.25 valid-read rate); ties break toward the packaged default. Below the
+   floor, keep the default and emit `warning template-autodetect-low-score`
+   (surfaces via the item 54 P2 plumbing). Record the chosen template name and
+   per-candidate scores in the manifest (`template_autodetect` section).
+5. **Wiring.** `run_game`/`run_youtube_game` gain
+   `auto_detect_template: bool = True` (only consulted when `template is
+   None`); the web app's `default_pipeline_kwargs` keeps `template=None` so
+   web runs probe automatically. CLI `--template` always wins; add
+   `--no-auto-template` to force the packaged default.
+
+**Acceptance criteria.**
+- With one candidate, an unconfigured run still selects it and records the
+  probe scores in the manifest.
+- A video that matches no candidate keeps the default and emits the low-score
+  warning (test with stubbed OCR returning garbage).
+- Probe adds ≤ ~30s to a 2.4h run (5 frames × ≤ 15 regions).
+- No run-dir artifacts from the probe; manifest records name + scores.
+- Unit tests: scoring math with stubbed OCR; selection floor; tie-break.
+
+**Edge cases.** Very short videos (< 10 min): probe at fixed 30s intervals
+instead of percentages. Videos where the overlay appears late (pregame scenes):
+low probe scores are acceptable — the P2 health check still catches a dead
+run. Do not probe in `no_ocr` runs.
+
+**Dependencies.** Item 26 supplies the additional layout templates; until it
+lands, auto-detect is a one-candidate no-op that still validates the plumbing
+and manifest recording.
 
 ## Discussion / Later Deliverables
 

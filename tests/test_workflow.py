@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,11 +10,13 @@ from sidelinehd_extractor.models import Event, EventType, HalfInning
 from sidelinehd_extractor.processing import ProcessResult, write_json, write_jsonl
 from sidelinehd_extractor.state import StateParseResult
 from sidelinehd_extractor.workflow import (
+    NO_SCOREBOARD_WARNING,
     RunGameResult,
     export_paths,
     finalize_run_exports,
     run_game,
     run_youtube_game,
+    scoreboard_health_warning,
 )
 from sidelinehd_extractor.youtube import DownloadResult
 
@@ -167,7 +170,9 @@ class WorkflowTests(unittest.TestCase):
                 process_result.manifest_path.read_text(encoding="utf-8"),
             )
 
-    def _run_game_with_stubbed_pipeline(self, root, stages, **run_game_kwargs):
+    def _run_game_with_stubbed_pipeline(
+        self, root, stages, events=None, field_read_stats=None, **run_game_kwargs
+    ):
         """Drive run_game with the processing layers stubbed, as the chain test does."""
 
         run_dir = root / "runs" / "game-run"
@@ -177,6 +182,7 @@ class WorkflowTests(unittest.TestCase):
             samples_path=run_dir / "samples.jsonl",
             sample_count=1,
             crop_count=1,
+            field_read_stats=field_read_stats or {},
             warnings=[],
         )
         state_result = StateParseResult(
@@ -191,9 +197,10 @@ class WorkflowTests(unittest.TestCase):
         )
         run_dir.mkdir(parents=True)
         process_result.manifest_path.write_text("{}\n", encoding="utf-8")
-        events = [
-            Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP)
-        ]
+        if events is None:
+            events = [
+                Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP)
+            ]
         write_jsonl(event_result.output_path, events)
 
         with patch("sidelinehd_extractor.workflow.process_video", return_value=process_result):
@@ -240,6 +247,65 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(result.event_count, 1)
             self.assertNotIn("review-report", stages)
             self.assertFalse((run_dir / "review_report.md").exists())
+
+    def test_scoreboard_health_warning_fires_on_zero_events(self):
+        stats = {"left_score": {"sample_count": 10, "non_empty_count": 8}}
+
+        self.assertEqual(scoreboard_health_warning(0, stats), NO_SCOREBOARD_WARNING)
+
+    def test_scoreboard_health_warning_fires_when_all_key_fields_read_empty(self):
+        stats = {
+            "left_score": {"sample_count": 10, "non_empty_count": 0},
+            "right_score": {"sample_count": 10, "non_empty_count": 0},
+            "count": {"sample_count": 10, "non_empty_count": 0},
+            # "inning" missing entirely: counts as empty.
+            "batter_card": {"sample_count": 10, "non_empty_count": 7},
+        }
+
+        self.assertEqual(scoreboard_health_warning(5, stats), NO_SCOREBOARD_WARNING)
+
+    def test_scoreboard_health_warning_none_when_any_key_field_reads(self):
+        stats = {
+            "left_score": {"sample_count": 10, "non_empty_count": 0},
+            "inning": {"sample_count": 10, "non_empty_count": 3},
+        }
+
+        self.assertIsNone(scoreboard_health_warning(5, stats))
+
+    def test_run_game_emits_health_warning_and_manifest_section_on_dead_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stages = []
+
+            result, run_dir = self._run_game_with_stubbed_pipeline(
+                root,
+                stages,
+                events=[],
+                field_read_stats={"left_score": {"sample_count": 10, "non_empty_count": 0}},
+                ocr=lambda crop, field_name: None,  # any real backend (not no_ocr)
+            )
+
+            self.assertEqual(result.event_count, 0)
+            self.assertEqual(result.health_warning, NO_SCOREBOARD_WARNING)
+            self.assertIn(f"warning no-scoreboard-detected: {NO_SCOREBOARD_WARNING}", stages)
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(manifest["health"]["no_scoreboard_detected"])
+            self.assertEqual(manifest["health"]["message"], NO_SCOREBOARD_WARNING)
+            self.assertEqual(manifest["health"]["event_count"], 0)
+
+    def test_run_game_skips_health_check_for_no_ocr_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stages = []
+
+            result, run_dir = self._run_game_with_stubbed_pipeline(root, stages, events=[])
+
+            self.assertIsNone(result.health_warning)
+            self.assertNotIn(
+                f"warning no-scoreboard-detected: {NO_SCOREBOARD_WARNING}", stages
+            )
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertNotIn("health", manifest)
 
     def test_run_game_persists_export_options_in_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -22,6 +22,9 @@
     .review-summary { color: #555; font-size: 0.9rem; margin: 0.2rem 0 0.8rem; }
     .review-warnings { color: #8a5a00; font-size: 0.9rem; margin: 0.3rem 0 0.8rem;
                        padding-left: 1.2rem; }
+    .health-banner { background: #fdeaea; border: 2px solid #a3131f; color: #a3131f;
+                     border-radius: 8px; padding: 0.8rem 1rem; margin: 0.5rem 0 1rem;
+                     font-weight: 700; font-size: 1rem; }
     /* Publish-kit fragment styling (classes come from render_publish_kit_fragment). */
     .sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 16px; align-items: start; }
@@ -66,7 +69,11 @@
       {% else %}
         <section class="game-block">
           <h2>{{ block.label }}</h2>
+          {% if block.health_warning %}
+            <div class="health-banner">&#9888;&#65039; {{ block.health_warning }}</div>
+          {% endif %}
           <p>
+            <a href="/jobs/{{ job.id }}/game?entry={{ loop.index0 }}"><strong>Manage this game</strong></a> |
             <a href="/jobs/{{ job.id }}/review?entry={{ loop.index0 }}">Review flagged events</a> |
             <a href="/jobs/{{ job.id }}/feedback?entry={{ loop.index0 }}">Send feedback</a>
           </p>

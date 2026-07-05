@@ -1,0 +1,28 @@
+{# Shared "add a missing event" form (review page and game page). #}
+<section class="add-form">
+  <h2>Add a missing event</h2>
+  <form hx-post="/jobs/{{ job.id }}/corrections" hx-target="#review-rows" hx-swap="outerHTML">
+    <input type="hidden" name="entry" value="{{ entry }}">
+    <input type="hidden" name="show" value="{{ 'all' if show_all else 'flagged' }}">
+    <input type="hidden" name="page" value="{{ page }}">
+    <input type="hidden" name="field" value="add">
+    <div class="grid">
+      <select name="event_type" aria-label="Event type">
+        {% for event_type in event_types %}
+          <option value="{{ event_type }}">{{ event_type }}</option>
+        {% endfor %}
+      </select>
+      <input name="timestamp" placeholder="mm:ss or seconds" required>
+      <input name="label" placeholder="Label (optional)">
+      <input name="player_number" placeholder="Jersey # (optional)">
+      <input name="inning" placeholder="Inning (optional)" size="6">
+      <select name="half" aria-label="Half inning">
+        <option value="">half (optional)</option>
+        {% for half in halves %}
+          <option value="{{ half }}">{{ half }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Add event</button>
+    </div>
+  </form>
+</section>

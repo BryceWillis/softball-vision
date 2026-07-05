@@ -22,6 +22,9 @@
     .current-stage { color: #555; font-size: 0.85rem; margin-left: 0.5rem; }
     .job-warnings { color: #8a5a00; }
     .job-error { color: #a3131f; }
+    .health-banner { background: #fdeaea; border: 2px solid #a3131f; color: #a3131f;
+                     border-radius: 8px; padding: 0.6rem 0.8rem; margin: 0.4rem 0;
+                     font-weight: 700; }
     ol.stage-log li { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
     pre { background: #f6f6f6; padding: 0.7rem; border-radius: 6px; overflow-x: auto;
           font-size: 0.8rem; }
@@ -32,34 +35,6 @@
   <p><a href="/">&larr; All jobs</a></p>
   <h1><span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
 
-  {% include "_job_status.html" %}
-
-  <h2>Stage log</h2>
-  {% if job.stages %}
-    <ol class="stage-log">
-      {% for stage in job.stages %}<li>{{ stage }}</li>{% endfor %}
-    </ol>
-  {% else %}
-    <p>No stages recorded yet.</p>
-  {% endif %}
-
-  {% if job.warnings %}
-    <h2>Warnings</h2>
-    <ul class="job-warnings">
-      {% for warning in job.warnings %}<li>{{ warning }}</li>{% endfor %}
-    </ul>
-  {% endif %}
-
-  {% if job.status == "done" %}
-    <h2>Result</h2>
-    <p>
-      <a href="/jobs/{{ job.id }}/results">View results</a> |
-      <a href="/jobs/{{ job.id }}/feedback">Send feedback</a>
-    </p>
-    <pre>{{ job.result | tojson(indent=2) }}</pre>
-  {% elif job.status == "error" %}
-    <h2>Error</h2>
-    <p class="job-error">{{ job.error }}</p>
-  {% endif %}
+  {% include "_job_detail_body.html" %}
 </body>
 </html>

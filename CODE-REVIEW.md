@@ -19,7 +19,24 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 54 live-fire fixes P1–P4 — turnkey failures from the real-game run
+**Branch:** `impl/turnkey-fixes` (Fable 5) — review `git diff origin/main...impl/turnkey-fixes`; one commit per fix.
+**Status:** Ready for Review
+
+**Implementation note.**
+- **P1 (packaged default template):** `sidelinehd_640x360_active.json` is now package data under `src/sidelinehd_extractor/data/`; `default_overlay_template()` loads it via `importlib.resources` (shared `_overlay_template_from_data` parser), and the old whole-frame stub is only reachable through the new `full_frame_overlay_template()`. Wheel contents verified (hatchling includes the JSON). Tests: packaged default has the key regions and stays in sync with the calibrated example; full-frame is opt-in.
+- **P2 (no-scoreboard health check):** new `scoreboard_health_warning(event_count, field_read_stats)` in `workflow.py` (fires on 0 events OR all of `left_score`/`right_score`/`count`/`inning` empty; a missing field counts as empty), called from `run_game` for non-`no_ocr` runs; writes a manifest `health` section and emits `warning no-scoreboard-detected: …` through the existing item-45 stage/warning plumbing. Web: red `health-banner` on `_job_status`, job detail, each results block (`_run_health_warning` manifest fallback covers playlist entries), and the game page. Tests: helper truth table, `run_game` integration (warning + manifest + `no_ocr` exemption), and page-render tests for banner presence/absence.
+- **P3 (OCR progress + live detail):** `Job.frames_done`/`frames_total` fields updated by a `frame_progress` callback the `JobRunner` passes as `progress=` to both `run_youtube_game` and `run_playlist_batch`; `_job_status.html` renders "Processing: N / M frames (X%)" during the `process` stage; the job-detail body is extracted to `_job_detail_body.html`, served at `GET /jobs/{id}/detail`, and HTMX-polled as a whole (the embedded status partial's own poller suppressed via `no_status_poll`), so the stage log live-updates and polling stops on terminal states. Tests: callback wiring, progress rendering, single-poller assertion, terminal stop, 404.
+- **P4 (consolidated game page):** `GET /jobs/{id}/game?entry=N` renders label + health banner + copy kits (shared `_game_block` / `render_publish_kit_fragment`) + the inline exception editor (shared `_review_rows.html` / new `_add_event_form.html`, now carrying a `page` field so correction swaps and show-all links stay on the originating page) + a roster panel (`load_configured_roster`) + `POST /jobs/{id}/reexport`, which re-runs `finalize_run_exports(run_dir, corrections, roster)` and 303s back. Done single jobs link straight to the game page; results blocks gain "Manage this game". No export/correction/roster logic duplicated. Tests: consolidation render, page-aware swap, re-export rebuild + redirect, pending/404 paths.
+- **P5:** not implemented; written up as Roadmap item 55 (probe-pass template auto-detection), Ready to implement pending architect validation of the design.
+- Suite: 378 passed; `ruff check .` clean. No real player names in any fixture (placeholders only).
+
+**Deviations:**
+- **P1** changes a user-visible default (unconfigured runs now OCR the SidelineHD regions instead of the whole frame) — escalation-tier by the policy, but explicitly directed by the owner in the task brief; flagged for the record.
+- **P2:** health check skipped for `no_ocr` runs (calibration/dry runs read nothing by design; unspecified in the brief). The required warning sentence is kept verbatim as the message prefix, with two actionable sentences appended.
+- **P3:** for playlist jobs the frame counters reset at each video's process phase (per-video, not batch-cumulative; unspecified). The job-detail page's separate "Warnings" section was folded into the polled status partial to avoid rendering warnings twice.
+- **P4:** `/results` and `/review` routes were kept (brief said "merge touchpoints"); the game page consolidates the workflow and the primary links now point there, but removing the existing pages would have broken the playlist overview and bookmarked URLs — judged additive rather than destructive.
+- **P5 design authored by the implementer** (normally the architect's job) at the owner's explicit instruction; marked in the item as pending architect validation.
 
 ## Open Items
 

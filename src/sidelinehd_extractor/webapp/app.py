@@ -11,6 +11,7 @@ offline.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -52,7 +53,7 @@ from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
-from sidelinehd_extractor.workflow import finalize_run_exports
+from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -120,6 +121,9 @@ def _game_block(index: int, label: str, result: dict) -> dict:
     flagged_count = None
     warnings: list = []
     run_dir = result.get("run_dir")
+    health_warning = result.get("health_warning") or (
+        _run_health_warning(Path(run_dir)) if run_dir else None
+    )
     report_path = Path(run_dir) / REVIEW_REPORT_FILENAME if run_dir else None
     if report_path is not None and report_path.exists():
         try:
@@ -136,8 +140,36 @@ def _game_block(index: int, label: str, result: dict) -> dict:
         "fragment": fragment,
         "flagged_count": flagged_count,
         "warnings": warnings,
+        "health_warning": health_warning,
         "report_path": str(report_path) if report_path is not None else None,
     }
+
+
+def _run_health_warning(run_dir: Path) -> Optional[str]:
+    """The item 54 P2 no-scoreboard message from the run manifest, if any.
+
+    Playlist entries do not carry ``health_warning`` in the job summary, so the
+    results page falls back to the ``health`` section ``run_game`` wrote.
+    """
+
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    health = manifest.get("health")
+    if isinstance(health, dict) and health.get("no_scoreboard_detected"):
+        return str(health.get("message") or NO_SCOREBOARD_WARNING)
+    return None
+
+
+def _entry_label(job: Job, index: int, result: dict) -> str:
+    """Human label for one game entry (playlist title or video/run name)."""
+
+    if job.kind == "playlist":
+        return result.get("title") or result.get("video_id") or f"Entry {index + 1}"
+    video_path = result.get("video_path")
+    run_dir = result.get("run_dir")
+    return Path(video_path).name if video_path else Path(run_dir).name if run_dir else job.url
 
 
 def build_result_blocks(job: Job) -> list:
@@ -147,18 +179,14 @@ def build_result_blocks(job: Job) -> list:
     if job.kind == "playlist":
         blocks = []
         for index, entry in enumerate(result.get("entries") or []):
-            label = entry.get("title") or entry.get("video_id") or f"Entry {index + 1}"
-            label = f"{index + 1}. {label}"
+            label = f"{index + 1}. {_entry_label(job, index, entry)}"
             if entry.get("status") == "failed":
                 blocks.append(_error_block(label, entry.get("error") or "Processing failed."))
             else:
                 blocks.append(_game_block(index, label, entry))
         return blocks
 
-    video_path = result.get("video_path")
-    run_dir = result.get("run_dir")
-    label = Path(video_path).name if video_path else Path(run_dir).name if run_dir else job.url
-    return [_game_block(0, label, result)]
+    return [_game_block(0, _entry_label(job, 0, result), result)]
 
 
 def _review_entries(job: Job) -> list:
@@ -240,7 +268,14 @@ def _load_run_corrections(run_dir: Path) -> list:
     return load_event_corrections(corrections_path)
 
 
-def build_review_context(job: Job, entry: int, run_dir: Path, show_all: bool) -> dict:
+#: Pages that embed the corrections partial; the show-all/flagged links and the
+#: correction forms round-trip which one they live on so a swap stays in place.
+_REVIEW_PAGES = ("review", "game")
+
+
+def build_review_context(
+    job: Job, entry: int, run_dir: Path, show_all: bool, page: str = "review"
+) -> dict:
     """Rows + applied corrections for the review page/partial.
 
     Flags are recomputed on the *corrected* events so a saved correction shows
@@ -265,6 +300,7 @@ def build_review_context(job: Job, entry: int, run_dir: Path, show_all: bool) ->
         "job": job,
         "entry": entry,
         "show_all": show_all,
+        "page": page if page in _REVIEW_PAGES else "review",
         "rows": rows if show_all else flagged,
         "flagged_count": len(flagged),
         "total_count": len(rows),
@@ -518,6 +554,13 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         job = _get_job_or_404(job_id)
         return templates.TemplateResponse(request, "_job_status.html", {"job": job})
 
+    @app.get("/jobs/{job_id}/detail", response_class=HTMLResponse)
+    def job_detail_body(request: Request, job_id: str) -> HTMLResponse:
+        """The live-updating body of the detail page (item 54 P3 HTMX poll)."""
+
+        job = _get_job_or_404(job_id)
+        return templates.TemplateResponse(request, "_job_detail_body.html", {"job": job})
+
     @app.get("/jobs/{job_id}/results", response_class=HTMLResponse)
     def job_results(request: Request, job_id: str) -> HTMLResponse:
         job = _get_job_or_404(job_id)
@@ -527,6 +570,61 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
             "results.html",
             {"job": job, "blocks": blocks, "copy_script": PUBLISH_KIT_COPY_SCRIPT},
         )
+
+    def _roster_panel() -> dict:
+        """Configured-roster summary for the game page's roster panel."""
+
+        roster = load_configured_roster()
+        path = _configured_roster_path()
+        edit_url = None
+        if path is not None and path.suffix == ".csv" and path.parent == Path(ROSTERS_DIRNAME):
+            edit_url = f"/rosters/{path.stem}"
+        return {
+            "team_name": roster.team_name if roster else None,
+            "player_count": len(roster.players) if roster else 0,
+            "configured": roster is not None,
+            "edit_url": edit_url,
+        }
+
+    @app.get("/jobs/{job_id}/game", response_class=HTMLResponse)
+    def job_game(
+        request: Request, job_id: str, entry: int = 0, show: str = "flagged"
+    ) -> HTMLResponse:
+        """Item 54 P4: one page to manage a game — copy kits, exceptions,
+        roster panel, and re-export, without hopping between routes."""
+
+        job = _get_job_or_404(job_id)
+        if job.status != "done":
+            return templates.TemplateResponse(
+                request, "game.html", {"job": job, "pending": True, "entry": entry}
+            )
+        run_dir = _run_dir_for_entry(job, entry)
+        entries = _review_entries(job)
+        block = _game_block(entry, _entry_label(job, entry, entries[entry]), entries[entry])
+        context = build_review_context(
+            job, entry, run_dir, show_all=(show == "all"), page="game"
+        )
+        context.update(
+            pending=False,
+            block=block,
+            entry_count=len(entries),
+            copy_script=PUBLISH_KIT_COPY_SCRIPT,
+            roster_panel=_roster_panel(),
+        )
+        return templates.TemplateResponse(request, "game.html", context)
+
+    @app.post("/jobs/{job_id}/reexport", response_class=HTMLResponse)
+    def reexport_game(job_id: str, entry: int = Form(default=0)) -> RedirectResponse:
+        """Re-run the export tail (corrections + current roster) for one game."""
+
+        job = _get_job_or_404(job_id)
+        run_dir = _run_dir_for_entry(job, entry)
+        finalize_run_exports(
+            run_dir,
+            corrections=_load_run_corrections(run_dir),
+            roster=load_configured_roster(),
+        )
+        return RedirectResponse(url=f"/jobs/{job_id}/game?entry={entry}", status_code=303)
 
     @app.get("/jobs/{job_id}/feedback", response_class=HTMLResponse)
     def job_feedback(request: Request, job_id: str, entry: int = 0) -> HTMLResponse:
@@ -574,7 +672,7 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         return templates.TemplateResponse(request, "review.html", context)
 
     def _apply_and_refresh(
-        request: Request, job: Job, entry: int, show: str, corrections: list
+        request: Request, job: Job, entry: int, show: str, corrections: list, page: str
     ) -> HTMLResponse:
         """Persist the corrections list, re-export via the shared helper, refresh."""
 
@@ -583,7 +681,9 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         finalize_run_exports(
             run_dir, corrections=corrections, roster=load_configured_roster()
         )
-        context = build_review_context(job, entry, run_dir, show_all=(show == "all"))
+        context = build_review_context(
+            job, entry, run_dir, show_all=(show == "all"), page=page
+        )
         return templates.TemplateResponse(request, "_review_rows.html", context)
 
     @app.post("/jobs/{job_id}/corrections", response_class=HTMLResponse)
@@ -592,6 +692,7 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         job_id: str,
         entry: int = Form(default=0),
         show: str = Form(default="flagged"),
+        page: str = Form(default="review"),
         timestamp: str = Form(default=""),
         field: str = Form(default=""),
         value: str = Form(default=""),
@@ -633,7 +734,7 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
             apply_event_corrections(events, candidate)
         except ValueError as exc:
             return _error(str(exc))
-        return _apply_and_refresh(request, job, entry, show, candidate)
+        return _apply_and_refresh(request, job, entry, show, candidate, page)
 
     @app.post("/jobs/{job_id}/corrections/clear", response_class=HTMLResponse)
     def clear_correction(
@@ -641,6 +742,7 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
         job_id: str,
         entry: int = Form(default=0),
         show: str = Form(default="flagged"),
+        page: str = Form(default="review"),
         timestamp: str = Form(default=""),
         field: str = Form(default=""),
         event_type: str = Form(default=""),
@@ -658,7 +760,7 @@ def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = N
                 request, "_form_error.html", {"error": str(exc)}, status_code=400
             )
         remaining = remove_event_correction(_load_run_corrections(run_dir), key)
-        return _apply_and_refresh(request, job, entry, show, remaining)
+        return _apply_and_refresh(request, job, entry, show, remaining, page)
 
     # --- Roster management (item 50 / phase 39d). Rosters hold real player
     # names but are strictly local files under rosters/ (gitignored); these

@@ -161,7 +161,8 @@ def test_status_partial_polls_while_active_and_stops_when_done(monkeypatch):
     assert response.status_code == 200
     assert "every 1s" not in response.text
     assert "warning field-never-read: right_score" in response.text
-    assert f"/jobs/{done.id}/results" in response.text
+    # Item 54 P4: a done single job links straight to the consolidated game page.
+    assert f"/jobs/{done.id}/game" in response.text
 
 
 def test_index_renders_form_and_jobs():
@@ -194,6 +195,68 @@ def test_job_detail_shows_stage_log_and_404s():
 
     assert client.get("/jobs/deadbeef").status_code == 404
     assert client.get("/jobs/deadbeef/status").status_code == 404
+
+
+def test_frame_progress_callback_updates_job_fields(monkeypatch):
+    client, store = _make_client()
+
+    def fake(url, video_dir, output_dir, stage_progress=None, progress=None, **kwargs):
+        stage_progress("process")
+        progress(3, 10, 15.0, 42, 140)
+        return {"kind": "single", "run_dir": "runs/fake"}
+
+    monkeypatch.setattr(jobs_module, "run_youtube_game", fake)
+
+    client.post("/jobs", data={"url": "https://youtu.be/abc123", "kind": "single"})
+    job = store.list()[0]
+    assert job.frames_done == 3
+    assert job.frames_total == 10
+
+
+def test_status_partial_shows_frame_progress_during_process_stage():
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running", frames_done=3, frames_total=10)
+    store.record_stage(job.id, "process")
+
+    response = client.get(f"/jobs/{job.id}/status")
+    assert response.status_code == 200
+    assert "Processing: 3 / 10 frames" in response.text
+    assert "(30%)" in response.text
+
+    # Outside the process stage the plain stage word still renders.
+    store.record_stage(job.id, "detect-events")
+    response = client.get(f"/jobs/{job.id}/status")
+    assert "Processing:" not in response.text
+    assert "detect-events" in response.text
+
+
+def test_job_detail_body_polls_in_place_and_stops_when_terminal():
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="running")
+    store.record_stage(job.id, "download")
+
+    page = client.get(f"/jobs/{job.id}")
+    assert page.status_code == 200
+    # The whole detail body polls; the embedded status partial must not add a
+    # second poller of its own.
+    assert f'hx-get="/jobs/{job.id}/detail"' in page.text
+    assert f'hx-get="/jobs/{job.id}/status"' not in page.text
+    assert 'hx-trigger="every 1s"' in page.text
+
+    partial = client.get(f"/jobs/{job.id}/detail")
+    assert partial.status_code == 200
+    assert "Stage log" in partial.text
+    assert "download" in partial.text
+    assert 'hx-trigger="every 1s"' in partial.text
+
+    store.update(job.id, status="done", result={"run_dir": "runs/fake"})
+    finished = client.get(f"/jobs/{job.id}/detail")
+    assert "every 1s" not in finished.text
+    assert f"/jobs/{job.id}/results" in finished.text
+
+    assert client.get("/jobs/deadbeef/detail").status_code == 404
 
 
 def test_static_htmx_is_vendored():
@@ -455,6 +518,87 @@ def test_results_playlist_renders_blocks_in_order_with_error_block(tmp_path):
     assert "error-block" in response.text
     assert "yt-dlp exploded" in response.text
     assert 'data-copy-target="game-1-chapters-text"' not in response.text
+
+
+def test_results_page_shows_loud_health_banner_from_job_summary(tmp_path):
+    from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING
+
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={"kind": "single", "health_warning": NO_SCOREBOARD_WARNING, **paths},
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' in response.text
+    assert "No scoreboard detected" in response.text
+
+
+def test_results_page_reads_health_from_manifest_for_playlist_entries(tmp_path):
+    import json as json_module
+
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    (tmp_path / "run" / "manifest.json").write_text(
+        json_module.dumps(
+            {
+                "health": {
+                    "event_count": 0,
+                    "no_scoreboard_detected": True,
+                    "message": "No scoreboard detected — the template may not match "
+                    "this video's overlay.",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    job = store.create(kind="playlist", url="https://youtube.com/playlist?list=PL1")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "playlist",
+            "entries": [{"video_id": "vid1", "title": "Game 1", "status": "done", **paths}],
+        },
+    )
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' in response.text
+    assert "No scoreboard detected" in response.text
+
+
+def test_results_page_has_no_health_banner_for_healthy_run(tmp_path):
+    client, store = _make_client()
+    paths = _write_fake_run_dir(tmp_path)
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"kind": "single", **paths})
+
+    response = client.get(f"/jobs/{job.id}/results")
+    assert response.status_code == 200
+    assert 'class="health-banner"' not in response.text
+
+
+def test_job_status_and_detail_show_health_banner_from_stage_warning():
+    from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING
+
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.record_stage(job.id, f"warning no-scoreboard-detected: {NO_SCOREBOARD_WARNING}")
+    store.record_stage(job.id, "warning field-never-read: right_score")
+    store.update(job.id, status="done")
+
+    for path in (f"/jobs/{job.id}/status", f"/jobs/{job.id}"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert 'class="health-banner"' in response.text
+        assert "No scoreboard detected" in response.text
+        # Ordinary warnings still render in the plain list, not the banner.
+        assert "field-never-read: right_score" in response.text
 
 
 def test_results_not_done_job_links_back_to_detail_and_unknown_404s():
@@ -837,6 +981,84 @@ def test_review_preserves_hand_written_correction_rows(tmp_path, monkeypatch):
     assert "Maya R. (#28)" in csv_text  # hand-written row survived the rewrite
     assert "hand-written" in csv_text
     assert "delete" in csv_text
+
+
+def test_game_page_consolidates_copy_kit_exceptions_roster_and_reexport(
+    tmp_path, monkeypatch
+):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.get(f"/jobs/{job.id}/game")
+    assert response.status_code == 200
+    text = response.text
+    # Copy kit panels render inline.
+    assert 'data-copy-target="game-0-chapters-text"' in text
+    assert "navigator.clipboard.writeText" in text
+    # Flagged exceptions with edit/delete/add, embedded on the same page.
+    assert "ocr-number=28" in text
+    assert "Add a missing event" in text
+    assert "Save correction" in text
+    # Correction forms and the show toggle stay on the game page after swaps.
+    assert 'name="page" value="game"' in text
+    assert f"/jobs/{job.id}/game?entry=0&amp;show=all" in text
+    # Roster panel (no roster configured in this fixture) links to management.
+    assert "No roster is configured" in text
+    assert "/rosters" in text
+    # One-click re-export action.
+    assert f"/jobs/{job.id}/reexport" in text
+
+
+def test_game_page_correction_swap_keeps_game_page_links(tmp_path, monkeypatch):
+    client, job, run_dir, _ = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "player_number",
+            "value": "28",
+            "page": "game",
+        },
+    )
+    assert response.status_code == 200
+    assert f"/jobs/{job.id}/game?entry=0&amp;show=all" in response.text
+    assert 'name="page" value="game"' in response.text
+
+
+def test_reexport_rewrites_exports_and_redirects_to_game_page(tmp_path, monkeypatch):
+    client, job, run_dir, at_bats_path = _make_review_client(tmp_path, monkeypatch)
+    client.post(
+        f"/jobs/{job.id}/corrections",
+        data={
+            "timestamp": "605.0",
+            "event_type": "at_bat_start",
+            "field": "label",
+            "value": "Maya R. (#28)",
+        },
+    )
+    at_bats_path.write_text("stale\n", encoding="utf-8")
+
+    response = client.post(
+        f"/jobs/{job.id}/reexport", data={"entry": "0"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/jobs/{job.id}/game?entry=0"
+    # The export was rebuilt from events + saved corrections, not left stale.
+    assert "10:05 Maya R. (#28)" in at_bats_path.read_text(encoding="utf-8")
+
+
+def test_game_page_pending_out_of_range_and_unknown_ids(tmp_path, monkeypatch):
+    client, job, _, _ = _make_review_client(tmp_path, monkeypatch)
+    assert client.get(f"/jobs/{job.id}/game?entry=5").status_code == 404
+    assert client.get("/jobs/deadbeef/game").status_code == 404
+
+    running_client, store = _make_client()
+    running = store.create(kind="single", url="https://youtu.be/xyz")
+    store.update(running.id, status="running")
+    response = running_client.get(f"/jobs/{running.id}/game")
+    assert response.status_code == 200
+    assert "not finished" in response.text
 
 
 def test_review_not_done_links_back_and_bad_ids_404(tmp_path, monkeypatch):

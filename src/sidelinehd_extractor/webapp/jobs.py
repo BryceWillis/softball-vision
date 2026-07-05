@@ -40,6 +40,10 @@ class Job:
     status: JobStatus = "queued"
     stages: List[str] = field(default_factory=list)
     current_stage: Optional[str] = None
+    # Item 54 P3: frame-level progress for the long OCR "process" stage. For
+    # playlist jobs these reset at the start of each video's process phase.
+    frames_done: int = 0
+    frames_total: int = 0
     warnings: List[str] = field(default_factory=list)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -157,12 +161,20 @@ class JobRunner:
             def stage_progress(stage: str) -> None:
                 self._store.record_stage(job_id, stage)
 
+            def frame_progress(
+                index: int, total: int, *args: object
+            ) -> None:
+                # process_video calls this once per sampled frame; the extra
+                # positional args (timestamp, sample counts) are not stored.
+                self._store.update(job_id, frames_done=index, frames_total=total)
+
             if job.kind == "playlist":
                 raw = run_playlist_batch(
                     playlist_url=job.url,
                     video_dir=self._video_dir,
                     output_dir=self._output_dir,
                     stage_progress=stage_progress,
+                    progress=frame_progress,
                     **self._pipeline_kwargs(),
                 )
             else:
@@ -171,6 +183,7 @@ class JobRunner:
                     video_dir=self._video_dir,
                     output_dir=self._output_dir,
                     stage_progress=stage_progress,
+                    progress=frame_progress,
                     **self._pipeline_kwargs(),
                 )
             self._store.update(
@@ -208,6 +221,7 @@ def summarize_result(result: object) -> dict:
                 "sample_count": run.sample_count,
                 "state_count": run.state_count,
                 "event_count": run.event_count,
+                "health_warning": run.health_warning,
                 "video_path": result.download.video_path,
             }
         )
