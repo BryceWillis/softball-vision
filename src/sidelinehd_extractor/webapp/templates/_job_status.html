@@ -5,14 +5,14 @@
      {% if not job.is_terminal and not no_status_poll %}
      hx-get="/jobs/{{ job.id }}/status" hx-trigger="every 1s" hx-swap="outerHTML"
      {% endif %}>
-  <span class="status-badge status-{{ job.status }}">{{ job.status }}</span>
+  <span class="status-badge status-{{ job.status }}">{{ status_label(job.status) }}</span>
   {% if not job.is_terminal and job.current_stage %}
     <span class="current-stage">
       {% if job.current_stage == "process" and job.frames_total %}
-        Processing: {{ job.frames_done }} / {{ job.frames_total }} frames
+        Reading the scoreboard: frame {{ job.frames_done }} of {{ job.frames_total }}
         ({{ (100 * job.frames_done / job.frames_total) | round | int }}%)
       {% else %}
-        {{ job.current_stage }}
+        {{ stage_label(job.current_stage) }}
       {% endif %}
     </span>
   {% endif %}
@@ -20,9 +20,9 @@
     {# Single games go straight to the consolidated game page (item 54 P4);
        playlists keep the multi-game results overview. #}
     {% if job.kind == "single" %}
-      <a href="/jobs/{{ job.id }}/game">View results</a>
+      <a href="/jobs/{{ job.id }}/game">Open this game</a>
     {% else %}
-      <a href="/jobs/{{ job.id }}/results">View results</a>
+      <a href="/jobs/{{ job.id }}/results">Open these games</a>
     {% endif %}
   {% endif %}
   {# Item 54 P2: the no-scoreboard health warning must be impossible to miss —

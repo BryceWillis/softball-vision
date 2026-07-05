@@ -40,23 +40,28 @@
     .add-form { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 0.8rem;
                 margin: 1rem 0; }
     .add-form .grid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+    .local-note { color: #555; font-size: 0.85rem; }
   </style>
 </head>
 <body>
   <p>
-    <a href="/">&larr; All jobs</a> |
-    <a href="/jobs/{{ job.id }}">Job detail</a> |
-    <a href="/jobs/{{ job.id }}/results">Results</a>
+    <a href="/">&larr; All games</a> |
+    <a href="/jobs/{{ job.id }}">Progress</a> |
+    <a href="/jobs/{{ job.id }}/results">Results</a> |
+    <a href="/#how-it-works">How this works</a>
   </p>
-  <h1>Exception review
-    <span class="job-kind">{{ job.kind }}</span>
+  <h1>Double-check plays
+    <span class="job-kind">{{ kind_label(job.kind) }}</span>
     <span class="job-url">{{ job.url }}</span>
   </h1>
 
   {% if pending %}
-    <p>This job is not finished yet (status: {{ job.status }}).
-       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+    <p>This game is not finished yet ({{ status_label(job.status) | lower }}).
+       Follow along on the <a href="/jobs/{{ job.id }}">progress page</a>.</p>
   {% else %}
+    <p>The app wasn't fully sure about the plays listed here. Fix anything that
+       looks wrong, or delete a play that shouldn't be there — your changes are
+       saved and used to rebuild the timestamps.</p>
     <div id="correction-error"></div>
 
     {% include "_review_rows.html" %}

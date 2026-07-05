@@ -25,9 +25,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
-| 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
-| 2 | **58** — Exception Review Triage + Plain-Language Flags | Ready to implement — HIGH | **Local web.** Review page flags nearly every at-bat in cryptic jargon; triage flags into needs-action/review/informational, default to action-worthy, explain each in plain language. Live-fire feedback. |
-| 3 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Done (Pass 24); 54e Ready for review (`impl/item-54e`); 54c on `impl/item-54c`; 54d remaining | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Done (Pass 24); 54c Ready for review (`impl/item-54c`, Fable 5); 54d/54e remaining | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -4107,12 +4105,26 @@ Ready for review.**
   on Ctrl+C. `serve` is unchanged for development use.
 - Verified live: real launch, index 200, port-collision exit, clean Ctrl+C.
 
-**Phase 54e (2026-07-05, branch `impl/item-54e`, by Fable 5, based on
-`impl/item-30`) — Ready for review.** README gains a top-of-file
-"Quickstart (Mac — no coding needed)" for coaches: Terminal, Homebrew +
-Tesseract (the one non-pip dependency), Download ZIP, four-line install,
-`sidelinehd-extractor start`, restart one-liner, plain troubleshooting.
-Windows excluded (item 19). Developer sections retitled, content unchanged.
+**Phase 54c (2026-07-05, branch `impl/item-54c`, by Fable 5) — Ready for
+review.** In-app onboarding + plain language:
+
+- **First-run explainer** (`_how_it_works.html`): what the tool does, the
+  roster → submit → results → feedback flow, time expectations, and a
+  names-stay-local note. Open until the first game exists, collapsed after;
+  every other page links to `/#how-it-works`.
+- **Roster-first prompt** on the submit page when no default roster is
+  configured: explains that names are matched at run time (no backfill) and
+  offers a one-click inline paste form that creates the roster, sets it as
+  the default, and returns to the submit flow (`POST /rosters` +
+  optional `set_default`/`next` fields). Shows "Roster ready: <team>" once
+  configured.
+- **Plain-language sweep**: status/stage/kind label maps as Jinja globals
+  ("Waiting to start"/"Working"/"Reading the scoreboard"…), no
+  "OCR"/"manifest"/"job" in primary UI text (regression-tested), raw result
+  JSON behind a "Technical details" disclosure, "Apply changes" instead of
+  "Re-export", "Plays to double-check" instead of "Flagged events".
+- **Empty-state guidance** on the games list, review rows, rosters page, and
+  progress page.
 
 ### 55. Overlay Template Auto-Detection (Probe Pass)
 

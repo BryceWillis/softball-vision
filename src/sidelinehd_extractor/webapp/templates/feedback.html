@@ -39,19 +39,24 @@
 </head>
 <body>
   <p>
-    <a href="/">&larr; All jobs</a> |
-    <a href="/jobs/{{ job.id }}">Job detail</a> |
-    <a href="/jobs/{{ job.id }}/results">Results</a>
+    <a href="/">&larr; All games</a> |
+    <a href="/jobs/{{ job.id }}">Progress</a> |
+    <a href="/jobs/{{ job.id }}/results">Results</a> |
+    <a href="/#how-it-works">How this works</a>
   </p>
   <h1>Send feedback
-    <span class="job-kind">{{ job.kind }}</span>
+    <span class="job-kind">{{ kind_label(job.kind) }}</span>
     <span class="job-url">{{ job.url }}</span>
   </h1>
 
   {% if pending %}
-    <p class="pending">This job is not finished yet (status: {{ job.status }}).
-       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+    <p class="pending">This game is not finished yet ({{ status_label(job.status) | lower }}).
+       Follow along on the <a href="/jobs/{{ job.id }}">progress page</a>.</p>
   {% else %}
+    <p>Sending feedback helps improve the app. Player names are replaced with
+       placeholders automatically — the preview below is exactly what would be
+       sent, so you can check it first. Nothing is sent until you choose one of
+       the hand-off buttons.</p>
     <div class="feedback-layout">
       <main class="panel">
         <h2>Preview</h2>

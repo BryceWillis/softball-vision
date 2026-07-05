@@ -153,7 +153,7 @@ def test_status_partial_polls_while_active_and_stops_when_done(monkeypatch):
     response = client.get(f"/jobs/{active.id}/status")
     assert response.status_code == 200
     assert 'hx-trigger="every 1s"' in response.text
-    assert "download" in response.text
+    assert "Downloading the video" in response.text
 
     client.post("/jobs", data={"url": "https://youtu.be/done", "kind": "single"})
     done = store.list()[0]
@@ -176,7 +176,7 @@ def test_index_renders_form_and_jobs():
     assert "https://youtu.be/first" in response.text
     assert "https://youtube.com/playlist?list=PL2" in response.text
     # Newest first.
-    assert response.text.index("PL2") < response.text.index("first")
+    assert response.text.index("list=PL2") < response.text.index("youtu.be/first")
 
 
 def test_job_detail_shows_stage_log_and_404s():
@@ -188,9 +188,9 @@ def test_job_detail_shows_stage_log_and_404s():
 
     response = client.get(f"/jobs/{job.id}")
     assert response.status_code == 200
-    assert "download" in response.text
+    assert "Downloading the video" in response.text
     assert "warning field-never-read: right_score" in response.text
-    assert f"/jobs/{job.id}/results" in response.text
+    assert f"/jobs/{job.id}/game" in response.text
     assert "runs/fake" in response.text
 
     assert client.get("/jobs/deadbeef").status_code == 404
@@ -221,14 +221,14 @@ def test_status_partial_shows_frame_progress_during_process_stage():
 
     response = client.get(f"/jobs/{job.id}/status")
     assert response.status_code == 200
-    assert "Processing: 3 / 10 frames" in response.text
+    assert "Reading the scoreboard: frame 3 of 10" in response.text
     assert "(30%)" in response.text
 
     # Outside the process stage the plain stage word still renders.
     store.record_stage(job.id, "detect-events")
     response = client.get(f"/jobs/{job.id}/status")
-    assert "Processing:" not in response.text
-    assert "detect-events" in response.text
+    assert "Reading the scoreboard:" not in response.text
+    assert "Finding at-bats and innings" in response.text
 
 
 def test_job_detail_body_polls_in_place_and_stops_when_terminal():
@@ -247,14 +247,14 @@ def test_job_detail_body_polls_in_place_and_stops_when_terminal():
 
     partial = client.get(f"/jobs/{job.id}/detail")
     assert partial.status_code == 200
-    assert "Stage log" in partial.text
-    assert "download" in partial.text
+    assert "Progress" in partial.text
+    assert "Downloading the video" in partial.text
     assert 'hx-trigger="every 1s"' in partial.text
 
     store.update(job.id, status="done", result={"run_dir": "runs/fake"})
     finished = client.get(f"/jobs/{job.id}/detail")
     assert "every 1s" not in finished.text
-    assert f"/jobs/{job.id}/results" in finished.text
+    assert f"/jobs/{job.id}/game" in finished.text
 
     assert client.get("/jobs/deadbeef/detail").status_code == 404
 
@@ -463,7 +463,7 @@ def test_results_single_done_job_renders_copy_kit_and_review_summary(tmp_path):
     assert 'data-copy-target="game-0-at-bats-text"' in response.text
     assert "navigator.clipboard.writeText" in response.text
     # Review-report summary: flagged count plus the item-45 run warning.
-    assert "Flagged events: 3" in response.text
+    assert "Plays to double-check: 3" in response.text
     assert "right_score was never read" in response.text
     # Game label comes from the video name.
     assert "Game vs Ice.mp4" in response.text
@@ -513,7 +513,7 @@ def test_results_playlist_renders_blocks_in_order_with_error_block(tmp_path):
     assert response.text.index("1. Game 1") < response.text.index("2. Game 2")
     # Success block carries the copy kit and review summary.
     assert 'data-copy-target="game-0-chapters-text"' in response.text
-    assert "Flagged events: 3" in response.text
+    assert "Plays to double-check: 3" in response.text
     # Failure is a clearly-marked error block with no copy kit of its own.
     assert "error-block" in response.text
     assert "yt-dlp exploded" in response.text
@@ -767,7 +767,7 @@ def test_results_page_lights_up_from_report_generated_by_run_game(tmp_path, monk
 
     response = client.get(f"/jobs/{job.id}/results")
     assert response.status_code == 200
-    assert "Flagged events: 1" in response.text
+    assert "Plays to double-check: 1" in response.text
     assert "right_score" in response.text
     assert "No review report found" not in response.text
     assert 'data-copy-target="game-0-chapters-text"' in response.text
@@ -850,7 +850,7 @@ def test_review_page_lists_flagged_events_with_show_all_toggle(tmp_path, monkeyp
     assert "ocr-number=28" in response.text
     assert "Maya R." in response.text
     assert "Zoe H." not in response.text  # unflagged, hidden by default
-    assert "Flagged events: 1 of 3" in response.text
+    assert "Plays to double-check: 1 of 3" in response.text
     assert f"/jobs/{job.id}/results" in response.text
 
     everything = client.get(f"/jobs/{job.id}/review?show=all")
@@ -996,13 +996,13 @@ def test_game_page_consolidates_copy_kit_exceptions_roster_and_reexport(
     assert "navigator.clipboard.writeText" in text
     # Flagged exceptions with edit/delete/add, embedded on the same page.
     assert "ocr-number=28" in text
-    assert "Add a missing event" in text
-    assert "Save correction" in text
+    assert "Add a missing play" in text
+    assert "Save fix" in text
     # Correction forms and the show toggle stay on the game page after swaps.
     assert 'name="page" value="game"' in text
     assert f"/jobs/{job.id}/game?entry=0&amp;show=all" in text
     # Roster panel (no roster configured in this fixture) links to management.
-    assert "No roster is configured" in text
+    assert "No roster is set up" in text
     assert "/rosters" in text
     # One-click re-export action.
     assert f"/jobs/{job.id}/reexport" in text
@@ -1230,3 +1230,108 @@ def test_cli_start_port_in_use_fails_with_suggestion(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "port 9999" in err
     assert "--port" in err
+
+
+# --- Item 54c: in-app onboarding + plain language ---
+
+
+def _patch_healthy_preflight(monkeypatch):
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.app.preflight_dependencies",
+        lambda: [dict(status) for status in _HEALTHY_PREFLIGHT],
+    )
+
+
+def test_index_explainer_open_on_first_run_and_collapsed_after(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _patch_healthy_preflight(monkeypatch)
+    client, store = _make_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "How this works" in response.text
+    assert '"how-it-works" open>' in response.text
+    # Empty state: the games list explains what will appear there.
+    assert "Nothing here yet" in response.text
+
+    store.create(kind="single", url="https://youtu.be/abc123")
+    response = client.get("/")
+    # Panel persists but starts collapsed once a game exists.
+    assert "How this works" in response.text
+    assert '"how-it-works" open>' not in response.text
+    assert "Nothing here yet" not in response.text
+
+
+def test_index_roster_first_prompt_when_no_default_roster(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _patch_healthy_preflight(monkeypatch)
+    client, _ = _make_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Step 1: add your team" in response.text
+    # One-click inline paste form posts to /rosters with the 54c fields.
+    assert 'name="set_default" value="1"' in response.text
+    assert 'name="next" value="/"' in response.text
+
+
+def test_index_shows_roster_ready_when_default_configured(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _patch_healthy_preflight(monkeypatch)
+    from sidelinehd_extractor.config import ProjectConfig, write_project_config
+    from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
+
+    path = default_roster_path("Blue Thunder")
+    write_roster_csv(parse_team_list("#26 Amelia V.\n#7 Zoe H.\n", team_name="Blue Thunder"), path)
+    write_project_config(ProjectConfig(roster=path, team_name="Blue Thunder"), cwd=tmp_path)
+    client, _ = _make_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Roster ready" in response.text
+    assert "Blue Thunder" in response.text
+    assert 'name="set_default"' not in response.text
+
+
+def test_status_and_stage_words_are_plain(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+
+    response = client.get(f"/jobs/{job.id}/status")
+    assert "Waiting to start" in response.text
+    assert 'status-queued' in response.text  # CSS hook keeps the raw code
+
+    store.update(job.id, status="running")
+    store.record_stage(job.id, "parse-states")
+    response = client.get(f"/jobs/{job.id}/status")
+    assert "Working" in response.text
+    assert "Making sense of the scoreboard" in response.text
+
+    store.update(job.id, status="error", error="boom")
+    response = client.get(f"/jobs/{job.id}/status")
+    assert "Something went wrong" in response.text
+
+
+def test_primary_pages_avoid_pipeline_jargon(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _patch_healthy_preflight(monkeypatch)
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+
+    for path in ("/", f"/jobs/{job.id}", f"/jobs/{job.id}/status", "/rosters"):
+        text = client.get(path).text
+        assert "OCR" not in text, path
+        assert "manifest" not in text, path
+
+
+def test_job_detail_result_json_is_behind_technical_details(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(job.id, status="done", result={"run_dir": "runs/fake"})
+
+    response = client.get(f"/jobs/{job.id}")
+    assert "Technical details" in response.text
+    assert "runs/fake" in response.text
+    assert f"/jobs/{job.id}/game" in response.text

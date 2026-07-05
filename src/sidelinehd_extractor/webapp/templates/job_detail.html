@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Job {{ job.id[:8] }} — SidelineHD Extractor</title>
+  <title>Progress {{ job.id[:8] }} — SidelineHD Extractor</title>
   <script src="/static/htmx.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -32,8 +32,8 @@
   </style>
 </head>
 <body>
-  <p><a href="/">&larr; All jobs</a></p>
-  <h1><span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
+  <p><a href="/">&larr; All games</a> | <a href="/#how-it-works">How this works</a></p>
+  <h1><span class="job-kind">{{ kind_label(job.kind) }}</span> <span class="job-url">{{ job.url }}</span></h1>
 
   {% include "_job_detail_body.html" %}
 </body>

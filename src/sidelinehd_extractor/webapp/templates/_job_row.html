@@ -1,6 +1,6 @@
 <li id="job-{{ job.id }}">
   <div>
-    <span class="job-kind">{{ job.kind }}</span>
+    <span class="job-kind">{{ kind_label(job.kind) }}</span>
     <a href="/jobs/{{ job.id }}" class="job-url">{{ job.url }}</a>
   </div>
   {% include "_job_status.html" %}

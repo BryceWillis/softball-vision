@@ -19,51 +19,23 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### Item 54e — Non-developer quickstart docs, Mac/local (branch `impl/item-54e`, by Fable 5)
-**Files:** [README.md](README.md)
+#### Item 54c — In-app onboarding + plain language (branch `impl/item-54c`, by Fable 5)
+**Files:** [webapp/app.py](src/sidelinehd_extractor/webapp/app.py), all templates under [webapp/templates/](src/sidelinehd_extractor/webapp/templates/)
 **Status:** Ready for Review
 
-New "Quickstart (Mac — no coding needed)" section at the top of the README,
-written for a coach: open Terminal, Homebrew + `brew install tesseract`
-(the only non-pip dependency after item 54a), Download ZIP, the four-line
-venv + `pip install -e ".[web]"` block, `sidelinehd-extractor start`, and a
-"start it again later" one-liner. Includes a plain troubleshooting list
-(activate-the-venv, busy port → `--port 8001`, the in-app setup card, Send
-feedback). Windows portions deliberately excluded (item 19), with a pointer.
-Existing developer content preserved: "Setup" retitled "Developer Setup",
-"Quick Start" retitled "CLI Quick Start"; no command content changed.
+Implemented per the item 54 epic's 54c phase:
 
-**Branch note:** based on `impl/item-30` (both touch README.md); merge 30
-first.
+- **First-run explainer:** new `_how_it_works.html` partial on the home page — what the tool does, the four-step roster → submit → results → feedback flow, the ~30–45 min expectation, and a names-stay-local privacy note. Open when no games exist, collapsed after; other pages link to `/#how-it-works` (the "persistent panel" without duplicating content).
+- **Roster-first prompt (owner live-fire requirement):** when no default roster is configured, the submit page shows a "Step 1: add your team's roster" card explaining that names are matched at run time and do not backfill, with an inline paste form that creates the roster, sets it as the default, and returns to the submit page in one click (`POST /rosters` gains optional `set_default` + `next` form fields; `next` is restricted to same-app paths). When configured, a "Roster ready: <team>" line renders instead.
+- **Plain language:** `status_label`/`stage_label`/`kind_label` maps registered as Jinja globals (raw codes preserved in CSS classes/ids/tests). "Jobs"→"Your games", "Stage log"→"Progress", "Exception review"→"Double-check plays", "Copy kits"→"Your YouTube timestamps", "Flagged events"→"Plays to double-check", "Re-export"→"Apply changes", "OCR"→plain wording; raw result JSON moved behind a "Technical details" disclosure. A regression test asserts primary pages contain no "OCR"/"manifest".
+- **Empty states:** games list ("Nothing here yet…", removed on first submit), review rows ("Nothing to double-check — every play looked good"), rosters page intro, progress page ("Waiting for the first step to start…").
 
-**Deviations:** screenshots called for by the epic text are omitted — the
-repo has no image assets pipeline and screenshots of the current UI would go
-stale against items 57/58; flagged for the architect to decide whether to
-require them.
+**Deviations (local tier, flagged):**
+1. `POST /rosters` gains two *optional* form fields (`set_default`, `next`); omitted, behavior is byte-identical to item 50's contract. Additive, needed for the design's "one-click path to add the roster from the submit flow".
+2. The one-click path also writes the typed team name into `sidelinehd.cfg`'s `team_name` (via the shared set-default helper) — found via live smoke test: without it the index greeted the user with the file stem (`blue_thunder`), the exact item 52 symptom. Item 52 (CSV header) remains needed for the general reload path.
+3. Existing tests pinning old UI strings ("Processing: N / M frames", "Flagged events: N", links to `/results` for done single jobs) were updated to the new wording/targets.
 
-Tests: 397 pass (docs-only).
-
-#### Item 30 — Originality Audit vs. `jcspeegs/loups` (branch `impl/item-30`, by Fable 5)
-**Files:** new [docs/prior-art-loups.md](docs/prior-art-loups.md); [README.md](README.md) ("Prior Art and Independence" section)
-**Status:** Ready for Review
-
-Docs/research only — no code changes. Delivered all acceptance criteria:
-side-by-side comparison table (ingestion, trigger, OCR layer, reading order,
-identity, state, output, event logic, CLI, UI, thumbnails); every convergence
-point resolved as *diverged* or *retained with rationale* (OCR engine, frame
-trigger, result ordering, title composition, at-bat logic, CLI flags —
-verified our `-t`/`-o` mean timestamp/output-dir, no `-q`/`--debug`;
-thumbnails not a feature); repo hygiene grep for `loups`/`easyocr`/`ssim`
-came back clean; README gains a short independence note linking the doc.
-**OCR-backend abstraction decision:** recorded as *done in substance*
-(`create_ocr_backend` seam exists) with EasyOCR support *declined* for now
-(100MB model download conflicts with item 54's zero-friction goal; Tesseract
-is calibrated). Sources: loups GitHub README + PyPI page only; loups source
-code deliberately not read.
-
-**Deviations:** none.
-
-Tests: 397 pass, ruff clean (docs-only change).
+Tests: 406 pass (`PYTHONPATH=src python3 -m pytest tests/`), ruff clean. New tests: explainer open/collapsed, roster prompt shown/hidden, one-click create-sets-default-and-redirects (incl. offsite-`next` rejection and no-fields backward compat), plain status/stage words, jargon guard, technical-details disclosure.
 
 ## Open Items
 

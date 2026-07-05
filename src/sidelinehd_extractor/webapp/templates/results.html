@@ -50,15 +50,16 @@
   </style>
 </head>
 <body>
-  <p><a href="/">&larr; All jobs</a> | <a href="/jobs/{{ job.id }}">Job detail</a></p>
-  <h1>Results <span class="job-kind">{{ job.kind }}</span> <span class="job-url">{{ job.url }}</span></h1>
+  <p><a href="/">&larr; All games</a> | <a href="/jobs/{{ job.id }}">Progress</a> |
+     <a href="/#how-it-works">How this works</a></p>
+  <h1>Results <span class="job-kind">{{ kind_label(job.kind) }}</span> <span class="job-url">{{ job.url }}</span></h1>
 
   {% if job.status != "done" %}
-    <p>This job is not finished yet (status: {{ job.status }}).
-       Follow its progress on the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+    <p>This game is not finished yet ({{ status_label(job.status) | lower }}).
+       Follow along on the <a href="/jobs/{{ job.id }}">progress page</a>.</p>
   {% elif not blocks %}
-    <p>The job finished but produced no game results.
-       See the <a href="/jobs/{{ job.id }}">job detail page</a>.</p>
+    <p>This run finished but produced no game results.
+       See the <a href="/jobs/{{ job.id }}">progress page</a> for details.</p>
   {% else %}
     {% for block in blocks %}
       {% if block.kind == "error" %}
@@ -73,16 +74,16 @@
             <div class="health-banner">&#9888;&#65039; {{ block.health_warning }}</div>
           {% endif %}
           <p>
-            <a href="/jobs/{{ job.id }}/game?entry={{ loop.index0 }}"><strong>Manage this game</strong></a> |
-            <a href="/jobs/{{ job.id }}/review?entry={{ loop.index0 }}">Review flagged events</a> |
+            <a href="/jobs/{{ job.id }}/game?entry={{ loop.index0 }}"><strong>Open this game</strong></a> |
+            <a href="/jobs/{{ job.id }}/review?entry={{ loop.index0 }}">Double-check flagged plays</a> |
             <a href="/jobs/{{ job.id }}/feedback?entry={{ loop.index0 }}">Send feedback</a>
           </p>
           {% if block.flagged_count is not none %}
-            <p class="review-summary">Flagged events: {{ block.flagged_count }}
+            <p class="review-summary">Plays to double-check: {{ block.flagged_count }}
               {% if block.report_path %}(from <code>{{ block.report_path }}</code>){% endif %}</p>
           {% else %}
-            <p class="review-summary">No review report found for this run.
-              Generate one with <code>sidelinehd-extractor review-report</code>.</p>
+            <p class="review-summary">No review report found for this run, so
+              there is no count of plays to double-check.</p>
           {% endif %}
           {% if block.warnings %}
             <ul class="review-warnings">
