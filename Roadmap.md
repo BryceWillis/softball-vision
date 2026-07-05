@@ -4042,6 +4042,67 @@ per-device install" goal and item 19 (packaging/CI).
   coach, not a developer (screenshots, "download → double-click → paste your
   game," troubleshooting). Folds item 19's doc gaps in.
 
+**Phase 54d design (2026-07-05, by Fable 5) — pending architect validation;
+implementation not started.** macOS `.app` bundle only; the Windows installer
+stays out of scope (item 19).
+
+*Approach.* PyInstaller (`onedir` payload wrapped in a `.app`), not py2app —
+PyInstaller is actively maintained, has first-class `.app` generation
+(`BUNDLE`), and one spec file later extends to the item 19 Windows build.
+
+*The Tesseract problem — solved via the tesserocr wheel.* Bundling the brew
+`tesseract` binary means relocating its dylib tree; instead, the bundle uses
+the **`tesserocr` backend the codebase already supports** (item 41):
+tesserocr ≥2.10 publishes self-contained macOS wheels (arm64 + x86_64,
+verified on PyPI 2026-07-05) that embed libtesseract — no brew, no
+subprocess binary. Ship `eng.traineddata` as bundle data and set
+`TESSDATA_PREFIX` at startup. **Verification step 0:** confirm the wheel's
+embedded libtesseract loads on a clean Mac and that `create_ocr_backend`
+prefers tesserocr when the `tesseract` binary is absent (today
+`"tesseract"` is the default backend name; the desktop entrypoint should
+request tesserocr explicitly or fall back cleanly — small code seam to
+design during implementation).
+
+*Structure.*
+1. **`desktop.py` module** (new, testable from source without PyInstaller):
+   a menubar app via `rumps` (MIT, tiny) with items "Open SidelineHD
+   Extractor" (opens browser), "Status: running on :8000", and "Quit"
+   (graceful uvicorn shutdown). Reuses item 54b's preflight + port handling;
+   server runs on a thread via `uvicorn.Server` (not the CLI) so Quit can
+   `server.should_exit = True`. First launch auto-opens the browser (54b
+   behavior). No Dock icon (`LSUIElement=1` in Info.plist).
+2. **`packaging/sidelinehd.spec`** — PyInstaller spec collecting: webapp
+   `templates/` + `static/`, `data/` overlay templates, `eng.traineddata`,
+   imageio-ffmpeg's bundled binary (`collect_dynamic_libs`/datas), tesserocr.
+3. **`packaging/build-macos.md`** — one-page local build doc
+   (`pip install pyinstaller && pyinstaller packaging/sidelinehd.spec`);
+   ad-hoc codesign (`codesign --force --deep -s -`) and the Gatekeeper
+   right-click-Open note. Real signing/notarization deferred until
+   distribution matters (explicitly out of scope, per the epic).
+4. **CI artifact** (folds into item 19's CI seam): GitHub Actions
+   `macos-latest` job building the `.app` and uploading a zip artifact.
+
+*Working-directory decision.* The web app resolves `rosters/`, `runs/`,
+`videos/`, `sidelinehd.cfg` relative to CWD; a double-clicked `.app` starts
+at `/`. The desktop entrypoint must `os.chdir` to a stable per-user data dir
+(`~/Library/Application Support/SidelineHD Extractor/`, created on first
+run). This keeps every route/helper unchanged and the user's data in one
+findable folder. (Escalation note: this is a user-visible data-location
+choice — architect should confirm the path.)
+
+*Phasing.* 54d-1: `desktop.py` + rumps menubar, runnable from source
+(`python -m sidelinehd_extractor.desktop`), unit tests for the server
+thread lifecycle and chdir logic. 54d-2: spec + build doc, manually
+verified double-click on a clean account. 54d-3: CI artifact. Each phase is
+independently reviewable; 54d-1 has standalone value (a no-terminal
+launcher for anyone with Python installed).
+
+*Acceptance criteria.* (1) Double-clicking the `.app` on a Mac without
+brew/Python/Tesseract starts the server, opens the browser, and a real
+YouTube run completes with OCR reads; (2) Quit from the menubar stops the
+server cleanly; (3) all user data lands under Application Support; (4) the
+existing pip/CLI install paths are untouched.
+
 **Sequencing.** 54a → 54b → 54c deliver most of the value while staying
 pip-installable (ffmpeg becomes automatic, launch becomes one command, the UI
 teaches itself). 54d is the heavy lift that removes the terminal entirely; do it
