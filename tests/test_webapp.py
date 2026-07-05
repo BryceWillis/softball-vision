@@ -1103,3 +1103,130 @@ def test_cli_serve_wiring(monkeypatch, capsys):
     assert recorded["port"] == 9999
     assert recorded["reload"] is False
     assert "http://127.0.0.1:9999" in capsys.readouterr().err
+
+
+# --- Item 54a: dependency setup card on the index page ---
+
+
+_HEALTHY_PREFLIGHT = [
+    {"name": "yt-dlp", "ok": True, "detail": "/usr/local/bin/yt-dlp", "install_hint": None},
+    {"name": "ffmpeg", "ok": True, "detail": "/usr/local/bin/ffmpeg", "install_hint": None},
+    {"name": "tesseract", "ok": True, "detail": "version 5.3.4", "install_hint": None},
+]
+
+
+def _missing_tesseract_preflight():
+    statuses = [dict(status) for status in _HEALTHY_PREFLIGHT]
+    statuses[2] = {
+        "name": "tesseract",
+        "ok": False,
+        "detail": "not found on PATH",
+        "install_hint": "Install it with `brew install tesseract`.",
+    }
+    return statuses
+
+
+def test_index_shows_setup_card_when_dependency_missing(monkeypatch):
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.app.preflight_dependencies",
+        _missing_tesseract_preflight,
+    )
+    client, _ = _make_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "One-time setup needed" in response.text
+    assert "tesseract" in response.text
+    assert "brew install tesseract" in response.text
+    assert "Re-check" in response.text
+
+
+def test_index_hides_setup_card_when_dependencies_healthy(monkeypatch):
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.app.preflight_dependencies",
+        lambda: [dict(status) for status in _HEALTHY_PREFLIGHT],
+    )
+    client, _ = _make_client()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "One-time setup needed" not in response.text
+    assert 'id="setup-card"' not in response.text
+
+
+# --- Item 54b: one-command `start` launch ---
+
+
+def _patch_start_environment(monkeypatch, recorded, preflight=None, port_in_use=False):
+    def fake_run(app, **kwargs):
+        recorded["app"] = app
+        recorded.update(kwargs)
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setattr(
+        "sidelinehd_extractor.cli.webbrowser.open",
+        lambda url: recorded.setdefault("browser_urls", []).append(url),
+    )
+    monkeypatch.setattr(
+        "sidelinehd_extractor.cli.preflight_dependencies",
+        lambda: preflight if preflight is not None else list(_HEALTHY_PREFLIGHT),
+    )
+    monkeypatch.setattr(
+        "sidelinehd_extractor.cli._port_in_use",
+        lambda host, port: port_in_use,
+    )
+
+
+def test_cli_start_opens_browser_and_serves(monkeypatch, capsys):
+    recorded = {}
+    _patch_start_environment(monkeypatch, recorded)
+
+    assert main(["start", "--port", "9999"]) == 0
+
+    assert recorded["app"] == "sidelinehd_extractor.webapp.app:create_app"
+    assert recorded["factory"] is True
+    assert recorded["host"] == "127.0.0.1"
+    assert recorded["port"] == 9999
+    assert recorded["browser_urls"] == ["http://127.0.0.1:9999"]
+    out = capsys.readouterr().out
+    assert "Open http://127.0.0.1:9999" in out
+    assert "press Ctrl+C here to stop" in out
+
+
+def test_cli_start_no_browser_skips_open(monkeypatch, capsys):
+    recorded = {}
+    _patch_start_environment(monkeypatch, recorded)
+
+    assert main(["start", "--no-browser"]) == 0
+
+    assert recorded["port"] == 8000
+    assert "browser_urls" not in recorded
+    assert "Open http://127.0.0.1:8000" in capsys.readouterr().out
+
+
+def test_cli_start_reports_missing_tesseract_but_still_serves(monkeypatch, capsys):
+    recorded = {}
+    _patch_start_environment(
+        monkeypatch, recorded, preflight=_missing_tesseract_preflight()
+    )
+
+    assert main(["start", "--no-browser"]) == 0
+
+    out = capsys.readouterr().out
+    assert "[missing] tesseract" in out
+    assert "brew install tesseract" in out
+    # The server still starts: guidance, not a hard failure.
+    assert recorded["app"] == "sidelinehd_extractor.webapp.app:create_app"
+
+
+def test_cli_start_port_in_use_fails_with_suggestion(monkeypatch, capsys):
+    recorded = {}
+    _patch_start_environment(monkeypatch, recorded, port_in_use=True)
+
+    assert main(["start", "--port", "9999"]) == 1
+
+    assert "app" not in recorded
+    assert "browser_urls" not in recorded
+    err = capsys.readouterr().err
+    assert "port 9999" in err
+    assert "--port" in err

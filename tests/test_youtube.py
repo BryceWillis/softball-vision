@@ -1,3 +1,5 @@
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +13,7 @@ from sidelinehd_extractor.youtube import (
     default_ytdlp_executable,
     list_playlist_videos,
     parse_downloaded_video_path,
+    resolve_ffmpeg_location,
     resolve_ytdlp_executable,
 )
 
@@ -168,6 +171,107 @@ class YoutubeTests(unittest.TestCase):
 
         self.assertIn("actual yt-dlp problem", str(error))
         self.assertIn("yt-dlp url", str(error))
+
+    def test_resolve_ffmpeg_location_prefers_system_binary(self):
+        with patch(
+            "sidelinehd_extractor.youtube.shutil.which",
+            return_value="/usr/local/bin/ffmpeg",
+        ):
+            with patch(
+                "sidelinehd_extractor.youtube.importlib.util.find_spec",
+                side_effect=AssertionError("bundled fallback should not run"),
+            ):
+                self.assertEqual(resolve_ffmpeg_location(), "/usr/local/bin/ffmpeg")
+
+    def test_resolve_ffmpeg_location_falls_back_to_bundled_build(self):
+        fake_module = types.SimpleNamespace(
+            get_ffmpeg_exe=lambda: "/site-packages/imageio_ffmpeg/binaries/ffmpeg-osx64"
+        )
+        with patch("sidelinehd_extractor.youtube.shutil.which", return_value=None):
+            with patch(
+                "sidelinehd_extractor.youtube.importlib.util.find_spec",
+                return_value=object(),
+            ):
+                with patch.dict(sys.modules, {"imageio_ffmpeg": fake_module}):
+                    self.assertEqual(
+                        resolve_ffmpeg_location(),
+                        "/site-packages/imageio_ffmpeg/binaries/ffmpeg-osx64",
+                    )
+
+    def test_resolve_ffmpeg_location_returns_none_when_absent(self):
+        with patch("sidelinehd_extractor.youtube.shutil.which", return_value=None):
+            with patch(
+                "sidelinehd_extractor.youtube.importlib.util.find_spec",
+                return_value=None,
+            ):
+                self.assertIsNone(resolve_ffmpeg_location())
+
+    def test_resolve_ffmpeg_location_returns_none_when_bundled_build_errors(self):
+        def broken_exe():
+            raise RuntimeError("no binary for this platform")
+
+        fake_module = types.SimpleNamespace(get_ffmpeg_exe=broken_exe)
+        with patch("sidelinehd_extractor.youtube.shutil.which", return_value=None):
+            with patch(
+                "sidelinehd_extractor.youtube.importlib.util.find_spec",
+                return_value=object(),
+            ):
+                with patch.dict(sys.modules, {"imageio_ffmpeg": fake_module}):
+                    self.assertIsNone(resolve_ffmpeg_location())
+
+    def test_build_ytdlp_command_includes_ffmpeg_location_when_resolved(self):
+        with patch(
+            "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
+            return_value="/opt/ffmpeg/ffmpeg",
+        ):
+            command = build_ytdlp_command(
+                "https://www.youtube.com/watch?v=abc123",
+                Path("videos"),
+                executable=["yt-dlp"],
+            )
+
+        index = command.index("--ffmpeg-location")
+        self.assertEqual(command[index + 1], "/opt/ffmpeg/ffmpeg")
+
+    def test_build_ytdlp_command_omits_ffmpeg_location_when_unresolved(self):
+        with patch(
+            "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
+            return_value=None,
+        ):
+            command = build_ytdlp_command(
+                "https://www.youtube.com/watch?v=abc123",
+                Path("videos"),
+                executable=["yt-dlp"],
+            )
+
+        self.assertNotIn("--ffmpeg-location", command)
+
+    def test_build_ytdlp_command_explicit_none_skips_resolution(self):
+        with patch(
+            "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
+            side_effect=AssertionError("explicit None must not trigger resolution"),
+        ):
+            command = build_ytdlp_command(
+                "https://www.youtube.com/watch?v=abc123",
+                Path("videos"),
+                executable=["yt-dlp"],
+                ffmpeg_location=None,
+            )
+
+        self.assertNotIn("--ffmpeg-location", command)
+
+    def test_build_ytdlp_playlist_command_includes_ffmpeg_location_when_resolved(self):
+        with patch(
+            "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
+            return_value="/opt/ffmpeg/ffmpeg",
+        ):
+            command = build_ytdlp_playlist_command(
+                "https://youtube.com/playlist?list=abc",
+                executable=["yt-dlp"],
+            )
+
+        index = command.index("--ffmpeg-location")
+        self.assertEqual(command[index + 1], "/opt/ffmpeg/ffmpeg")
 
 
 if __name__ == "__main__":

@@ -693,6 +693,12 @@ def _tesseract_command(
     return command
 
 
+def tesseract_install_hint() -> str:
+    """Return the OS-specific one-line install instruction for Tesseract."""
+
+    return _tesseract_install_hint()
+
+
 def _tesseract_install_hint() -> str:
     if sys.platform == "darwin":
         return "Install it with `brew install tesseract`."

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
+import socket
 import sys
+import webbrowser
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -37,6 +40,7 @@ from sidelinehd_extractor.ocr import (
     ocr_image_file,
     write_preprocessed_image,
 )
+from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import write_publish_kit
 from sidelinehd_extractor.processing import process_video
 from sidelinehd_extractor.review import render_event_review
@@ -774,6 +778,71 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    """Return True when binding host:port fails because it is already taken."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError as error:
+            return error.errno in (errno.EADDRINUSE, errno.EACCES)
+    return False
+
+
+def _print_preflight_report() -> None:
+    """Print dependency health; missing deps get their install hint, no abort."""
+
+    for status in preflight_dependencies():
+        if status["ok"]:
+            print(f"  [ok] {status['name']}: {status['detail']}")
+        else:
+            print(f"  [missing] {status['name']}: {status['detail']}")
+            if status["install_hint"]:
+                print(f"            To fix: {status['install_hint']}")
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from sidelinehd_extractor.webapp.app import create_app  # noqa: F401
+    except ImportError as error:
+        print(
+            "Error: the local web app requires the optional web dependencies "
+            f"({error}). Install them with: pip install -e \".[web]\"",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("Checking dependencies...")
+    _print_preflight_report()
+
+    if _port_in_use(args.host, args.port):
+        print(
+            f"Error: port {args.port} on {args.host} is already in use — is the app "
+            f"already running? Pick another port with --port (e.g. --port {args.port + 1}).",
+            file=sys.stderr,
+        )
+        return 1
+
+    url = f"http://{args.host}:{args.port}"
+    print(f"Open {url} — press Ctrl+C here to stop.", flush=True)
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        uvicorn.run(
+            "sidelinehd_extractor.webapp.app:create_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+        )
+    except KeyboardInterrupt:
+        pass
+    print("Stopped.")
+    return 0
+
+
 def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", "-o", type=Path, default=Path("runs"))
     parser.add_argument("--template", type=Path, help="Overlay template JSON file.")
@@ -1300,6 +1369,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Auto-reload on source changes (development only).",
     )
     serve.set_defaults(func=_cmd_serve)
+
+    start = subparsers.add_parser(
+        "start",
+        help=(
+            "Start the local web app: check dependencies, open your browser, "
+            "press Ctrl+C to stop."
+        ),
+    )
+    start.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address. Loopback by default; the app has no auth, so do not expose it.",
+    )
+    start.add_argument("--port", type=int, default=8000)
+    start.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the web browser automatically.",
+    )
+    start.set_defaults(func=_cmd_start)
 
     return parser
 

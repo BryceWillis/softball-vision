@@ -19,7 +19,59 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 54a + 54b — Turnkey launch: automatic dependencies + one-command start
+**Branch:** `impl/turnkey-launch` (Fable 5) — review `git diff origin/main...impl/turnkey-launch`
+**Status:** Ready for Review
+
+**54a:** `imageio-ffmpeg` added to core dependencies. `resolve_ffmpeg_location()`
+([youtube.py](src/sidelinehd_extractor/youtube.py)) prefers system `ffmpeg` on
+PATH, falls back to the bundled `imageio_ffmpeg.get_ffmpeg_exe()`, else `None`;
+never raises, safe with the module absent (item-53 pattern). Both
+`build_ytdlp_command` and `build_ytdlp_playlist_command` auto-append
+`--ffmpeg-location <path>` when resolved. New
+[preflight.py](src/sidelinehd_extractor/preflight.py):
+`preflight_dependencies()` returns per-dep dicts (`name`, `ok`, `detail`,
+`install_hint`) reusing `default_ytdlp_executable`, `resolve_ffmpeg_location`,
+and item 42's `tesseract_version()`. Web index renders a setup card (plain
+language, copy-paste install line, Re-check button) only when a dep is
+missing.
+
+**54b:** New `start` CLI command: prints the preflight report (missing
+Tesseract → hint printed, server still starts), pre-checks the port and exits
+1 with a `--port` suggestion when busy, prints "Open http://HOST:PORT — press
+Ctrl+C here to stop.", opens the browser via `webbrowser.open` (skipped with
+`--no-browser`), and prints "Stopped." after a clean Ctrl+C shutdown. `serve`
+unchanged.
+
+**Tests:** 397 passing, ruff clean. New coverage: ffmpeg resolver (system /
+bundled / absent / bundled-build-error), builders include/omit
+`--ffmpeg-location`, explicit `ffmpeg_location=None` skips resolution,
+preflight with each dep stubbed present/absent, index card shown only when a
+dep is missing, `start` wiring (monkeypatched `uvicorn.run` +
+`webbrowser.open`: host/port/URL, `--no-browser` skip, missing-Tesseract
+still serves, busy-port exit 1). No real names in fixtures. Also verified
+live: real `start` launch → index 200 → second start on same port exits 1 →
+clean Ctrl+C shutdown.
+
+**Deviations:** (all local-tier, per the tiered policy)
+1. Builders auto-resolve ffmpeg via a module sentinel default
+   (`_AUTO_FFMPEG`) instead of requiring callers to pass a location — this is
+   what makes existing `workflow.py`/`batch.py` call sites automatic with no
+   signature churn; explicit `ffmpeg_location=None` opts out.
+2. `--ffmpeg-location` receives the ffmpeg *executable path*, not its
+   directory: the imageio-ffmpeg binary has a versioned filename
+   (`ffmpeg-osx64-v…`) a directory lookup would miss, and yt-dlp accepts
+   either form (substring-matches the basename).
+3. Added a public `tesseract_install_hint()` wrapper in `ocr.py` so
+   `preflight.py` reuses the existing private per-OS hint without importing
+   an underscore name.
+4. `preflight_dependencies()` lives in a new `preflight.py` module (design
+   left the location open) so both `cli.py` and `webapp/app.py` import it
+   without a dependency cycle; includes a small `missing_dependencies()`
+   helper.
+5. `start` is a new command alongside an unchanged `serve` (design offered
+   either); the Re-check button is a plain page reload, and the busy-port
+   check is a pre-bind socket test rather than parsing uvicorn's error.
 
 ## Open Items
 
