@@ -27,7 +27,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | 1 | **57** — Persistent Run History (results survive restart) | Ready to implement — HIGH | **Local web.** In-memory JobStore loses completed runs on restart → results 404 in the UI though artifacts are on disk. Rehydrate jobs from `runs/` at startup. Live-fire bug. |
 | 2 | **58** — Exception Review Triage + Plain-Language Flags | Ready to implement — HIGH | **Local web.** Review page flags nearly every at-bat in cryptic jargon; triage flags into needs-action/review/informational, default to action-worthy, explain each in plain language. Live-fire feedback. |
-| 3 | **59** — Reduce `possible-substitute` false positives | Ready to implement (Codex; events.py, isolated) | **Detection.** Order validator flags every non-seed batter incl. roster-confirmed ones → noise. Suppress the flag when the number is on the roster. Complements item 58. |
+| 3 | **59** — Reduce `possible-substitute` false positives | Ready for review (`impl/item-59`, Codex) | **Detection.** Order validator flags every non-seed batter incl. roster-confirmed ones → noise. Suppress the flag when the number is on the roster. Complements item 58. |
 | 4 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
@@ -4274,7 +4274,7 @@ fixes the UX regardless.
 
 ### 59. Reduce `possible-substitute` False Positives (roster-confirmed batters)
 
-Status: Ready to implement — isolated to events.py (safe alongside Fable's webapp batch)
+Status: Ready for review (`impl/item-59`, Codex) — isolated to events.py (safe alongside Fable's webapp batch)
 Source: Live-fire 2026-07-05. The order validator flags `possible-substitute`
 whenever a batter's number is not in the inferred seed batting-order cycle
 ([events.py](src/sidelinehd_extractor/events.py) ~L334). The seed rarely captures
