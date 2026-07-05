@@ -24,7 +24,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
-| 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready to implement (design pending architect validation) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
+| 2 | **55** — Overlay Template Auto-Detection (probe pass) | Ready for review (`impl/item-55`, Fable 5) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | 1 | **54** — Turnkey Web App (zero-friction install/launch/onboarding) | 54a + 54b Ready for review (`impl/turnkey-launch`, Fable 5); 54c next | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
@@ -4160,6 +4160,16 @@ run. Do not probe in `no_ocr` runs.
 **Dependencies.** Item 26 supplies the additional layout templates; until it
 lands, auto-detect is a one-candidate no-op that still validates the plumbing
 and manifest recording.
+
+**Implementation (2026-07-05, branch `impl/item-55`, by Fable 5) — Ready for
+review.** Implemented per this design with all three validation refinements:
+`template_probe.py` (5-frame probe, primary-field scoring with `inning`
+de-weighted to 0.25, 0.25 floor, tie-break to the packaged default, manifest
+`template_autodetect` section), `candidate_overlay_templates()` registry,
+`auto_detect_template=True` threaded through `run_game`/`run_youtube_game`/
+`run_playlist_batch`, CLI `--no-auto-template`. Probe failures degrade with a
+warning; `no_ocr` runs never probe. Verified live on the real 2.4h stream:
+1.9s probe, score 0.70, correct selection. 419 tests pass.
 
 **Architect validation (Pass 23).** Approach approved. Three required changes
 from live-fire evidence:

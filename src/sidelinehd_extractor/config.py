@@ -157,6 +157,18 @@ def builtin_overlay_template() -> OverlayTemplate:
     return _overlay_template_from_data(data, fallback_name=BUILTIN_TEMPLATE_NAME)
 
 
+def candidate_overlay_templates() -> "list[OverlayTemplate]":
+    """All packaged templates the item 55 probe pass may auto-select from.
+
+    Index 0 is the packaged default: probe ties and below-floor results
+    resolve to it. Today the registry holds the single calibrated layout;
+    item 26's additional layouts (Default vs Minimal x position/flip) join
+    this list as they are calibrated.
+    """
+
+    return [builtin_overlay_template()]
+
+
 def default_overlay_template() -> OverlayTemplate:
     """Return the template used when no overlay template is configured.
 
