@@ -14,6 +14,11 @@ from sidelinehd_extractor.naming import slugify
 
 ROSTER_CSV_FIELDS = ["number", "full_name", "preferred_name", "display_name", "aliases"]
 
+#: Item 52: leading comment line that round-trips the pretty team name
+#: ("St. Mary's 12U") which the slugged filename cannot carry. Readers fall
+#: back to the file stem when absent, so pre-item-52 files still load.
+ROSTER_TEAM_NAME_PREFIX = "# team_name:"
+
 
 @dataclass(frozen=True)
 class MakeRosterResult:
@@ -77,6 +82,8 @@ def write_roster_csv(roster: Roster, output_path: Path) -> MakeRosterResult:
     destination = output_path.expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8", newline="") as handle:
+        if roster.team_name:
+            handle.write(f"{ROSTER_TEAM_NAME_PREFIX} {roster.team_name}\r\n")
         writer = csv.DictWriter(handle, fieldnames=ROSTER_CSV_FIELDS)
         writer.writeheader()
         for player in roster.players:

@@ -215,6 +215,19 @@ def load_roster_csv(path: Path, team_name: Optional[str] = None) -> Roster:
     source = path.expanduser()
     players = []
     with source.open("r", encoding="utf-8", newline="") as handle:
+        # Item 52: an optional leading "# team_name: ..." comment carries the
+        # pretty team name the slugged filename cannot. Skip any leading
+        # comment lines so pre-item-52 files (no comment) parse unchanged.
+        header_team_name = None
+        while True:
+            position = handle.tell()
+            line = handle.readline()
+            if not line.startswith("#"):
+                handle.seek(position)
+                break
+            comment = line[1:].strip()
+            if comment.lower().startswith("team_name:"):
+                header_team_name = comment.split(":", 1)[1].strip() or None
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError("roster CSV must include a header row")
@@ -245,7 +258,7 @@ def load_roster_csv(path: Path, team_name: Optional[str] = None) -> Roster:
                 )
             )
 
-    return Roster(team_name=team_name or source.stem, players=players)
+    return Roster(team_name=team_name or header_team_name or source.stem, players=players)
 
 
 def load_roster_json(path: Path, team_name: Optional[str] = None) -> Roster:
