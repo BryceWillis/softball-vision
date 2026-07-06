@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import re
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -42,7 +43,9 @@ class InlineExecutor:
 def _make_client() -> tuple:
     store = JobStore()
     runner = JobRunner(store, executor=InlineExecutor(), pipeline_kwargs=lambda: {})
-    app = create_app(store=store, runner=runner)
+    # Item 57: pin rehydration to a dir that never exists so tests stay
+    # hermetic even when run from a checkout with a real runs/ directory.
+    app = create_app(store=store, runner=runner, runs_dir=Path("no-such-runs-dir"))
     return TestClient(app), store
 
 
@@ -335,7 +338,7 @@ def test_summarize_result_playlist_dataclass(tmp_path):
 
 
 def test_create_app_builds_without_binding_a_socket():
-    app = create_app()
+    app = create_app(runs_dir=Path("no-such-runs-dir"))
     routes = {route.path for route in app.routes}
     assert {
         "/",

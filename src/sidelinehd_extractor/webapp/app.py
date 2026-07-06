@@ -53,6 +53,7 @@ from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish
 from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 from sidelinehd_extractor.review_report import summarize_review_report_text
+from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
 from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
 
@@ -204,6 +205,11 @@ def _entry_label(job: Job, index: int, result: dict) -> str:
 
     if job.kind == "playlist":
         return result.get("title") or result.get("video_id") or f"Entry {index + 1}"
+    # Item 57: rehydrated runs carry a display title recovered from the run
+    # dir, which beats the raw video filename or timestamped dir name.
+    title = result.get("title")
+    if title:
+        return title
     video_path = result.get("video_path")
     run_dir = result.get("run_dir")
     return Path(video_path).name if video_path else Path(run_dir).name if run_dir else job.url
@@ -543,11 +549,21 @@ def _players_from_rows(rows: list) -> list:
     return players
 
 
-def create_app(store: Optional[JobStore] = None, runner: Optional[JobRunner] = None) -> FastAPI:
-    """Build the web application. Zero-arg call works as a uvicorn factory."""
+def create_app(
+    store: Optional[JobStore] = None,
+    runner: Optional[JobRunner] = None,
+    runs_dir: Optional[Path] = None,
+) -> FastAPI:
+    """Build the web application. Zero-arg call works as a uvicorn factory.
+
+    Item 57: completed runs found under ``runs_dir`` (default: the runner's
+    output dir) are rehydrated into the store at startup so past results
+    survive a server restart.
+    """
 
     store = store or JobStore()
     runner = runner or JobRunner(store)
+    rehydrate_jobs_from_runs(store, runs_dir if runs_dir is not None else runner.output_dir)
 
     app = FastAPI(title="SidelineHD Extractor")
     app.state.store = store

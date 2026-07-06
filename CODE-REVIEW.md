@@ -19,7 +19,22 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 57 — Persistent Run History (rehydrate completed runs at web startup)
+**Branch:** `impl/item-57` (Fable 5)
+**Files:** new [history.py](src/sidelinehd_extractor/webapp/history.py); [app.py](src/sidelinehd_extractor/webapp/app.py) (`create_app` startup hook, `_entry_label` title preference); [jobs.py](src/sidelinehd_extractor/webapp/jobs.py) (`JobRunner.output_dir` property); tests in `tests/test_webapp_history.py`.
+
+**Implementation note.** New `rehydrate_jobs_from_runs(store, runs_dir)` scans `runs/` at `create_app` time and seeds a done single job per *complete* run dir: parseable `manifest.json`, loadable non-empty `events.jsonl`, and both text exports at the manifest-implied paths (`load_export_options` + `export_paths`). Incomplete/in-flight/legacy/corrupt run dirs and 0-event runs are skipped, never fatal (per-dir `try/except`). Dedupe is by resolved `run_dir` against jobs already in the store (covers playlist entries too). Recovered jobs get `created_at`/`finished_at` from the manifest (dir-mtime fallback) and are inserted oldest-first so `JobStore.list()` yields newest-first. Labels: manifest `youtube.title`, else `game_name_for_run` (info.json title → video stem → stripped dir name), rendered as `"<title> (processed YYYY-MM-DD)"`. Result dict mirrors `summarize_result`'s single shape plus `title` and `recovered: True`. Verified against the real `runs/` dir: 19 runs recovered with team/date labels; the live-fire 62-event run's index/results/game/review/feedback pages all return 200 on a fresh store. 458 tests + 7 new pass; ruff green.
+
+**Deviations (tiered policy):**
+- *Playlist per-entry rehydration (design point 4):* implemented by recovering each entry's run dir directly from `runs/` as a single job rather than parsing `videos/playlist_state.jsonl` — run dirs are canonical and the state file adds only the title, which the manifest `youtube` section already records. Judged local; flagging since the design named the state file.
+- *`_entry_label` now prefers `result["title"]` for single jobs* so recovered runs show the game title on results/game blocks instead of the raw video filename. Local view-layer change; live jobs are unaffected (they carry no `title`).
+- *`JobRunner.output_dir` property added*; `create_app(runs_dir=None)` defaults rehydration to the runner's output dir so the pair can't disagree.
+- *Existing tests updated for hermeticity:* `_make_client()` and the zero-arg `create_app` test now pass `runs_dir=Path("no-such-runs-dir")` so the suite doesn't scan a real `runs/` when run from a checkout that has one.
+- *0-event runs are skipped entirely* (design 5 says "skipped from the results list ... but its health warning still applies where surfaced"): with the in-memory store there is no other surface for a hidden run's warning, so nothing lists it. Health warnings for listed runs are preserved via `result["health_warning"]` + the manifest fallback.
+
+## Open Items
+
+_No open items._
 
 ## Open Items
 
