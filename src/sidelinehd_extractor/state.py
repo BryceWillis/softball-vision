@@ -267,42 +267,46 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
     """Fill short OCR gaps from adjacent stable state values."""
 
     smoothed = []
-    next_innings = _next_known_values(states, "inning")
-    next_halves = _next_known_values(states, "half")
-    previous_inning = None
-    previous_half = None
 
     for index, state in enumerate(states):
         inning = state.inning
         half = state.half
+        previous_inning = _nearby_known_value(states, index, "inning", -1)
+        next_inning = _nearby_known_value(states, index, "inning", 1)
+        previous_half = _nearby_known_value(states, index, "half", -1)
+        next_half = _nearby_known_value(states, index, "half", 1)
 
         if inning is None:
-            inning = previous_inning if previous_inning is not None else next_innings[index]
+            inning = previous_inning if previous_inning is not None else next_inning
         if half is None:
             if inning is not None and previous_inning is not None and inning > previous_inning:
                 half = HalfInning.TOP
             else:
-                half = previous_half if previous_half is not None else next_halves[index]
-
-        if inning is not None:
-            previous_inning = inning
-        if half is not None:
-            previous_half = half
+                half = previous_half if previous_half is not None else next_half
 
         smoothed.append(replace(state, inning=inning, half=half))
 
     return smoothed
 
 
-def _next_known_values(states: List[OverlayState], attr_name: str) -> List[object]:
-    values = [None] * len(states)
-    next_value = None
-    for index in range(len(states) - 1, -1, -1):
-        current_value = getattr(states[index], attr_name)
-        if current_value is not None:
-            next_value = current_value
-        values[index] = next_value
-    return values
+def _nearby_known_value(
+    states: List[OverlayState],
+    index: int,
+    attr_name: str,
+    direction: int,
+) -> object:
+    timestamp_seconds = states[index].timestamp_seconds
+    cursor = index + direction
+    while 0 <= cursor < len(states):
+        candidate = states[cursor]
+        gap_seconds = abs(candidate.timestamp_seconds - timestamp_seconds)
+        if gap_seconds > _MAX_STATE_SMOOTH_GAP_SECONDS:
+            return None
+        value = getattr(candidate, attr_name)
+        if value is not None:
+            return value
+        cursor += direction
+    return None
 
 
 def parse_samples_file(samples_path: Path, output_path: Optional[Path] = None) -> StateParseResult:
@@ -339,6 +343,7 @@ def _sample_text(samples_by_field: Dict[str, OCRSample], field_name: str) -> Opt
 # pregame speck reading "7" at 0.007) sit near zero, and one such read can
 # smooth into a phantom inning across the whole pregame span.
 _MIN_SCOREBUG_READ_CONFIDENCE = 0.5
+_MAX_STATE_SMOOTH_GAP_SECONDS = 15.0
 
 
 def _confident_sample_text(

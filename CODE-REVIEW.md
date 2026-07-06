@@ -19,7 +19,17 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### CR-53 — First Top 1 chapter emitted from banner-only pregame span and used opening score semantics
+**File:** [state.py](src/sidelinehd_extractor/state.py) — `smooth_states`; [events.py](src/sidelinehd_extractor/events.py) — `_game_active_timestamp` / `_apply_half_inning_end_scores`
+**Status:** Ready for Review
+
+User-reported live-fire bug from `PrITEF1eozM`: the regenerated Description Chapters improved overall, but the opening `Top 1` line exported at `10:40` without a score suffix. Frame inspection showed `10:40` was still pregame/banner-only UI, while the full active scorebug first appeared around `18:04` (sampled at `18:00`). Saved states exposed the root cause: `smooth_states()` filled `inning=1, half=top` across a long banner-only gap where raw inning/count/score fields were blank, and the first-chapter activity gate could then accept banner noise. The score suffix issue was secondary: half-inning chapter scores should represent the score at the end of that half, inferred from the next half-inning start or from FINAL for the last half.
+
+**Implementation note.** Replaced the inference-only patch with a root fix. `smooth_states()` now fills only nearby OCR gaps (15s cap) instead of propagating future inning/half values across multi-minute pregame/banner spans. `_game_active_timestamp()` now recognizes a real active scorebug frame at `0-0` only when raw inning/count/left-score/right-score fields are present together, so banner-only states cannot place the first chapter even if old saved states already contain a smoothed half. After event detection, half-inning score metadata is rewritten to end-of-half semantics: each half gets the next half's starting score, and the last half gets the FINAL score when available. Re-parsing/re-detecting/re-exporting the saved `PrITEF1eozM` samples into `/private/tmp` now starts `18:00 Top 1 (0-0)` and shows later half scores as ending scores (for example `Bottom 6 (2-1)` from the `Top 7` start score).
+
+**Deviations:** User-directed behavior update outside a roadmap item. This intentionally changes chapter score semantics from score-at-half-start to score-at-half-end, per Ryan's clarification.
+
+**Verification:** `PYTHONPATH=src python3 -m pytest tests/` → 497 passed; `python3 -m ruff check .` → passed. Live-fire recheck: `parse-states` / `detect-events` / `export` against the saved `PrITEF1eozM` samples produced `0:00 Pregame`, `18:00 Top 1 (0-0)`, `26:10 Bottom 1 (0-0)` in `/private/tmp/pritef-root-chapters.txt`.
 
 ## Open Items
 
