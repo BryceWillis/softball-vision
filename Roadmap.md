@@ -25,10 +25,10 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 |---|------|--------|-----------|
 | 1 | **63** — Deep-link review rows to the source video timestamp | Ready to implement | When a play needs a fix (e.g. "Couldn't read the batter's name"), the review UI should link its timestamp straight to the YouTube video at that exact moment, so the coach can verify in one click instead of scrubbing manually. Design filed below. Prerequisite: persist `youtube.video_id` on single runs too (batch already does). |
 | — | **62** — Improve Batter-Number OCR | Done (Pass 28) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
-| 1 | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Ready for review (`impl/accuracy`, Fable 5) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
-| — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
+| — | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Done (Pass 26) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
+| — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Done (Pass 23) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Done (Pass 25) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
-| — | **54** — Turnkey Web App (epic) | 54a/b/c/e Done; 54d-1/2 ready for review (`impl/item-54d-impl`, Fable 5) | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
+| — | **54** — Turnkey Web App (epic) | Done (54a/b/c/e + 54d, Passes 23–27) | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
 | — | **45** — Fix `right_score` Calibration + Empty-Field Guard | Done (Pass 14) | Recalibrated `right_score` from real Victor Vipers frames and added field-read stats plus all-empty warnings in manifest, run output, and review reports. Follow-up: CR-50 (harden review-report manifest read). |
 | — | **46** — Web App 39a: Skeleton + Job Runner | Done (Pass 15) | **Web track (Fable 5).** FastAPI localhost app: paste URL/playlist → background job → live HTMX status. Approved Pass 15; follow-up CR-51 (submit-error slot cleared by status polls). |
 | — | **47** — Web App 39b: Results + Paste Kits | Done (Pass 16) | **Web track (Fable 5).** `GET /jobs/{id}/results` with stacked per-game copy kits (via new `render_publish_kit_fragment`) + review-report flagged count/run warnings. Approved Pass 16; CR-50/CR-51 resolved. **Review summary is dark until item 48** (nothing writes `review_report.md` during runs). |
@@ -319,14 +319,7 @@ Acceptance criteria:
 ### 19. Full Windows Support
 
 Source: Product backlog
-Status: Ready for Review
-
-Implementation note for review:
-- Added `PlaylistEntry` plus flat-playlist yt-dlp enumeration in `youtube.py`.
-- Added reusable `batch.py` orchestration with JSONL state, `batch_summary.md`, skip-on-complete, `--force`, `--limit`, `--start-index`, retry isolation, per-entry result summaries, and per-run YouTube metadata in `manifest.json`.
-- Added `run-playlist` CLI command sharing the existing run-processing arguments and YouTube download options.
-- Documented playlist usage in `README.md` and added tests for enumeration, batch ordering, resume/skip, force, retry failure isolation, slicing, and CLI parsing.
-- Pass 12 CR fixes are Ready for Review in `CODE-REVIEW.md`: retries are scoped to `YTDLPError`, skip validates existing outputs, state is compacted atomically, manifest/JSONL helpers are shared, and the batch internals were tidied.
+Status: Ready to implement
 
 Make the tool fully usable on Windows with accurate documentation and a CI
 matrix that catches regressions on both platforms.
