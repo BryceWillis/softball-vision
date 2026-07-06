@@ -32,10 +32,11 @@ There are **two implementers**: Codex, and Claude Code running on **Fable 5** (`
 3. **Stop for items marked "Needs design."** Do not start implementation. Ask the architect (Opus) to write the full design first.
 4. **Implement per the architect's design** in `Roadmap.md`, following the **design-deviation policy** below.
 5. **Update `CODE-REVIEW.md`** for any CR being fixed: set status to **Ready for Review** and add a short implementation note describing what was done and how tests were added.
-6. **Run the full test suite** before considering work done. All tests must pass.
-7. **Update `Roadmap.md`** — move the implemented item's status to "Ready for review" in the queue table.
+6. **Report out-of-scope bugs as you find them.** If you notice a bug unrelated to the item you're implementing, add it to `CODE-REVIEW.md` as a new CR item with status **Reported** (next available CR-XX number, file/line, a short repro/description). Do not fix it inline — that's scope creep and dodges review. The architect triages `Reported` items into `Open` (accepted) or `Deferred`/rejected at the next review pass.
+7. **Run the full test suite** before considering work done. All tests must pass.
+8. **Update `Roadmap.md`** — move the implemented item's status to "Ready for review" in the queue table.
 
-An implementer does **not** write designs, move CRs to Resolved, or conduct code review passes — those belong to the Architect (Opus).
+An implementer does **not** write designs, move CRs to Resolved, decide `Reported` → `Open`/`Deferred`, or conduct code review passes — those belong to the Architect (Opus).
 
 ### Design-Deviation Policy (tiered)
 
@@ -86,6 +87,9 @@ RULES:
   Either way, NEVER deviate silently — record every deviation as a "Deviations:"
   line in your CODE-REVIEW.md note.
 - Reuse existing pipeline/helpers; do not re-implement what the codebase has.
+- If you spot a bug outside this item's scope, don't fix it inline — add it to
+  CODE-REVIEW.md as a new CR item with status "Reported" (file/line + short
+  description) for the architect to triage next pass.
 - Security: never write real player names to committed files; fixtures use
   sanitized placeholders. Names only leave the machine via item 38/39e.
 - Run the full suite (PYTHONPATH=src python3 -m pytest tests/) and ruff; all green.
@@ -114,12 +118,14 @@ Ryan: "design item N"
 Ryan: "implement" (or an implementer — Codex or Fable 5 — picks up next queue item)
   → implementer checks CODE-REVIEW.md for Open items first
   → implementer implements, updates CR status to "Ready for Review"
+  → if implementer spots an unrelated bug, it files a new CR as "Reported" (not fixed inline)
   → implementer runs tests (must all pass)
   → implementer updates Roadmap.md queue status
 
 Ryan: "ready for a review"
   → Claude runs /code-review skill
   → Claude writes findings (CR-XX) to CODE-REVIEW.md as Open items
+  → Claude triages any "Reported" items into Open or Deferred
   → Claude optionally resolves already-Ready-for-Review items in the same pass
 
 Ryan: "Codex completed the CRs, please review"
@@ -149,8 +155,9 @@ Ryan: "Codex completed the CRs, please review"
 
 | Status | Set by | Meaning |
 |--------|--------|---------|
-| Open | Architect | Finding accepted; Codex should implement. |
-| Ready for Review | Codex | Implementation done and tested; awaiting architect confirmation. |
+| Reported | Implementer | Bug found during implementation, outside current item's scope; awaiting architect triage. |
+| Open | Architect | Finding accepted (from review, or triaged from Reported); implementer should implement. |
+| Ready for Review | Implementer | Implementation done and tested; awaiting architect confirmation. |
 | Resolved | Architect | Implementation verified; item moved to Resolved section. |
 | Deferred | Architect | Valid finding, intentionally postponed. |
 

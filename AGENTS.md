@@ -30,6 +30,7 @@ Work only in that worktree; never edit the shared `main` working tree while anot
 - Implement per the architect's design in `Roadmap.md`. Do not reinterpret the design without flagging it.
 - For items marked **Needs design**: stop and ask the architect (Claude) to write the design before starting.
 - Update `CODE-REVIEW.md` CR status to **Ready for Review** after implementing a CR; include a short implementation note.
+- If you spot a bug outside the current item's scope, don't fix it inline — log it in `CODE-REVIEW.md` as a new CR item with status **Reported** (file/line + short description) for the architect to triage.
 - Run the full test suite before considering any work done — all tests must pass.
 - Update the Roadmap queue table status after completing a roadmap item.
 

@@ -8,12 +8,13 @@ This document is the running record of architectural observations, bugs, and imp
 
 ## Status Workflow
 
-- **Open**: reviewed finding is accepted as work to do.
-- **Ready for Review**: Codex has implemented the change and verified tests; awaiting reviewer/user confirmation.
+- **Reported**: an implementer (Codex or Fable 5) found a bug outside the scope of the item it was working on and logged it here instead of fixing it inline. Not yet triaged.
+- **Open**: reviewed finding is accepted as work to do (either from an architect review pass, or triaged up from Reported).
+- **Ready for Review**: the implementer has implemented the change and verified tests; awaiting reviewer/user confirmation.
 - **Resolved**: reviewer/user has confirmed the implementation and moved the item to the Resolved section.
 - **Deferred**: valid finding, but intentionally postponed.
 
-Codex may update an Open item to **Ready for Review** after implementing it and should include a short implementation note. The architect (Claude) owns moving items from Ready for Review to Resolved after verifying the diff and behavior. **Approval is signalled by a git commit** — the architect stages and commits all reviewed changes as the final step of a successful review pass. If findings require fixes, no commit is made until all open items are resolved.
+Implementers may add new **Reported** items directly (bug found while working on something else — file/line + short description, no fix), and may update an **Open** item to **Ready for Review** after implementing it with a short implementation note. Only the architect (Claude) triages Reported → Open/Deferred, and only the architect moves items from Ready for Review to Resolved after verifying the diff and behavior. **Approval is signalled by a git commit** — the architect stages and commits all reviewed changes as the final step of a successful review pass. If findings require fixes, no commit is made until all open items are resolved.
 
 ---
 
@@ -21,9 +22,9 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 _No items ready for review._
 
-## Open Items
+## Reported Items
 
-_No open items._
+_No reported bugs pending triage._
 
 ## Open Items
 
