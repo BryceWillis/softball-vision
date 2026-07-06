@@ -845,6 +845,48 @@ def _make_review_client(tmp_path, monkeypatch):
     return client, job, run_dir, at_bats_path
 
 
+def test_review_row_time_deep_links_to_source_video(tmp_path, monkeypatch):
+    """Item 63: a YouTube-sourced run's row times link to the video moment."""
+
+    from sidelinehd_extractor.processing import update_manifest_section
+
+    client, job, run_dir, _ = _make_review_client(tmp_path, monkeypatch)
+    update_manifest_section(
+        run_dir / "manifest.json",
+        "youtube",
+        {"video_id": "abc123def45", "url": "https://youtu.be/abc123def45"},
+    )
+
+    response = client.get(f"/jobs/{job.id}/review?show=all")
+    assert response.status_code == 200
+    # Jinja autoescapes the href, so & renders as &amp;.
+    assert 'href="https://www.youtube.com/watch?v=abc123def45&amp;t=605s"' in response.text
+    assert 'href="https://www.youtube.com/watch?v=abc123def45&amp;t=700s"' in response.text
+    assert 'target="_blank"' in response.text
+    assert 'rel="noopener"' in response.text
+
+
+def test_review_row_time_is_plain_text_without_video_id(tmp_path, monkeypatch):
+    """Item 63: local runs (no youtube section) and blank ids render no anchor."""
+
+    from sidelinehd_extractor.processing import update_manifest_section
+
+    client, job, run_dir, _ = _make_review_client(tmp_path, monkeypatch)
+
+    response = client.get(f"/jobs/{job.id}/review?show=all")
+    assert response.status_code == 200
+    assert "youtube.com/watch" not in response.text
+    assert '<span class="row-time">' in response.text
+
+    # An older YouTube manifest with a blank video_id degrades the same way.
+    update_manifest_section(
+        run_dir / "manifest.json", "youtube", {"video_id": "", "url": ""}
+    )
+    response = client.get(f"/jobs/{job.id}/review?show=all")
+    assert response.status_code == 200
+    assert "youtube.com/watch" not in response.text
+
+
 def test_review_page_lists_flagged_events_with_show_all_toggle(tmp_path, monkeypatch):
     client, job, _, _ = _make_review_client(tmp_path, monkeypatch)
 

@@ -11,10 +11,12 @@ from sidelinehd_extractor.youtube import (
     build_ytdlp_playlist_command,
     build_ytdlp_command,
     default_ytdlp_executable,
+    extract_video_id,
     list_playlist_videos,
     parse_downloaded_video_path,
     resolve_ffmpeg_location,
     resolve_ytdlp_executable,
+    youtube_watch_url,
 )
 
 
@@ -272,6 +274,55 @@ class YoutubeTests(unittest.TestCase):
 
         index = command.index("--ffmpeg-location")
         self.assertEqual(command[index + 1], "/opt/ffmpeg/ffmpeg")
+
+    def test_youtube_watch_url_builds_timestamped_link(self):
+        self.assertEqual(
+            youtube_watch_url("abc123", 2375),
+            "https://www.youtube.com/watch?v=abc123&t=2375s",
+        )
+
+    def test_youtube_watch_url_floors_fractional_seconds(self):
+        self.assertEqual(
+            youtube_watch_url("abc123", 2375.9),
+            "https://www.youtube.com/watch?v=abc123&t=2375s",
+        )
+
+    def test_youtube_watch_url_zero_seconds_is_valid(self):
+        self.assertEqual(
+            youtube_watch_url("abc123", 0),
+            "https://www.youtube.com/watch?v=abc123&t=0s",
+        )
+
+    def test_extract_video_id_from_watch_url(self):
+        self.assertEqual(
+            extract_video_id("https://www.youtube.com/watch?v=abc123def45&list=PL1"),
+            "abc123def45",
+        )
+
+    def test_extract_video_id_from_short_link(self):
+        self.assertEqual(
+            extract_video_id("https://youtu.be/abc123def45?t=12"),
+            "abc123def45",
+        )
+
+    def test_extract_video_id_from_path_forms(self):
+        self.assertEqual(
+            extract_video_id("https://www.youtube.com/live/abc123def45"),
+            "abc123def45",
+        )
+        self.assertEqual(
+            extract_video_id("https://youtube.com/shorts/abc123def45"),
+            "abc123def45",
+        )
+        self.assertEqual(
+            extract_video_id("https://www.youtube.com/embed/abc123def45"),
+            "abc123def45",
+        )
+
+    def test_extract_video_id_unrecognizable_returns_none(self):
+        self.assertIsNone(extract_video_id("https://example.com/watch?v=abc123"))
+        self.assertIsNone(extract_video_id("https://www.youtube.com/playlist?list=PL1"))
+        self.assertIsNone(extract_video_id("not a url"))
 
 
 if __name__ == "__main__":
