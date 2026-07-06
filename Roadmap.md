@@ -4413,9 +4413,36 @@ the final score and every chapter `(a-b)` suffix. Reuse item 55's
 2. Legitimate two-digit scores up to the max are still accepted (21 fine).
 3. Tests: an implausible score is dropped; final-score selection ignores it.
 
+**Also (game 2, PrITEF1eozM):** `left_score` under-reads single digits — 13/474 early vs 379/474 late (fires mainly once the score is two digits), so early scores drop entirely (a suffix needs both scores). Same scorebug-region cluster; recalibrate `left_score` so single digits (incl. "0") read reliably.
+
 **Root-cause note (feeds item 56).** The same base diamonds corrupt BOTH
 `left_score` and the `inning` region. The deeper fix is recalibrating those
 regions to exclude the diamonds — fold into item 56 (frame evidence now captured).
+
+### 61. At-Bat Under-Detection (missing batters, esp. early innings)
+
+Status: Ready to implement — HIGH
+Source: Live-fire 2026-07-06 (game 2, PrITEF1eozM). Many at-bats missing — innings
+show only ~2 batters despite 3 outs. The run detected only **23 at_bat_start
+events for a full game** (expect ~40-60+). Read-rate evidence: `batter_number`
+reads poorly early (55/474 first third) while `batter_card_number` reads much
+better (233/474) — so at-bats keyed on `batter_number` are missed when it is
+empty even though the card number is available.
+
+**Change (investigate + fix).**
+- For at-bat / batter-change detection, fall back to `batter_card_number` (and/or
+  the lineup strip) when `batter_number` is empty, so a readable card still yields
+  an at-bat.
+- Review the at-bat spacing gate (item 31) / batter-change thresholds for
+  over-merging consecutive at-bats early in the game.
+- Validate on game 2: at-bat count should rise toward a plausible per-half-inning
+  count; spot-check the first 3 innings the owner flagged.
+
+**Acceptance criteria.**
+1. Detection uses the best available batter field (number -> card number -> strip).
+2. The game-2 run yields a plausible number of at-bats per inning (no 3-out
+   innings with only 2 batters where a batter was clearly readable).
+3. Existing detection tests (items 31/32/34) stay green.
 
 ## Discussion / Later Deliverables
 
