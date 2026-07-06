@@ -3,6 +3,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
+from sidelinehd_extractor.constants import INNING_ARROW_DOWN, INNING_ARROW_UP
 from sidelinehd_extractor.models import HalfInning, OCRSample, OverlayState
 from sidelinehd_extractor.processing import write_jsonl
 from sidelinehd_extractor.state import (
@@ -35,6 +36,16 @@ class StateParsingTests(unittest.TestCase):
         self.assertIsNone(parse_score(""))
         self.assertIsNone(parse_score(None))
         self.assertIsNone(parse_score("noise"))
+
+    def test_parse_score_rejects_implausible_reads(self):
+        # Item 60: "164" is the real score 16 with a fused scorebug glyph.
+        self.assertIsNone(parse_score("164"))
+        self.assertIsNone(parse_score("51"))
+        self.assertIsNone(parse_score("100"))
+        # Legitimate scores up to the cap still parse.
+        self.assertEqual(parse_score("0"), 0)
+        self.assertEqual(parse_score("21"), 21)
+        self.assertEqual(parse_score("50"), 50)
 
     def test_normalize_game_status_detects_final(self):
         self.assertEqual(_normalize_game_status("FINAL"), "final")
@@ -136,6 +147,105 @@ class StateParsingTests(unittest.TestCase):
 
         self.assertEqual(state.away_score, 2)
         self.assertEqual(state.home_score, 1)
+
+    def test_state_from_samples_drops_implausible_score_reads(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "left_score": OCRSample(600.0, "left_score", "164", normalized_text="164"),
+                "right_score": OCRSample(600.0, "right_score", "21", normalized_text="21"),
+            },
+        )
+
+        self.assertIsNone(state.away_score)
+        self.assertEqual(state.home_score, 21)
+
+    def test_state_from_samples_prefers_pixel_arrow_half_over_text(self):
+        state = state_from_samples(
+            600.0,
+            {
+                # Text-only parsing would call "43" a top half ("4" prefix);
+                # the pixel-detected down arrow must win.
+                "inning": OCRSample(
+                    600.0,
+                    "inning",
+                    "43",
+                    normalized_text="43",
+                    source_detail=INNING_ARROW_DOWN,
+                ),
+            },
+        )
+
+        self.assertEqual(state.inning, 3)
+        self.assertEqual(state.half, HalfInning.BOTTOM)
+
+    def test_state_from_samples_ignores_low_confidence_scorebug_reads(self):
+        # A pregame speck OCR'd as "7" at near-zero confidence must not
+        # become an inning (it would smooth into a phantom across the gap).
+        state = state_from_samples(
+            600.0,
+            {
+                "inning": OCRSample(600.0, "inning", "7", normalized_text="7", confidence=0.01),
+                "left_score": OCRSample(
+                    600.0, "left_score", "8", normalized_text="8", confidence=0.2
+                ),
+                "right_score": OCRSample(
+                    600.0, "right_score", "3", normalized_text="3", confidence=0.9
+                ),
+            },
+        )
+
+        self.assertIsNone(state.inning)
+        self.assertIsNone(state.away_score)
+        self.assertEqual(state.home_score, 3)
+
+    def test_state_from_samples_accepts_scorebug_reads_without_confidence(self):
+        state = state_from_samples(
+            600.0,
+            {"inning": OCRSample(600.0, "inning", "5", normalized_text="5")},
+        )
+
+        self.assertEqual(state.inning, 5)
+
+    def test_state_from_samples_blanks_scorebug_values_during_pregame(self):
+        state = state_from_samples(
+            300.0,
+            {
+                "game_status": OCRSample(
+                    300.0, "game_status", "GAME STARTING SOON", normalized_text="GAME STARTING SOON"
+                ),
+                "inning": OCRSample(300.0, "inning", "7", normalized_text="7", confidence=0.9),
+                "left_score": OCRSample(
+                    300.0, "left_score", "8", normalized_text="8", confidence=0.9
+                ),
+                "right_score": OCRSample(
+                    300.0, "right_score", "0", normalized_text="0", confidence=0.9
+                ),
+            },
+        )
+
+        self.assertEqual(state.metadata["game_status"], "pregame")
+        self.assertIsNone(state.inning)
+        self.assertIsNone(state.half)
+        self.assertIsNone(state.away_score)
+        self.assertIsNone(state.home_score)
+
+    def test_state_from_samples_uses_up_arrow_when_text_has_no_half(self):
+        state = state_from_samples(
+            600.0,
+            {
+                "inning": OCRSample(
+                    600.0,
+                    "inning",
+                    "5",
+                    normalized_text="5",
+                    source_detail=INNING_ARROW_UP,
+                ),
+            },
+        )
+
+        self.assertEqual(state.inning, 5)
+        self.assertEqual(state.half, HalfInning.TOP)
 
     def test_state_from_samples_stores_game_status(self):
         state = state_from_samples(

@@ -13,7 +13,10 @@ from sidelinehd_extractor.constants import (
     BATTER_SOURCE_BATTER_CARD,
     BATTER_SOURCE_LINEUP_NUMBER,
     BATTER_SOURCE_LINEUP_STRIP,
+    INNING_ARROW_DOWN,
+    INNING_ARROW_UP,
     LINEUP_STRIP_CONFIDENCE_KEY,
+    MAX_PLAUSIBLE_SCORE,
 )
 from sidelinehd_extractor.models import HalfInning, OCRSample, OverlayState
 from sidelinehd_extractor.processing import write_jsonl
@@ -84,14 +87,23 @@ def parse_jersey_number(value: Optional[str]) -> Optional[str]:
 
 
 def parse_score(value: Optional[str]) -> Optional[int]:
-    """Parse a score digit from OCR text."""
+    """Parse a score digit from OCR text.
+
+    Implausible reads (3+ digits or above ``MAX_PLAUSIBLE_SCORE``) are OCR
+    noise — e.g. a scorebug glyph fused onto the real score ("164" for 16) —
+    and are treated as missing rather than as values (item 60).
+    """
 
     if not value:
         return None
     match = re.search(r"\d+", value)
     if not match:
         return None
-    return int(match.group(0))
+    digits = match.group(0)
+    score = int(digits)
+    if len(digits) > 2 or score > MAX_PLAUSIBLE_SCORE:
+        return None
+    return score
 
 
 def _normalize_game_status(value: Optional[str]) -> Optional[str]:
@@ -168,10 +180,24 @@ def state_from_samples(
 
     count_text = _sample_text(samples_by_field, "count")
     balls, strikes = parse_count(count_text)
-    inning, half = parse_inning(_sample_text(samples_by_field, "inning"))
-    away_score = parse_score(_sample_text(samples_by_field, "left_score"))
-    home_score = parse_score(_sample_text(samples_by_field, "right_score"))
     game_status = _normalize_game_status(_sample_text(samples_by_field, "game_status"))
+    inning, half = parse_inning(_confident_sample_text(samples_by_field, "inning"))
+    arrow_half = _inning_arrow_half(samples_by_field.get("inning"))
+    if arrow_half is not None and inning is not None:
+        # The pixel-detected arrow direction beats any text-derived guess —
+        # but only alongside a real inning read; the pregame overlay's green
+        # text triggers arrow detections with no inning on screen.
+        half = arrow_half
+    away_score = parse_score(_confident_sample_text(samples_by_field, "left_score"))
+    home_score = parse_score(_confident_sample_text(samples_by_field, "right_score"))
+    if game_status == "pregame":
+        # The pregame scorebug shows no game state; anything OCR'd from it
+        # (countdown fragments, status-text artifacts) is noise that would
+        # otherwise smooth/confirm into phantom innings and chapters.
+        inning = None
+        half = None
+        away_score = None
+        home_score = None
     batter_card_text = _sample_text(samples_by_field, "batter_card_number")
     lineup_strip_sample = samples_by_field.get("lineup_strip")
     lineup_strip_confidence = (
@@ -289,9 +315,44 @@ def parse_samples_file(samples_path: Path, output_path: Optional[Path] = None) -
     return StateParseResult(input_path=source, output_path=destination, state_count=len(states))
 
 
+def _inning_arrow_half(sample: Optional[OCRSample]) -> Optional[HalfInning]:
+    """Map the inning sample's pixel-detected arrow direction to a half."""
+
+    if sample is None:
+        return None
+    if sample.source_detail == INNING_ARROW_UP:
+        return HalfInning.TOP
+    if sample.source_detail == INNING_ARROW_DOWN:
+        return HalfInning.BOTTOM
+    return None
+
+
 def _sample_text(samples_by_field: Dict[str, OCRSample], field_name: str) -> Optional[str]:
     sample = samples_by_field.get(field_name)
     if sample is None:
+        return None
+    return sample.normalized_text or sample.raw_text
+
+
+# Item 40 confidence floor for the scorebug numeric cluster. Measured on real
+# footage: genuine digit reads score 0.75-0.96 while noise artifacts (e.g. a
+# pregame speck reading "7" at 0.007) sit near zero, and one such read can
+# smooth into a phantom inning across the whole pregame span.
+_MIN_SCOREBUG_READ_CONFIDENCE = 0.5
+
+
+def _confident_sample_text(
+    samples_by_field: Dict[str, OCRSample], field_name: str
+) -> Optional[str]:
+    """Like ``_sample_text`` but drops low-confidence scorebug reads.
+
+    A missing confidence (backends that do not report one) is accepted.
+    """
+
+    sample = samples_by_field.get(field_name)
+    if sample is None:
+        return None
+    if sample.confidence is not None and sample.confidence < _MIN_SCOREBUG_READ_CONFIDENCE:
         return None
     return sample.normalized_text or sample.raw_text
 

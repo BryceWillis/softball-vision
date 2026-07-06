@@ -185,6 +185,14 @@ def detect_events(
                 )
             )
             last_half_key = half_key
+            # An at-bat never spans a half-inning boundary, so clear the
+            # batter dedup/spacing state. Without this, the lineup-strip
+            # highlight pointing at the upcoming leadoff batter during the
+            # opposing half fires a phantom at-bat there, and the "same
+            # batter" gate then swallows the real leadoff at-bat (item 61).
+            last_batter_number = None
+            last_batter_name = None
+            last_at_bat_timestamp = None
 
         player_name = player_name_for_state(state, roster)
         roster_batter_number = player_number_for_state(state, player_name, roster)

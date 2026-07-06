@@ -14,7 +14,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
-from sidelinehd_extractor.constants import LINEUP_SOURCE_FULL_STRIP, LINEUP_SOURCE_HIGHLIGHT
+from sidelinehd_extractor.constants import (
+    INNING_ARROW_DOWN,
+    INNING_ARROW_UP,
+    LINEUP_SOURCE_FULL_STRIP,
+    LINEUP_SOURCE_HIGHLIGHT,
+)
 
 
 @dataclass(frozen=True)
@@ -56,16 +61,18 @@ FIELD_CONFIGS: Dict[str, OCRFieldConfig] = {
     "right_team": OCRFieldConfig(psm=7, scale=4),
     "batter_card_name": OCRFieldConfig(psm=7, scale=5),
     "lineup_strip": OCRFieldConfig(psm=7, scale=5),
-    "inning": OCRFieldConfig(psm=7, whitelist="0123456789TtBbOoPp^▲△- ", scale=6),
+    "inning": OCRFieldConfig(
+        psm=8, whitelist="0123456789Oo", scale=6, preprocess="scorebug_glyph_isolate"
+    ),
     # count is three glyphs ("1-2"), not an isolated glyph: measurement showed
     # the pad strategy costs it confidence with no accuracy gain, so it keeps
     # the default binarization (it still gets multi-PSM voting).
     "count": OCRFieldConfig(psm=7, whitelist="0123456789- ", scale=6),
     "left_score": OCRFieldConfig(
-        psm=10, whitelist="0123456789", scale=6, preprocess="numeric_glyph_pad"
+        psm=8, whitelist="0123456789Oo", scale=6, preprocess="scorebug_glyph_isolate"
     ),
     "right_score": OCRFieldConfig(
-        psm=10, whitelist="0123456789", scale=6, preprocess="numeric_glyph_pad"
+        psm=8, whitelist="0123456789Oo", scale=6, preprocess="scorebug_glyph_isolate"
     ),
     "game_status": OCRFieldConfig(psm=7, scale=4, optional=True),
     "batter_number": OCRFieldConfig(
@@ -83,19 +90,28 @@ NUMERIC_CONFIDENCE_FIELDS = {
     "left_score",
     "right_score",
     "count",
+    "inning",
     "batter_number",
     "batter_card_number",
     "on_deck_number",
 }
 
+# The isolated-glyph scorebug fields do not confidence-vote: the isolate
+# strategy hands OCR a single clean word, where PSM 8 is the correct
+# segmentation, and a mis-segmented PSM 7/10 read can outscore it on
+# self-reported confidence (measured: a real "0" losing to an "8"). They
+# fall back through _SCOREBUG_FALLBACK_PSMS only when a PSM yields nothing.
+SCOREBUG_ISOLATED_FIELDS = frozenset({"left_score", "right_score", "inning"})
+
 # Item 43: the critical numeric fields are OCR'd under both PSM 7 and PSM 10
 # and the higher-confidence normalized read wins (tie -> the whitelist-valid
-# candidate). Same membership as the item-40 min-confidence set: these are the
-# fields where a single misread glyph flips an event. Text fields are never
-# double-run.
-MULTI_PSM_VOTE_FIELDS = frozenset(NUMERIC_CONFIDENCE_FIELDS)
+# candidate). Same membership as the item-40 min-confidence set minus the
+# isolated-glyph fields above: these are the fields where a single misread
+# glyph flips an event. Text fields are never double-run.
+MULTI_PSM_VOTE_FIELDS = frozenset(NUMERIC_CONFIDENCE_FIELDS) - SCOREBUG_ISOLATED_FIELDS
 
 _VOTE_PSMS = (7, 10)
+_SCOREBUG_FALLBACK_PSMS = (8, 7, 10)
 
 MIN_SUPPORTED_TESSERACT_VERSION = (4, 1)
 
@@ -116,6 +132,10 @@ def normalize_ocr_text(text: str, field_name: Optional[str] = None) -> str:
         match = re.search(r"\b\d\s*-\s*\d\b", normalized)
         if match:
             return re.sub(r"\s+", "", match.group(0))
+    if field_name in {"left_score", "right_score", "inning"}:
+        # The bold scorebug zero classifies as the letter O under PSM 8; the
+        # digit whitelist alone would silently drop the read.
+        normalized = normalized.replace("o", "0").replace("O", "0")
     if field_name in {
         "left_score",
         "right_score",
@@ -294,11 +314,140 @@ def _binarize_text_adaptive(gray):
     return cv2.bitwise_not(binary)
 
 
+# Scorebug glyph isolation (items 56/60): the score/inning digits are
+# near-white, low-saturation glyphs drawn over backgrounds that defeat plain
+# Otsu — gradient panels, dark base-diamond edges crossing the crop, and the
+# saturated green inning arrow that fuses into reads ("164", "48"). Isolating
+# bright low-saturation components keeps the digits and drops all of those.
+# Thresholds measured on real 640x360 SidelineHD footage (both live-fire
+# games): digit pixels sit at S<=~60, V>=~190; the arrow is high-saturation;
+# diamonds and panels stay below the V floor.
+_GLYPH_ISOLATE_MAX_SATURATION = 80
+_GLYPH_ISOLATE_MIN_VALUE = 180
+#: Components shorter than this fraction of the crop are specks, not digits.
+_GLYPH_ISOLATE_MIN_HEIGHT_FRACTION = 0.35
+_GLYPH_ISOLATE_MIN_AREA_PX = 40
+#: A component this wide is a banner/edge artifact, never a digit.
+_GLYPH_ISOLATE_MAX_WIDTH_FRACTION = 0.9
+#: Scores/innings are at most two digits; more components means the overlay
+#: is showing scrolling banner text through this region — refuse the read.
+_GLYPH_ISOLATE_MAX_COMPONENTS = 2
+#: White margin around the isolated glyphs, as a fraction of glyph height.
+_GLYPH_ISOLATE_PAD_FRACTION = 0.5
+#: Relaxed second-pass bounds: SidelineHD's FINAL view dims the losing
+#: team's score to a desaturated blue-gray (measured V≈165, S≈110), below
+#: the strict mask. The relaxed pass excludes the green-yellow overlay hue
+#: band (status text / inning arrow, hue ≈25–95) so it cannot resurrect the
+#: noise sources the strict pass exists to reject.
+_GLYPH_ISOLATE_RELAXED_MAX_SATURATION = 160
+_GLYPH_ISOLATE_RELAXED_MIN_VALUE = 140
+_GLYPH_ISOLATE_EXCLUDED_HUE = (25, 95)
+
+
+def _isolate_scorebug_glyphs(image, scale: int, allow_relaxed_pass: bool = False):
+    """Return isolated dark-on-light digit glyphs from a color scorebug crop.
+
+    Returns ``None`` when no digit-like glyph is present (e.g. the overlay's
+    scrolling-banner mode) — the caller treats that as an empty read rather
+    than falling back to Otsu, which is exactly the path that produced the
+    corrupted reads this strategy replaces.
+
+    ``allow_relaxed_pass`` enables the dimmed-glyph retry and is only set for
+    the score fields: the FINAL view dims the losing score below the strict
+    mask, while the inning region is simply empty in every mode where the
+    relaxed bounds could pick up stray banner letters instead.
+    """
+
+    import cv2
+
+    if scale > 1:
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    strict = (saturation <= _GLYPH_ISOLATE_MAX_SATURATION) & (
+        value >= _GLYPH_ISOLATE_MIN_VALUE
+    )
+    result, had_tall_candidates = _isolate_glyph_mask(strict)
+    if result is not None:
+        return result
+    if not allow_relaxed_pass or had_tall_candidates:
+        # Tall strict candidates mean the mask saw digit-height glyphs but
+        # rejected them as banner/edge artifacts; a relaxed retry would only
+        # re-admit them.
+        return None
+    relaxed = (
+        (saturation <= _GLYPH_ISOLATE_RELAXED_MAX_SATURATION)
+        & (value >= _GLYPH_ISOLATE_RELAXED_MIN_VALUE)
+        & ~((hue >= _GLYPH_ISOLATE_EXCLUDED_HUE[0]) & (hue <= _GLYPH_ISOLATE_EXCLUDED_HUE[1]))
+    )
+    result, _ = _isolate_glyph_mask(relaxed)
+    return result
+
+
+def _isolate_glyph_mask(candidate_mask):
+    """Filter a boolean glyph mask to digit-like components and render them.
+
+    Returns ``(rendered_glyphs_or_None, had_tall_candidates)`` where the flag
+    reports whether any digit-height component existed before the banner/edge
+    rejection rules ran.
+    """
+
+    import cv2
+    import numpy as np
+
+    mask = candidate_mask.astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    height, width = mask.shape
+    kept = []
+    had_tall_candidates = False
+    for index in range(1, count):
+        x, y, w, h, area = stats[index]
+        if h < _GLYPH_ISOLATE_MIN_HEIGHT_FRACTION * height:
+            continue
+        had_tall_candidates = True
+        if area < _GLYPH_ISOLATE_MIN_AREA_PX:
+            continue
+        if w > _GLYPH_ISOLATE_MAX_WIDTH_FRACTION * width:
+            continue
+        if x <= 1 or x + w >= width - 1:
+            # Clipped at the crop edge: a neighboring element bleeding in
+            # (the inning arrow next to left_score) or banner text.
+            continue
+        kept.append(index)
+    if not kept or len(kept) > _GLYPH_ISOLATE_MAX_COMPONENTS:
+        return None, had_tall_candidates
+
+    x0 = min(stats[index][0] for index in kept)
+    y0 = min(stats[index][1] for index in kept)
+    x1 = max(stats[index][0] + stats[index][2] for index in kept)
+    y1 = max(stats[index][1] + stats[index][3] for index in kept)
+    glyphs = np.zeros_like(mask)
+    for index in kept:
+        glyphs[labels == index] = 255
+    tight = cv2.GaussianBlur(glyphs[y0:y1, x0:x1], (3, 3), 0)
+    pad = int(_GLYPH_ISOLATE_PAD_FRACTION * tight.shape[0])
+    rendered = cv2.copyMakeBorder(
+        cv2.bitwise_not(tight),
+        pad,
+        pad,
+        pad,
+        pad,
+        cv2.BORDER_CONSTANT,
+        value=255,
+    )
+    return rendered, had_tall_candidates
+
+
 PREPROCESS_STRATEGIES: Dict[str, Callable[[object], object]] = {
     "default": _binarize_default,
     "numeric_glyph_pad": _binarize_numeric_glyph_pad,
     "text_adaptive": _binarize_text_adaptive,
 }
+
+#: Strategies that need the original color crop (and do their own scaling),
+#: unlike ``PREPROCESS_STRATEGIES`` entries which receive scaled grayscale.
+COLOR_PREPROCESS_STRATEGIES = frozenset({"scorebug_glyph_isolate"})
 
 
 def preprocess_for_ocr(image: object, field_name: str):
@@ -316,6 +465,27 @@ def preprocess_for_ocr(image: object, field_name: str):
         raise ValueError("image must be an OpenCV image array")
 
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+    if config.preprocess in COLOR_PREPROCESS_STRATEGIES:
+        if len(image.shape) == 3:
+            isolated = _isolate_scorebug_glyphs(
+                image,
+                config.scale,
+                allow_relaxed_pass=field_name in ("left_score", "right_score"),
+            )
+            if isolated is not None:
+                return isolated
+            # No digit-like glyph found: emit a blank canvas so OCR returns
+            # an empty read instead of noise from the raw background.
+            import numpy as np
+
+            return np.full((8, 8), 255, dtype=np.uint8)
+        # Grayscale input (e.g. a saved preprocessed crop): color isolation
+        # is impossible, so degrade to the numeric pad strategy.
+        return _binarize_numeric_glyph_pad(
+            cv2.resize(image, None, fx=config.scale, fy=config.scale, interpolation=cv2.INTER_CUBIC)
+            if config.scale > 1
+            else image.copy()
+        )
     binarize = PREPROCESS_STRATEGIES.get(config.preprocess)
     if binarize is None:
         known = ", ".join(sorted(PREPROCESS_STRATEGIES))
@@ -363,6 +533,14 @@ def _ocr_with_psm_voting(
     wins, a missing confidence loses to any scored one, and an exact tie
     prefers the whitelist-valid candidate.
     """
+
+    if field_name in SCOREBUG_ISOLATED_FIELDS:
+        last: Optional[OCRBackendResult] = None
+        for psm in dict.fromkeys((config.psm, *_SCOREBUG_FALLBACK_PSMS)):
+            last = run_config(replace(config, psm=psm))
+            if last.normalized_text:
+                return last
+        return last
 
     if field_name not in MULTI_PSM_VOTE_FIELDS:
         return run_config(config)
@@ -415,6 +593,8 @@ def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
     )
     if field_name == "lineup_strip":
         return replace(result, source_detail=LINEUP_SOURCE_FULL_STRIP)
+    if field_name == "inning":
+        return _with_inning_arrow(result, image)
     return result
 
 
@@ -448,6 +628,8 @@ class TesserocrOCRBackend:
         )
         if field_name == "lineup_strip":
             return replace(result, source_detail=LINEUP_SOURCE_FULL_STRIP)
+        if field_name == "inning":
+            return _with_inning_arrow(result, image)
         return result
 
     def _ocr_preprocessed(
@@ -638,6 +820,58 @@ def _extract_highlighted_lineup_crop(image: object):
     top = max(0, y - pad_y)
     bottom = min(height, y + h + pad_y)
     return image[top:bottom, left:right]
+
+
+#: HSV bounds for the green-yellow inning arrow (same hue band as the lineup
+#: highlight chip) and the minimum blob size to count as the arrow.
+_ARROW_HSV_LOWER = (25, 60, 120)
+_ARROW_HSV_UPPER = (95, 255, 255)
+_ARROW_MIN_AREA_FRACTION = 0.01
+
+
+def detect_inning_arrow(image: object) -> Optional[str]:
+    """Detect the inning arrow direction from the color inning crop.
+
+    Returns ``INNING_ARROW_UP``, ``INNING_ARROW_DOWN``, or ``None``. The
+    up-arrow triangle is widest at its base (bottom); the down-arrow at its
+    top. This pixel test replaces trusting the arrow's OCR rendering, which
+    fuses into the inning digit as a bogus leading "4" (up) or "7" (down).
+    """
+
+    import cv2
+    import numpy as np
+
+    if image is None or not hasattr(image, "shape") or len(image.shape) != 3:
+        return None
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(
+        hsv,
+        np.array(_ARROW_HSV_LOWER, dtype=np.uint8),
+        np.array(_ARROW_HSV_UPPER, dtype=np.uint8),
+    )
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if count < 2:
+        return None
+    largest = max(range(1, count), key=lambda index: stats[index][4])
+    x, y, w, h, area = stats[largest]
+    if area < _ARROW_MIN_AREA_FRACTION * mask.size or h < 3:
+        return None
+    component = labels[y : y + h, x : x + w] == largest
+    third = max(1, h // 3)
+    top_width = component[:third].sum(axis=1).max()
+    bottom_width = component[-third:].sum(axis=1).max()
+    if top_width == bottom_width:
+        return None
+    return INNING_ARROW_UP if bottom_width > top_width else INNING_ARROW_DOWN
+
+
+def _with_inning_arrow(result: OCRBackendResult, image: object) -> OCRBackendResult:
+    """Attach the pixel-detected arrow direction to an inning OCR result."""
+
+    direction = detect_inning_arrow(image)
+    if direction is None:
+        return result
+    return replace(result, source_detail=direction)
 
 
 def ocr_image_file(path: Path, field_name: str, backend: str = "tesseract") -> OCRBackendResult:
