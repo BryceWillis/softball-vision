@@ -51,6 +51,7 @@ from sidelinehd_extractor.models import EventType, HalfInning, Roster, RosterPla
 from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish_kit_fragment
 from sidelinehd_extractor.review import collect_event_review_rows
+from sidelinehd_extractor.review_triage import summarize_triage, triage_review_rows
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
@@ -337,16 +338,23 @@ def build_review_context(
             corrected = apply_event_corrections(events, corrections)
         except ValueError as exc:
             corrections_error = str(exc)
-    rows = collect_event_review_rows(corrected, roster=load_configured_roster())
-    flagged = [row for row in rows if row.flags]
+    # Item 58: flags are triaged into needs-action/review/informational and
+    # rendered in plain language; the default view shows only action-worthy
+    # plays, with informational flags collapsed behind the show-all toggle.
+    rows = triage_review_rows(
+        collect_event_review_rows(corrected, roster=load_configured_roster())
+    )
+    attention = [row for row in rows if row.needs_attention]
+    triage = summarize_triage(rows)
     return {
         "job": job,
         "entry": entry,
         "show_all": show_all,
         "page": page if page in _REVIEW_PAGES else "review",
-        "rows": rows if show_all else flagged,
-        "flagged_count": len(flagged),
-        "total_count": len(rows),
+        "rows": rows if show_all else attention,
+        "triage": triage,
+        "flagged_count": triage["attention"],
+        "total_count": triage["total"],
         "corrections": [
             {
                 "event_type": correction.event_type.value if correction.event_type else "",

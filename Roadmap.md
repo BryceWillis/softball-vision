@@ -4349,7 +4349,7 @@ approach end-to-end.
 
 ### 58. Exception Review Triage + Plain-Language Flags
 
-Status: Ready to implement — HIGH (usability)
+Status: Ready for review (`impl/item-58`, Fable 5; stacked on `impl/item-57` — merge 57 first) — HIGH (usability)
 Source: Live-fire 2026-07-05. The review/game page flags nearly every at-bat, the
 flags are cryptic (`possible-substitute`, `card-vs-lineup=batter_card=12 lineup=2`,
 `lineup-recovered`), and the corrections the tool already made look correct — so

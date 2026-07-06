@@ -21,12 +21,18 @@
     ul.review-list li.review-row { border: 1px solid #ddd; border-radius: 6px;
                                    padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; }
     li.review-row.has-flags { border-color: #e0c068; background: #fdf9ee; }
+    li.review-row.tier-needs-action { border-color: #d98a8a; background: #fdf1f0; }
+    li.review-row.tier-informational { border-color: #ccd6e4; background: #f6f8fb; }
     .row-facts { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: baseline;
                  margin-bottom: 0.4rem; }
     .row-index { color: #888; }
     .row-time, .row-type { font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
-    .row-flags { color: #8a5a00; font-size: 0.85rem;
-                 font-family: ui-monospace, Menlo, monospace; }
+    .row-flag { font-size: 0.88rem; margin: 0.15rem 0 0.4rem; color: #444; }
+    .row-flag .flag-title { color: #8a5a00; }
+    .row-flag.flag-needs-action .flag-title { color: #a3131f; }
+    .row-flag.flag-informational { color: #667; }
+    .row-flag.flag-informational .flag-title { color: #445; }
+    .flag-action { display: block; font-size: 0.82rem; color: #1447a3; }
     .row-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
     form.inline-form { display: inline-flex; gap: 0.35rem; align-items: center; }
     form.inline-form input[name="value"] { min-width: 12rem; }

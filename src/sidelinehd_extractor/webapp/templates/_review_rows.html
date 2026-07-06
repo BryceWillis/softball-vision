@@ -6,13 +6,17 @@
   {% endif %}
 
   <p class="review-summary">
-    Plays to double-check: {{ flagged_count }} of {{ total_count }}.
+    {% if triage.attention %}
+      <strong>{{ triage.attention }} play{{ 's' if triage.attention != 1 }} need{{ '' if triage.attention != 1 else 's' }} your attention</strong>
+      &middot; {{ triage.fine }} look{{ '' if triage.fine != 1 else 's' }} fine.
+    {% else %}
+      Every play looks fine — nothing needs your attention.
+    {% endif %}
     {% if show_all %}
       Showing every play —
-      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=flagged">show only flagged plays</a>
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=flagged">show only plays that need attention</a>
     {% else %}
-      Showing only flagged plays —
-      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=all">show every play</a>
+      <a href="/jobs/{{ job.id }}/{{ page }}?entry={{ entry }}&amp;show=all">Show every play{% if triage.informational_only %} (including {{ triage.informational_only }} informational note{{ 's' if triage.informational_only != 1 }}){% endif %}</a>
     {% endif %}
   </p>
 
@@ -44,7 +48,7 @@
   {% if rows %}
     <ul class="review-list">
       {% for row in rows %}
-        <li class="review-row {{ 'has-flags' if row.flags else 'no-flags' }}">
+        <li class="review-row {{ 'has-flags' if row.flags else 'no-flags' }} {{ 'tier-' + row.tier if row.tier }}">
           <div class="row-facts">
             <span class="row-index">#{{ row.index }}</span>
             <span class="row-time">{{ format_timestamp(row.event.timestamp_seconds) }}</span>
@@ -54,10 +58,16 @@
               <span class="row-player">#{{ row.event.player_number }}
                 {% if row.event.player_name %}{{ row.event.player_name }}{% endif %}</span>
             {% endif %}
-            {% if row.flags %}
-              <span class="row-flags">{{ row.flags | join(", ") }}</span>
-            {% endif %}
           </div>
+          {# Item 58: plain-language flags; informational ones only appear on
+             show-all. The raw flag string stays available as a tooltip. #}
+          {% for explanation in (row.explanations if show_all else row.attention_explanations) %}
+            <div class="row-flag flag-{{ explanation.tier }}" title="{{ explanation.raw }}">
+              <strong class="flag-title">{{ explanation.title }}</strong> —
+              {{ explanation.meaning }}
+              <span class="flag-action">{{ explanation.action }}</span>
+            </div>
+          {% endfor %}
           <div class="row-actions">
             <form class="inline-form" hx-post="/jobs/{{ job.id }}/corrections"
                   hx-target="#review-rows" hx-swap="outerHTML">
@@ -92,8 +102,8 @@
     {% if show_all %}
       <p>No plays were detected for this game.</p>
     {% else %}
-      <p>Nothing to double-check — every play looked good. Your timestamps are
-         ready to copy.</p>
+      <p>Nothing needs your attention — every play looked good. Your timestamps
+         are ready to copy.</p>
     {% endif %}
   {% endif %}
 </div>
