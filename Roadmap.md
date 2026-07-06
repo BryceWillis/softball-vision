@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| 1 | **63** — Deep-link review rows to the source video timestamp | Ready to implement | When a play needs a fix (e.g. "Couldn't read the batter's name"), the review UI should link its timestamp straight to the YouTube video at that exact moment, so the coach can verify in one click instead of scrubbing manually. Design filed below. Prerequisite: persist `youtube.video_id` on single runs too (batch already does). |
 | — | **62** — Improve Batter-Number OCR | Done (Pass 28) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
 | 1 | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Ready for review (`impl/accuracy`, Fable 5) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
@@ -4513,6 +4514,85 @@ Reason to defer: local-first, single-user, loopback-bound, no auth by design; no
 hosted deployment exists yet.
 
 
+
+### 63. Deep-link Review Rows to the Source Video Timestamp
+
+Source: Ryan (live-fire review UX), 2026-07-06
+
+**Goal.** In the web review UI (and, optionally, the text review report), turn each
+flagged play's timestamp into a clickable deep link that opens the *source*
+YouTube video at that exact moment. Today a flag like "Couldn't read the batter's
+name" tells the coach to "Check the video at this time," but they have to open the
+video separately and scrub to 39:35 by hand. One click should land them there.
+
+**User-visible behavior.**
+- A YouTube-sourced run's review row time (e.g. `39:35`) renders as a link to
+  `https://www.youtube.com/watch?v=<video_id>&t=<seconds>s` opening in a new tab.
+- A local-file run (no video_id) renders the time as plain text, exactly as today.
+- No change to labels, corrections, exports, or the flags themselves — additive display only.
+
+**URL format.** `youtube_watch_url(video_id, seconds)` →
+`https://www.youtube.com/watch?v={video_id}&t={int(seconds)}s`. Floor the
+timestamp to a whole second (YouTube's `t` param is integer seconds). A few
+seconds of lead-in is often *more* useful than landing exactly on the frame;
+consider an optional small negative offset (e.g. `max(0, int(seconds) - 3)`) —
+architect's call to keep it exact for v1 and add lead-in only if Ryan wants it.
+
+**Data dependency (prerequisite — must land first).** The review view builds its
+context from the run dir's `manifest.json`. The source `video_id` is currently
+persisted to the manifest `youtube` section **only on the batch/playlist path**
+(`batch._record_youtube_video_id`). Single `run_youtube_game` runs — the common
+web-app single-URL submission — do **not** record it. So step one is:
+- In `run_youtube_game` (workflow.py), after the run completes, write the source
+  `video_id` (and, cheaply, the original watch URL if available from the
+  `download` result) to the manifest `youtube` section via the existing
+  `update_manifest_section(manifest_path, "youtube", {...})` helper — mirroring
+  what the batch path already does. Reuse, don't fork, the recording logic:
+  factor `_record_youtube_video_id` into a shared helper if that reads cleanly.
+
+**Wiring.**
+- `build_review_context` (webapp/app.py) already reads the manifest for the health
+  message; extend it to pull `youtube.video_id` and expose a `source_video_id`
+  (or a precomputed `watch_url_base`) in the template context. `None` for local runs.
+- In `_review_rows.html`, wrap the `row-time` span in an `<a>` when
+  `source_video_id` is set: `href="{{ youtube_watch_url(source_video_id, row.event.timestamp_seconds) }}" target="_blank" rel="noopener"`. Fall back to the
+  current plain `<span>` when it is not. Register `youtube_watch_url` as a Jinja
+  global/filter alongside the existing `format_timestamp`.
+
+**Scope boundaries / escalation.** Additive display only — do **not** touch the
+corrections POST payloads, export contracts, or `finalize_run_exports`. The
+manifest `youtube` section addition is a superset (new key), not a format change,
+so it does not affect existing readers. If extending the deep link into the text
+`review_report.md` as well (optional follow-up), stop and confirm first: that file
+is a shareable artifact, so adding a video URL changes what a pasted report
+reveals (the source video) — not PII, but a scope/contract call for the architect.
+
+**Security / PII.** A `video_id` is not a player name and introduces no new egress
+(the link is client-side navigation the user initiates). Safe under the name
+constraint. Do not put any roster/player name into the URL.
+
+**Acceptance criteria.**
+- YouTube run: review row time is an anchor to `watch?v=<id>&t=<int seconds>s`,
+  new tab, `rel="noopener"`.
+- Local-file run (no `youtube.video_id`): time renders as plain text, no anchor,
+  no error.
+- `run_youtube_game` persists `youtube.video_id` to the manifest; a single-URL
+  web submission's run dir now carries it.
+- Corrections/exports/flags unchanged.
+
+**Edge cases.**
+- Missing/blank `video_id` in a YouTube manifest (older runs before this lands) →
+  graceful plain text, no anchor.
+- Playlist/batch review: each entry's run dir has its own `video_id`; use that
+  run's manifest, not a playlist-level value.
+- Timestamp `0` → `t=0s` is valid.
+
+**Tests.**
+- Unit: `youtube_watch_url("abc123", 2375)` → `...watch?v=abc123&t=2375s`;
+  fractional seconds floor (e.g. `2375.9 → 2375`).
+- Workflow: `run_youtube_game` writes `youtube.video_id` to the manifest.
+- Template/route: a YouTube run renders an anchor with the correct `&t=...s` for a
+  known event; a local run renders no anchor.
 
 ### 22. Detection Configuration Object
 
