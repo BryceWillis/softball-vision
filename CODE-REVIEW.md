@@ -19,6 +19,17 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
+#### Item 58 — Exception Review Triage + Plain-Language Flags
+**Branch:** `impl/item-58` (Fable 5) — **stacked on `impl/item-57`** (both touch webapp/app.py); merge 57 first, then this
+**Files:** new [review_triage.py](src/sidelinehd_extractor/review_triage.py); [app.py](src/sidelinehd_extractor/webapp/app.py) (`build_review_context`); templates `_review_rows.html`, `review.html`, `game.html`; tests in `tests/test_review_triage.py` + two webapp tests.
+
+**Implementation note.** New `review_triage.py` maps every flag `review.py` emits to a tier — needs-action (`missing-player`, `unrostered-card-number`, `garbled-card-name`, `ocr-number`), review (`card-vs-lineup`, `lineup-had-rostered-candidate`, `close-at-bat`, `repeat-player`, `close-chapter`, `inferred-missing`, `out-of-order-candidate`), informational (`possible-substitute`, `lineup-recovered`) — plus a `{flag: (title, meaning, action)}` plain-language table. `build_review_context` triages rows; the default review/game view shows only plays with a needs-action or review flag under a "N plays need your attention · M look fine" summary, informational-only plays collapse behind the existing show-all toggle (link says how many), and each shown flag renders as title + meaning + recommended action with the raw `flag=value` preserved as a tooltip (`title` attr). Row borders color by tier. The review CSV, `review_report.md`, and CLI `render_event_review` are unchanged. Unit tests cover the tier of every known flag, detail substitution, unknown-flag fallback, mixed-row tiering, and summary counts; webapp tests cover default collapse + show-all reveal. Verified on the real 62-event live-fire run: 23 action-worthy plays shown in plain language, 19 informational `lineup-recovered` notes collapsed, no raw jargon in the default view. 478 tests pass (20 new); ruff green.
+
+**Deviations (tiered policy):**
+- *Flags beyond the design's list tiered as review:* `close-chapter`, `inferred-missing`, `out-of-order-candidate` exist in `review.py`/`events.py` but weren't in the design's mapping; all three are resolved-ambiguity signals, so they got the middle tier. Unknown/future flags also default to review (visible, not shouting) rather than being hidden.
+- *"3 need attention · 40 look fine" wording:* implemented as "N plays need your attention · M look fine"; informational-only plays count as "fine" per the design's intent (they need no human action).
+- *One existing webapp test updated* (`test_review_page_lists_flagged_events_with_show_all_toggle`) — it asserted the old "Plays to double-check: 1 of 3" summary and the raw flag in body text; it now asserts the plain-language title and the tooltip-only raw flag.
+
 #### Item 57 — Persistent Run History (rehydrate completed runs at web startup)
 **Branch:** `impl/item-57` (Fable 5)
 **Files:** new [history.py](src/sidelinehd_extractor/webapp/history.py); [app.py](src/sidelinehd_extractor/webapp/app.py) (`create_app` startup hook, `_entry_label` title preference); [jobs.py](src/sidelinehd_extractor/webapp/jobs.py) (`JobRunner.output_dir` property); tests in `tests/test_webapp_history.py`.

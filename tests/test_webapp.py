@@ -850,14 +850,79 @@ def test_review_page_lists_flagged_events_with_show_all_toggle(tmp_path, monkeyp
 
     response = client.get(f"/jobs/{job.id}/review")
     assert response.status_code == 200
-    assert "ocr-number=28" in response.text
+    # Item 58: the default view speaks plain language; the raw flag survives
+    # only as a tooltip.
+    assert 'title="ocr-number=28"' in response.text
+    assert "Scoreboard shows #28" in response.text
     assert "Maya R." in response.text
     assert "Zoe H." not in response.text  # unflagged, hidden by default
-    assert "Plays to double-check: 1 of 3" in response.text
+    assert "1 play needs your attention" in response.text
+    assert "2 look fine" in response.text
     assert f"/jobs/{job.id}/results" in response.text
 
     everything = client.get(f"/jobs/{job.id}/review?show=all")
     assert "Zoe H." in everything.text
+
+
+def test_review_page_collapses_informational_flags_behind_show_all(tmp_path, monkeypatch):
+    """Item 58: informational-only plays are hidden by default, not deleted."""
+
+    from sidelinehd_extractor.models import Event, EventType, HalfInning
+    from sidelinehd_extractor.processing import write_json, write_jsonl
+    from sidelinehd_extractor.webapp import app as app_module
+    from sidelinehd_extractor.workflow import finalize_run_exports
+
+    monkeypatch.setattr(app_module, "load_configured_roster", lambda: None)
+    run_dir = tmp_path / "runs" / "triage-run"
+    run_dir.mkdir(parents=True)
+    prefix = run_dir / "full"
+    write_json(
+        run_dir / "manifest.json",
+        {"export": {"output_prefix": str(prefix)}},
+    )
+    write_jsonl(
+        run_dir / "events.jsonl",
+        [
+            Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP),
+            # Unreadable batter -> missing-player (needs-action).
+            Event(EventType.AT_BAT_START, 700, "At bat", inning=1),
+            # Order jump on a correctly-identified batter -> informational.
+            Event(
+                EventType.AT_BAT_START,
+                900,
+                "Riley S. (#3)",
+                inning=1,
+                player_number="3",
+                player_name="Riley S.",
+                metadata={"order_flags": ["possible-substitute"]},
+            ),
+        ],
+    )
+    chapters_path, at_bats_path = finalize_run_exports(run_dir)
+    client, store = _make_client()
+    job = store.create(kind="single", url="https://youtu.be/abc123")
+    store.update(
+        job.id,
+        status="done",
+        result={
+            "kind": "single",
+            "run_dir": str(run_dir),
+            "chapters_path": str(chapters_path),
+            "at_bats_path": str(at_bats_path),
+        },
+    )
+
+    response = client.get(f"/jobs/{job.id}/review")
+    assert "1 play needs your attention" in response.text
+    assert "2 look fine" in response.text
+    assert "Batter not identified" in response.text
+    assert "Riley S." not in response.text  # informational-only, collapsed
+    assert "including 1 informational note" in response.text
+
+    everything = client.get(f"/jobs/{job.id}/review?show=all")
+    assert "Riley S." in everything.text
+    assert "Batting order jumped" in everything.text
+    assert "possible-substitute" in everything.text  # raw flag tooltip survives
 
 
 def test_review_edit_writes_csv_resolves_flag_and_rewrites_exports(tmp_path, monkeypatch):
