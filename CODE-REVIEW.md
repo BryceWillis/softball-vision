@@ -2,7 +2,7 @@
 
 **Reviewer:** Claude (Senior Software Architect)
 **Last updated:** 2026-07-06
-**Review passes:** 27 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation) (Pass 24: item 54 phases 54a+54b by Fable 5 — automatic ffmpeg via bundled imageio-ffmpeg + dependency preflight/setup card, and a one-command `start` that launches+opens the browser+stops cleanly — approved; deviations local-tier) (Pass 25: BATCH — item 59 (Codex: roster-confirmed batters no longer flagged possible-substitute) + Fable items 54c onboarding, 55 template probe/fail-fast, 52 roster display name, 30 originality audit, 54e coach README, 54d macOS-bundle design — all approved+merged; item 56 inning recalibration REJECTED — proposed coords validated ineffective on real footage, inning still misreads 72/43, needs frame-based recalibration) (Pass 26: scorebug accuracy cluster items 60+61+56 by Fable 5 — glyph-isolation preprocessing, PSM/whitelist fix for single-digit 0, arrow half detection, score plausibility + confidence guards, half-boundary batter reset — approved; independently re-validated on both real videos: G1 164->16 + clean inning, G2 early scores read + at-bats 23->28) (Pass 27: items 57 persistent run history [independently verified: 25 real runs recovered on a fresh store], 58 exception triage + plain language, 54d macOS menubar app bundle [tesserocr self-bundling validated, .app built+launched] — all by Fable 5, approved; 54d data dir ~/Library/Application Support confirmed correct by architect)
+**Review passes:** 28 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation) (Pass 24: item 54 phases 54a+54b by Fable 5 — automatic ffmpeg via bundled imageio-ffmpeg + dependency preflight/setup card, and a one-command `start` that launches+opens the browser+stops cleanly — approved; deviations local-tier) (Pass 25: BATCH — item 59 (Codex: roster-confirmed batters no longer flagged possible-substitute) + Fable items 54c onboarding, 55 template probe/fail-fast, 52 roster display name, 30 originality audit, 54e coach README, 54d macOS-bundle design — all approved+merged; item 56 inning recalibration REJECTED — proposed coords validated ineffective on real footage, inning still misreads 72/43, needs frame-based recalibration) (Pass 26: scorebug accuracy cluster items 60+61+56 by Fable 5 — glyph-isolation preprocessing, PSM/whitelist fix for single-digit 0, arrow half detection, score plausibility + confidence guards, half-boundary batter reset — approved; independently re-validated on both real videos: G1 164->16 + clean inning, G2 early scores read + at-bats 23->28) (Pass 27: items 57 persistent run history [independently verified: 25 real runs recovered on a fresh store], 58 exception triage + plain language, 54d macOS menubar app bundle [tesserocr self-bundling validated, .app built+launched] — all by Fable 5, approved; 54d data dir ~/Library/Application Support confirmed correct by architect) (Pass 28: item 62 by Codex — glyph isolation extended to batter_card_number; card-present reads up + false absent-card noise 8->0, no scorebug regression, independently spot-checked clean; scoped to batter_card_number only, flagged)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,41 +19,7 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### Item 62 — Improve Batter-Number OCR
-**Status:** Ready for Review
-**Branch:** `impl/item-62`
-
-Implemented a batter-card-number specific OCR path in `ocr.py`: color crops now
-first require the dark lower-third card background, then run the existing numeric
-pad OCR, with a bright-glyph isolated fallback only when the existing read is
-empty. The fallback only accepts plausible one- or two-digit card numbers, so
-overlong isolated reads are discarded instead of becoming new OCR noise.
-
-**Validation.** Re-ran Tesseract over 0-2400s slices at 10s intervals on both
-local real videos (`Xpl8tMDxGaY`, `PrITEF1eozM`), using only batter fields plus
-scorebug sentinels. Card-present frames were classified independently from pixels
-using the new dark-card gate, not from OCR text.
-
-- `Xpl8tMDxGaY` `batter_card_number`: all reads 174/241 -> 190/241; card-present
-  reads 174/205 -> 190/205; absent-card noise 0/36 -> 0/36; garble 0 -> 0.
-- `PrITEF1eozM` `batter_card_number`: all reads 116/241 -> 114/241 because false
-  absent-card reads were removed; card-present reads 108/115 -> 114/115;
-  absent-card noise 8/126 -> 0/126; garble 0 -> 0.
-- `batter_number`/`on_deck_number`/`lineup_strip`: unchanged by design
-  (`batter_number` stayed 59/241 on `Xpl8tMDxGaY`, 30/241 on `PrITEF1eozM`).
-  Frame inspection showed these template crops land on pitch-count/scorebug UI
-  in these two videos, not a player lineup strip, so increasing their non-empty
-  reads would strengthen false player-number noise.
-- Scorebug sentinels were unchanged on the full after run: `Xpl8tMDxGaY`
-  left/right/inning 231/241, 231/241, 231/241 before and after;
-  `PrITEF1eozM` left/right/inning 181/241, 181/241, 133/241 before and after.
-
-**Deviations:** Local-tier deviation from the broad "extend glyph isolation to
-all batter fields" framing: shipped the measured improvement for
-`batter_card_number` only. I did not change `batter_number`, `on_deck_number`, or
-`lineup_strip` preprocessing after frame inspection showed those crops are
-pitch-count/scorebug regions for the validation videos and would add noise rather
-than real batter identities.
+_No items ready for review._
 
 ## Open Items
 
