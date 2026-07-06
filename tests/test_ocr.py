@@ -372,10 +372,15 @@ class ScorebugGlyphIsolationTests(unittest.TestCase):
         import cv2
         import numpy as np
 
-        # Scrolling-banner mode: several letter-sized glyphs crossing the
+        # Scrolling-banner mode: a run of letter-sized glyphs crossing the
         # region, clipped at both edges. Must refuse rather than misread.
+        # Drawn twice at a 2px offset so the letters bridge into one
+        # crop-spanning component regardless of the OpenCV version's exact
+        # Hershey rasterization (OpenCV 5 renders tighter glyphs whose
+        # unclipped middle letters would otherwise pass isolation).
         crop = np.full((23, 32, 3), 60, dtype=np.uint8)
         cv2.putText(crop, "MASH", (-4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (235, 235, 235), 2)
+        cv2.putText(crop, "MASH", (-2, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (235, 235, 235), 2)
         processed = preprocess_for_ocr(crop, "left_score")
 
         self.assertTrue((processed == 255).all())

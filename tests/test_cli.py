@@ -682,8 +682,9 @@ class CLITests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Error:", stderr.getvalue())
-        # The error echoes the path with the platform's separators.
-        self.assertIn(str(Path("runs/does-not-exist")), stderr.getvalue())
+        # str(OSError) quotes the filename with repr(), which escapes the
+        # backslashes in a Windows path, so build the expectation the same way.
+        self.assertIn(repr(str(Path("runs/does-not-exist"))), stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_main_prints_clean_error_when_ytdlp_dependency_is_unavailable(self):
