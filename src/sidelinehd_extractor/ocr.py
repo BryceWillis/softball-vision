@@ -343,6 +343,18 @@ _GLYPH_ISOLATE_RELAXED_MAX_SATURATION = 160
 _GLYPH_ISOLATE_RELAXED_MIN_VALUE = 140
 _GLYPH_ISOLATE_EXCLUDED_HUE = (25, 95)
 
+# Batter-card numbers are white "#NN" glyphs on a dark teal card. When the
+# lower-third card is absent, the same crop can land on bright infield dirt or
+# chalk and the old numeric pad can manufacture a plausible number from that
+# texture. Gate color crops on a dark lower quartile before OCR, then use the
+# isolated fallback only when the old path returns empty.
+_BATTER_CARD_NUMBER_MAX_BACKGROUND_VALUE = 150
+_BATTER_CARD_NUMBER_MAX_GLYPH_SATURATION = 140
+_BATTER_CARD_NUMBER_MIN_GLYPH_VALUE = 145
+_BATTER_CARD_NUMBER_MIN_HEIGHT_FRACTION = 0.28
+_BATTER_CARD_NUMBER_MAX_WIDTH_FRACTION = 0.55
+_BATTER_CARD_NUMBER_MAX_COMPONENTS = 3
+
 
 def _isolate_scorebug_glyphs(image, scale: int, allow_relaxed_pass: bool = False):
     """Return isolated dark-on-light digit glyphs from a color scorebug crop.
@@ -382,6 +394,76 @@ def _isolate_scorebug_glyphs(image, scale: int, allow_relaxed_pass: bool = False
     )
     result, _ = _isolate_glyph_mask(relaxed)
     return result
+
+
+def _has_dark_batter_card_number_background(image: object) -> bool:
+    """Return whether a color crop looks like the active batter-card badge."""
+
+    import cv2
+    import numpy as np
+
+    if image is None or not hasattr(image, "shape") or len(image.shape) != 3:
+        return True
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    return bool(
+        np.percentile(hsv[..., 2], 25) <= _BATTER_CARD_NUMBER_MAX_BACKGROUND_VALUE
+    )
+
+
+def _isolate_batter_card_number_glyphs(image, scale: int):
+    """Return isolated dark-on-light "#NN" glyphs from an active card crop."""
+
+    import cv2
+    import numpy as np
+
+    if image is None or not hasattr(image, "shape") or len(image.shape) != 3:
+        return None
+    if scale > 1:
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    saturation, value = hsv[..., 1], hsv[..., 2]
+    mask = (
+        (saturation <= _BATTER_CARD_NUMBER_MAX_GLYPH_SATURATION)
+        & (value >= _BATTER_CARD_NUMBER_MIN_GLYPH_VALUE)
+    ).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    height, width = mask.shape
+    kept = []
+    for index in range(1, count):
+        x, _y, w, h, area = stats[index]
+        if h < _BATTER_CARD_NUMBER_MIN_HEIGHT_FRACTION * height:
+            continue
+        if area < max(12, int(0.002 * height * width)):
+            continue
+        if w > _BATTER_CARD_NUMBER_MAX_WIDTH_FRACTION * width:
+            continue
+        if width > 60 and (x <= 1 or x + w >= width - 1):
+            continue
+        kept.append(index)
+    if not kept or len(kept) > _BATTER_CARD_NUMBER_MAX_COMPONENTS:
+        return None
+
+    x0 = min(stats[index][0] for index in kept)
+    y0 = min(stats[index][1] for index in kept)
+    x1 = max(stats[index][0] + stats[index][2] for index in kept)
+    y1 = max(stats[index][1] + stats[index][3] for index in kept)
+    glyphs = np.zeros_like(mask)
+    for index in kept:
+        glyphs[labels == index] = 255
+    tight = cv2.GaussianBlur(glyphs[y0:y1, x0:x1], (3, 3), 0)
+    pad = max(3, int(_GLYPH_ISOLATE_PAD_FRACTION * tight.shape[0]))
+    return cv2.copyMakeBorder(
+        cv2.bitwise_not(tight),
+        pad,
+        pad,
+        pad,
+        pad,
+        cv2.BORDER_CONSTANT,
+        value=255,
+    )
 
 
 def _isolate_glyph_mask(candidate_mask):
@@ -568,10 +650,51 @@ def _beats_incumbent(
     )
 
 
+def _empty_ocr_result(backend: str) -> OCRBackendResult:
+    return OCRBackendResult(text="", normalized_text="", confidence=None, backend=backend)
+
+
+def _is_plausible_batter_card_number(text: str) -> bool:
+    return bool(re.fullmatch(r"#?\d{1,2}", text))
+
+
+def _ocr_batter_card_number(
+    image: object,
+    backend: str,
+    ocr_preprocessed: Callable[[object, OCRFieldConfig, str], OCRBackendResult],
+) -> OCRBackendResult:
+    config = FIELD_CONFIGS["batter_card_number"]
+    if not _has_dark_batter_card_number_background(image):
+        return _empty_ocr_result(backend)
+
+    processed = preprocess_for_ocr(image, "batter_card_number")
+    result = _ocr_with_psm_voting(
+        lambda vote_config: ocr_preprocessed(processed, vote_config, "batter_card_number"),
+        config,
+        "batter_card_number",
+    )
+    if result.normalized_text:
+        return result
+
+    isolated = _isolate_batter_card_number_glyphs(image, config.scale)
+    if isolated is None:
+        return result
+    isolated_result = _ocr_with_psm_voting(
+        lambda vote_config: ocr_preprocessed(isolated, vote_config, "batter_card_number"),
+        config,
+        "batter_card_number",
+    )
+    if _is_plausible_batter_card_number(isolated_result.normalized_text):
+        return isolated_result
+    return result
+
+
 def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
     """Run Tesseract OCR on an OpenCV image array."""
 
     ensure_tesseract_available()
+    if field_name == "batter_card_number":
+        return _ocr_batter_card_number(image, "tesseract", _tesseract_ocr_preprocessed_image)
     if field_name == "lineup_strip":
         highlighted = _extract_highlighted_lineup_crop(image)
         if highlighted is not None:
@@ -607,6 +730,8 @@ class TesserocrOCRBackend:
         self._local = threading.local()
 
     def __call__(self, image: object, field_name: str) -> OCRBackendResult:
+        if field_name == "batter_card_number":
+            return _ocr_batter_card_number(image, "tesserocr", self._ocr_preprocessed)
         if field_name == "lineup_strip":
             highlighted = _extract_highlighted_lineup_crop(image)
             if highlighted is not None:

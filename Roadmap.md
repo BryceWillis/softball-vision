@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| — | **62** — Improve Batter-Number OCR | Ready for review (`impl/item-62`, Codex) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
 | 1 | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Ready for review (`impl/accuracy`, Fable 5) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Done (Pass 25) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
@@ -4469,7 +4470,7 @@ empty even though the card number is available.
 
 ### 62. Improve Batter-Number OCR (extend glyph isolation to the batter fields)
 
-Status: Ready to implement — isolated to ocr.py (Codex)
+Status: Ready for Review — `impl/item-62` (Codex)
 Source: Live-fire follow-up 2026-07-06. Pass 26 applied `scorebug_glyph_isolate`
 only to `left_score`/`right_score`/`inning`. The batter fields
 (`batter_number`, `batter_card_number`, `on_deck_number`, `lineup_strip`) still
