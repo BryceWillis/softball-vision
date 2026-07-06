@@ -1,8 +1,8 @@
 # Code Review
 
 **Reviewer:** Claude (Senior Software Architect)
-**Last updated:** 2026-07-05
-**Review passes:** 25 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation) (Pass 24: item 54 phases 54a+54b by Fable 5 — automatic ffmpeg via bundled imageio-ffmpeg + dependency preflight/setup card, and a one-command `start` that launches+opens the browser+stops cleanly — approved; deviations local-tier) (Pass 25: BATCH — item 59 (Codex: roster-confirmed batters no longer flagged possible-substitute) + Fable items 54c onboarding, 55 template probe/fail-fast, 52 roster display name, 30 originality audit, 54e coach README, 54d macOS-bundle design — all approved+merged; item 56 inning recalibration REJECTED — proposed coords validated ineffective on real footage, inning still misreads 72/43, needs frame-based recalibration)
+**Last updated:** 2026-07-06
+**Review passes:** 26 (Pass 7: item 36 — lineup-strip confidence split; CR-26 through CR-31 resolved) (Pass 8: items 34 + 32 — game-start detection and batting-order validator; CR-32 through CR-37 resolved) (Pass 9: item 29 — score at inning transitions; CR-38 resolved) (Pass 10: item 28 — project config defaults; CR-39 resolved) (Pass 11: item 35 — final scorebug marker; CR-40 and CR-41 resolved) (Pass 12: item 37 — playlist batch queue; CR-42 through CR-46 resolved, CR-47 deferred) (Pass 13: item 44 — pregame game-start suppressor; CR-48 and CR-49 resolved) (Pass 14: item 45 — right_score calibration + empty-field guard approved; CR-50 opened) (Pass 15: item 46 — local web app phase 39a skeleton + job runner, by Fable 5, approved; CR-51 opened) (Pass 16: item 47 — web app phase 39b results + paste kits, by Fable 5, approved; CR-50 and CR-51 resolved; item 48 opened for the review-report generation gap Fable flagged) (Pass 17: BATCH review of six co-mingled items — 48 + 49 (Fable) and 41 + 40 + 42 + 38 (Codex) — all approved; CR-52 opened; forced by a shared-tree tangle, prevention recorded in ROLES.md worktree-isolation policy) (Pass 18: CR-52 resolved by Fable 5 — feedback label-only name redaction; first item landed via the new worktree-isolation flow) (Pass 19: item 50 — roster management web UI, by Fable 5, approved and merged from impl/item-50) (Pass 20: item 51 — send-feedback web UI, by Codex, approved and merged from impl/item-51; PII-leak invariant verified across preview/GitHub/email/copy; completes the Local Web App epic, item 39) (Pass 21: item 43 — OCR multi-PSM voting + per-field preprocessing, by Fable 5, approved and merged from impl/item-43; measured deviation from the design's example strategies, flagged with data + a committed regression test) (Pass 22: item 53 — yt-dlp module fallback, by Codex; one review defect fixed on-branch before merge: absent-yt-dlp RuntimeError escaped cli.main() -> now FileNotFoundError, caught, clean exit 1) (Pass 23: item 54 turnkey fixes P1-P4 by Fable 5 — real SidelineHD template as default, no-scoreboard health warning, live frame progress, consolidated game page — approved; deviations all flagged; item 55 template-auto-detect design filed pending architect validation) (Pass 24: item 54 phases 54a+54b by Fable 5 — automatic ffmpeg via bundled imageio-ffmpeg + dependency preflight/setup card, and a one-command `start` that launches+opens the browser+stops cleanly — approved; deviations local-tier) (Pass 25: BATCH — item 59 (Codex: roster-confirmed batters no longer flagged possible-substitute) + Fable items 54c onboarding, 55 template probe/fail-fast, 52 roster display name, 30 originality audit, 54e coach README, 54d macOS-bundle design — all approved+merged; item 56 inning recalibration REJECTED — proposed coords validated ineffective on real footage, inning still misreads 72/43, needs frame-based recalibration) (Pass 26: scorebug accuracy cluster items 60+61+56 by Fable 5 — glyph-isolation preprocessing, PSM/whitelist fix for single-digit 0, arrow half detection, score plausibility + confidence guards, half-boundary batter reset — approved; independently re-validated on both real videos: G1 164->16 + clean inning, G2 early scores read + at-bats 23->28)
 
 This document is the running record of architectural observations, bugs, and improvement recommendations for the `sidelinehd-extractor` codebase. It is updated after each review pass. Items move to **Resolved** once confirmed fixed.
 
@@ -19,105 +19,7 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-#### Items 60 + 61 + 56 — Scorebug accuracy cluster (branch `impl/accuracy`, by Fable 5)
-**Files:** [ocr.py](src/sidelinehd_extractor/ocr.py), [state.py](src/sidelinehd_extractor/state.py), [events.py](src/sidelinehd_extractor/events.py), [constants.py](src/sidelinehd_extractor/constants.py)
-**Status:** Ready for Review
-
-One branch for the cluster because the three live-fire bugs share a root: the
-scorebug numeric regions (left_score / right_score / inning) were binarized
-with plain Otsu, which fails on exactly the pixels around them — the green
-inning arrow (OCRs as a fused "4"/"7"), base-diamond/gradient edges crossing
-the crops (breaks single-digit reads), and the scrolling-banner overlay mode.
-Frame inspection confirmed the region *coordinates were never wrong* (digits
-sit inside every box), which is why item 56's earlier blind coordinate nudge
-validated ineffective.
-
-**What shipped:**
-- **`scorebug_glyph_isolate` preprocessing (items 56/60):** HSV isolation of
-  bright low-saturation glyph components (S≤80, V≥180) with digit-shape
-  filters (height ≥35% of crop, ≤2 components, crop-edge/width rejection) for
-  left_score/right_score/inning. The saturated arrow, diamond edges, and
-  banner text are excluded by construction; no glyph → empty read (never a
-  noise read). A relaxed second pass (V≥140, S≤160, green-yellow hue band
-  excluded) fires only for the two score fields when the strict pass saw
-  nothing digit-height — it recovers the FINAL view's dimmed losing score.
-- **PSM 8 + `Oo` whitelist + o→0 mapping:** the isolated bold zero classifies
-  as letter "o" under PSM 8; the old digits-only whitelist silently dropped
-  it (the root of the single-digit/`0` blindness). These fields now use
-  first-non-empty PSM fallback (8→7→10) instead of item 43's confidence
-  voting — on a clean isolated glyph, a mis-segmented PSM 7/10 read can
-  outscore the correct PSM 8 read (measured: a real "0" losing to an "8").
-- **Pixel arrow-direction detection (item 56):** `detect_inning_arrow` reads
-  the green triangle's orientation from the inning crop and carries it as the
-  sample's `source_detail`; `state.py` prefers it over text heuristics (only
-  alongside a real inning digit read). The inning OCR itself is now a clean
-  single digit — fused "43"/"72" reads went to zero.
-- **Score plausibility guard (item 60):** `parse_score` rejects 3+ digit
-  reads and values above `MAX_PLAUSIBLE_SCORE` (50) as missing, at state
-  entry — which also covers final-score selection and every chapter suffix.
-- **Confidence floor at state entry:** scorebug reads below 0.5 (item 40
-  confidence) are ignored. Measured: real reads 0.75–0.96; a single pregame
-  speck reading "7" at 0.007 smoothed into a phantom "inning 7" across the
-  whole pregame span and poisoned the half-inning progression chain.
-- **Pregame blanking:** when game_status is pregame (item 44's signal),
-  inning/half/scores are treated as absent — the pregame overlay shows no
-  game state.
-- **Half-boundary batter reset (item 61):** `detect_events` clears
-  last-batter dedup/spacing state when a half-inning chapter fires. Root
-  cause of the missing at-bats was NOT weak OCR: during the opposing half,
-  the lineup-strip highlight points at the upcoming leadoff batter and fires
-  a phantom at-bat there; the batting-half filter later removes the phantom,
-  but it had already set `last_batter_number`, so the real leadoff at-bat was
-  swallowed as "same batter". (state.py already preferred batter_card_number,
-  so the design's literal fallback suggestion was already in place.)
-
-**Measured on the two live-fire videos (full re-run of the affected fields;
-before = the runs the bugs were filed from):**
-
-Game 1 (Xpl8tMDxGaY, the "164" game):
-- Final score: **164-21 → 16-21** (correct). Corrupted 3+ digit score reads
-  9 → 1, and the survivor is rejected by the plausibility guard.
-- Fused multi-digit inning reads: **1251/1685 → 0/1622**; all 15 chapter
-  labels remain real innings (Top 1 … Top 8).
-- left_score read rate by game third: 291/574/543 → **560/579/575** (of 579).
-- Chapter score suffixes now coherent (e.g. Bottom 1 "8-0" → "0-0",
-  Bottom 7 "14-16" → "4-16"); at-bats 46 → 55.
-
-Game 2 (PrITEF1eozM, the missing-scores/batters game):
-- left_score read rate by third: **13/10/379 → 353/474/474** (of 474) —
-  single digits including "0" now read; right_score 172/187/316 → 353/474/474.
-- Chapter suffixes present from Bottom 1 on (previously None until Bottom 4);
-  all 15 chapters preserved.
-- At-bats 23 → 28; every previously-impossible 2-batter/3-out half-inning now
-  shows ≥3 batters (bottoms 1/2/3/5: 2→3 each; bottom 7: 3→4).
-
-**Deviations (cross-cutting tier — all for architect validation):**
-1. **No region coordinate changes** (item 56's design implied recalibration).
-   Frame evidence shows the boxes contain the digits; the fix is the
-   preprocessing above. Packaged template and example stay identical/in sync.
-2. **Novel preprocessing strategy + PSM/whitelist changes** for the three
-   fields (design suggested guard-level fixes only). Validated 29/29 on a
-   ground-truth frame set spanning both games and all overlay modes (active,
-   banner, pregame, FINAL) plus the full-game metrics above.
-3. `inning` joins `NUMERIC_CONFIDENCE_FIELDS` (min-confidence aggregation);
-   the three scorebug fields leave item 43's `MULTI_PSM_VOTE_FIELDS`
-   (first-non-empty fallback instead — rationale and measurement above).
-4. Item 43's regression-gate fixture (`_make_numeric_crop`) now draws
-   thickness-2 strokes (matching the bold overlay font; the old 1px strokes
-   fragment under the color mask in ways real footage never does). Under the
-   bold fixtures the new pipeline still beats the old one 5 vs 4 correct.
-5. Half-boundary reset (item 61) also resets the at-bat *spacing* clock at
-   chapter boundaries — an at-bat never spans a half-inning, and without it
-   a recovered leadoff within 45s/20s of the phantom would still be blocked.
-6. State entry now drops sub-0.5-confidence scorebug reads and blanks
-   scorebug values on pregame status (not in any design; measurements above).
-
-Tests: 451 pass (`PYTHONPATH=src python3 -m pytest tests/`), ruff clean. New
-tests: isolation (glyph extraction, blank-on-empty, banner rejection, dim-
-FINAL relaxed pass scores-only, grayscale degrade), arrow direction up/down/
-none, o→0 normalization, PSM fallback order, score plausibility, arrow-half
-precedence, confidence floor, pregame blanking, half-boundary batter refire.
-All fixtures synthetic/placeholder-only; real-footage validation stayed local.
+_No items ready for review._
 
 ## Open Items
 
