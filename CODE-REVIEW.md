@@ -19,7 +19,41 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 62 — Improve Batter-Number OCR
+**Status:** Ready for Review
+**Branch:** `impl/item-62`
+
+Implemented a batter-card-number specific OCR path in `ocr.py`: color crops now
+first require the dark lower-third card background, then run the existing numeric
+pad OCR, with a bright-glyph isolated fallback only when the existing read is
+empty. The fallback only accepts plausible one- or two-digit card numbers, so
+overlong isolated reads are discarded instead of becoming new OCR noise.
+
+**Validation.** Re-ran Tesseract over 0-2400s slices at 10s intervals on both
+local real videos (`Xpl8tMDxGaY`, `PrITEF1eozM`), using only batter fields plus
+scorebug sentinels. Card-present frames were classified independently from pixels
+using the new dark-card gate, not from OCR text.
+
+- `Xpl8tMDxGaY` `batter_card_number`: all reads 174/241 -> 190/241; card-present
+  reads 174/205 -> 190/205; absent-card noise 0/36 -> 0/36; garble 0 -> 0.
+- `PrITEF1eozM` `batter_card_number`: all reads 116/241 -> 114/241 because false
+  absent-card reads were removed; card-present reads 108/115 -> 114/115;
+  absent-card noise 8/126 -> 0/126; garble 0 -> 0.
+- `batter_number`/`on_deck_number`/`lineup_strip`: unchanged by design
+  (`batter_number` stayed 59/241 on `Xpl8tMDxGaY`, 30/241 on `PrITEF1eozM`).
+  Frame inspection showed these template crops land on pitch-count/scorebug UI
+  in these two videos, not a player lineup strip, so increasing their non-empty
+  reads would strengthen false player-number noise.
+- Scorebug sentinels were unchanged on the full after run: `Xpl8tMDxGaY`
+  left/right/inning 231/241, 231/241, 231/241 before and after;
+  `PrITEF1eozM` left/right/inning 181/241, 181/241, 133/241 before and after.
+
+**Deviations:** Local-tier deviation from the broad "extend glyph isolation to
+all batter fields" framing: shipped the measured improvement for
+`batter_card_number` only. I did not change `batter_number`, `on_deck_number`, or
+`lineup_strip` preprocessing after frame inspection showed those crops are
+pitch-count/scorebug regions for the validation videos and would add noise rather
+than real batter identities.
 
 ## Open Items
 

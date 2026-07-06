@@ -16,6 +16,9 @@ from sidelinehd_extractor.ocr import (
     PREPROCESS_STRATEGIES,
     _extract_highlighted_lineup_crop,
     _GLYPH_PAD_PX,
+    _has_dark_batter_card_number_background,
+    _isolate_batter_card_number_glyphs,
+    _ocr_batter_card_number,
     _optional_tesserocr_backend,
     _parse_tesseract_tsv_output,
     _tesseract_install_hint,
@@ -269,6 +272,18 @@ def _make_numeric_crop(text, width=32, height=23):
     return np.clip(image, 0, 255).astype(np.uint8)
 
 
+class MockOCRPreprocessed:
+    def __init__(self, *results):
+        self._results = list(results)
+        self.images = []
+
+    def __call__(self, image, _config, _field_name):
+        self.images.append(image)
+        if self._results:
+            return self._results.pop(0)
+        return OCRBackendResult("", "", confidence=None, backend="tesseract")
+
+
 class PreprocessStrategyTests(unittest.TestCase):
     def test_isolated_glyph_fields_use_pad_and_other_fields_default(self):
         scorebug_fields = {"left_score", "right_score", "inning"}
@@ -391,6 +406,83 @@ class ScorebugGlyphIsolationTests(unittest.TestCase):
 
         self.assertEqual(processed.dtype, np.uint8)
         self.assertTrue((processed < 128).any())
+
+
+class BatterCardNumberOCRTests(unittest.TestCase):
+    def _card_number_crop(self, text="#24"):
+        import cv2
+        import numpy as np
+
+        crop = np.full((19, 33, 3), (42, 35, 28), dtype=np.uint8)
+        cv2.putText(crop, text, (1, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (235, 235, 235), 1)
+        return crop
+
+    def test_batter_card_number_background_gate_rejects_bright_absent_card(self):
+        import numpy as np
+
+        crop = np.full((19, 33, 3), (220, 230, 240), dtype=np.uint8)
+
+        result = _ocr_batter_card_number(crop, "tesseract", MockOCRPreprocessed())
+
+        self.assertEqual(result.normalized_text, "")
+        self.assertEqual(result.backend, "tesseract")
+
+    def test_batter_card_number_background_gate_accepts_dark_card(self):
+        self.assertTrue(_has_dark_batter_card_number_background(self._card_number_crop()))
+
+    def test_batter_card_number_isolation_extracts_hash_number_glyphs(self):
+        processed = _isolate_batter_card_number_glyphs(self._card_number_crop(), scale=6)
+
+        self.assertIsNotNone(processed)
+        self.assertTrue((processed < 128).any())
+
+    def test_batter_card_number_keeps_existing_nonempty_read(self):
+        calls = []
+        ocr = MockOCRPreprocessed(
+            OCRBackendResult("#24", "#24", confidence=0.8, backend="tesseract")
+        )
+
+        with patch(
+            "sidelinehd_extractor.ocr._isolate_batter_card_number_glyphs",
+            side_effect=lambda *_args: calls.append("fallback"),
+        ):
+            result = _ocr_batter_card_number(self._card_number_crop(), "tesseract", ocr)
+
+        self.assertEqual(result.normalized_text, "#24")
+        self.assertEqual(calls, [])
+
+    def test_batter_card_number_uses_isolated_fallback_after_empty_read(self):
+        processed_fallback = object()
+        ocr = MockOCRPreprocessed(
+            OCRBackendResult("", "", confidence=None, backend="tesseract"),
+            OCRBackendResult("", "", confidence=None, backend="tesseract"),
+            OCRBackendResult("#24", "#24", confidence=0.9, backend="tesseract"),
+        )
+
+        with patch(
+            "sidelinehd_extractor.ocr._isolate_batter_card_number_glyphs",
+            return_value=processed_fallback,
+        ):
+            result = _ocr_batter_card_number(self._card_number_crop(), "tesseract", ocr)
+
+        self.assertEqual(result.normalized_text, "#24")
+        self.assertIs(ocr.images[-1], processed_fallback)
+
+    def test_batter_card_number_rejects_overlong_isolated_fallback(self):
+        ocr = MockOCRPreprocessed(
+            OCRBackendResult("", "", confidence=None, backend="tesseract"),
+            OCRBackendResult("", "", confidence=None, backend="tesseract"),
+            OCRBackendResult("#103", "#103", confidence=0.9, backend="tesseract"),
+            OCRBackendResult("#103", "#103", confidence=0.9, backend="tesseract"),
+        )
+
+        with patch(
+            "sidelinehd_extractor.ocr._isolate_batter_card_number_glyphs",
+            return_value=object(),
+        ):
+            result = _ocr_batter_card_number(self._card_number_crop(), "tesseract", ocr)
+
+        self.assertEqual(result.normalized_text, "")
 
 
 class InningArrowDetectionTests(unittest.TestCase):
