@@ -19,7 +19,23 @@ Codex may update an Open item to **Ready for Review** after implementing it and 
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 54d — macOS `.app` bundle (phases 54d-1 + 54d-2)
+**Branch:** `impl/item-54d-impl` (Fable 5) — independent of the 57/58 stack (no shared files; `origin/impl/item-54d` was the design-only branch, already merged)
+**Files:** new [desktop.py](src/sidelinehd_extractor/desktop.py); new `packaging/` (`sidelinehd.spec`, `sidelinehd_desktop.py`, `build-macos.md`); `pyproject.toml` (`desktop` extra: rumps); `.gitignore` (`packaging/tessdata/`); tests in `tests/test_desktop.py`.
+
+**Implementation note.** *54d-1:* `desktop.py` is the menubar launcher, runnable from source via `python -m sidelinehd_extractor.desktop` — `prepare_data_dir()` chdirs to `~/Library/Application Support/SidelineHD Extractor/` (per the design; the design's own escalation note on this path stands for architect confirmation) and points `TESSDATA_PREFIX` at the bundle's `tessdata/` when frozen; `ServerController` drives `uvicorn.Server` on a daemon thread (graceful `should_exit` stop, startup-failure detection); the rumps UI (Open / Running-on / Quit) is a thin untested shell — everything else is unit-tested headless. The desktop job runner requests the `tesserocr` OCR backend, which `create_ocr_backend` already falls back from cleanly when running from source (no `ocr.py` changes — item 62 has Codex isolated there). *54d-2:* PyInstaller spec + one-page build doc (venv → fetch `eng.traineddata` → `pyinstaller` → ad-hoc codesign → clean-account checklist).
+
+**Verified.** Design step 0: the tesserocr 2.10.0 macOS wheel is self-contained (embedded libtesseract 5.5.1 + leptonica dylibs, confirmed in a clean venv) and OCR'd an image with only the downloaded `eng.traineddata` — no brew Tesseract. Full build executed from the spec: 214 MB `.app` containing webapp templates/static, overlay template data, tessdata, imageio-ffmpeg binary, and the tesserocr dylibs, with `LSUIElement` set. Launch smoke test on this machine: the app started while Ryan's dev server held port 8000, auto-picked 8001, served the real index (HTTP 200), and shut down cleanly on SIGTERM with no orphan process. **Remaining manual step for Ryan (per the design's 54d-2):** double-click the built app on a clean account/machine and run a short game end-to-end. 461 tests pass (10 new); ruff green.
+
+**Deviations (tiered policy):**
+- *54d-3 (CI artifact) not implemented* — GitHub Actions is outside this session's local-only scope; it remains open under item 19's CI seam.
+- *Port conflict handling:* the design reused 54b's port handling, but `start`'s behavior is to print an error and exit — a menubar app has no terminal to read that from, so `find_open_port` scans 8000–8009 and takes the first free port instead. (Proved out in the smoke test above.) Local UX call; flagging because it diverges from the CLI's user-visible behavior in the same situation.
+- *`desktop` optional-dependency extra added to `pyproject.toml`* (rumps only; install as `.[web,desktop]`) — packaging metadata addition the design implied but didn't specify.
+- *Status menu wording:* "Running on http://127.0.0.1:PORT" (actual bound port) instead of the design sketch's "Status: running on :8000".
+
+## Open Items
+
+_No open items._
 
 ## Open Items
 
