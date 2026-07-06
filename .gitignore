@@ -19,3 +19,5 @@ sidelinehd.cfg
 dist/
 build/
 *.egg-info/
+# Per-build upstream download (see packaging/build-macos.md step 2)
+packaging/tessdata/
