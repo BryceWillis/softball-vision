@@ -149,6 +149,12 @@ class JobRunner:
         self._output_dir = output_dir
         self._pipeline_kwargs = pipeline_kwargs
 
+    @property
+    def output_dir(self) -> Path:
+        """Where this runner writes run dirs (item 57 rehydrates from here)."""
+
+        return self._output_dir
+
     def submit(self, job: Job) -> None:
         self._executor.submit(self._run, job.id)
 

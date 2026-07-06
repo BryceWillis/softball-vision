@@ -4309,7 +4309,7 @@ left_score first-third reads 13→353 of 474).
 
 ### 57. Persistent Run History (view completed runs across restarts)
 
-Status: Ready to implement — HIGH priority (breaks the basic local flow)
+Status: Ready for review (`impl/item-57`, Fable 5) — HIGH priority (breaks the basic local flow)
 Source: Live-fire (2026-07-05). The web JobStore is in-memory, so after the app
 restarts, every completed run 404s in the UI even though its artifacts are intact
 on disk (`runs/<...>/` with events.jsonl + exports + manifest). A user who runs a
