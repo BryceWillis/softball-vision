@@ -4466,6 +4466,31 @@ empty even though the card number is available.
    innings with only 2 batters where a batter was clearly readable).
 3. Existing detection tests (items 31/32/34) stay green.
 
+### 62. Improve Batter-Number OCR (extend glyph isolation to the batter fields)
+
+Status: Ready to implement — isolated to ocr.py (Codex)
+Source: Live-fire follow-up 2026-07-06. Pass 26 applied `scorebug_glyph_isolate`
+only to `left_score`/`right_score`/`inning`. The batter fields
+(`batter_number`, `batter_card_number`, `on_deck_number`, `lineup_strip`) still
+use the old preprocessing and read weakly (game 2: `batter_number` 55/474 early).
+These fields drive at-bat detection and player name/number resolution, so weak
+reads mean missed at-bats and unresolved-number review flags (the exception noise
+the owner flagged).
+
+**Approach (analyze + fix; latitude for a better solution).** Frame-inspect the
+batter-card / lineup-strip crops on the two real games, then improve their OCR —
+adapt Pass 26's `scorebug_glyph_isolate` if it fits, or devise a strategy suited
+to the batter-card styling (colored number badge, possibly different background).
+Do NOT ship a blind change: validate before/after read rates on both real videos
+and only keep what measurably improves them without regressing the scorebug work.
+
+**Acceptance criteria.**
+1. Measured improvement in `batter_number`/`batter_card_number` non-empty read
+   rate on both real games (before/after in the CODE-REVIEW note), no scorebug
+   regression.
+2. No increase in noise/garbled reads (validate a sample).
+3. Suite + ruff green; placeholder-only unit fixtures.
+
 ## Discussion / Later Deliverables
 
 ### Web App — CSRF / same-origin hardening (deferred)
