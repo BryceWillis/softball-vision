@@ -28,6 +28,18 @@ _No reported bugs pending triage._
 
 ## Open Items
 
+#### CR-54 — First CI run (item 19) is red: three classes of pre-existing latent test bugs
+**File:** [tests/test_ocr.py](tests/test_ocr.py), [tests/test_cli.py](tests/test_cli.py), [tests/test_batch.py](tests/test_batch.py)
+**Pass:** 31 — surfaced by item 19's new GitHub Actions matrix ([run 28820643489](https://github.com/BryceWillis/softball-vision/actions/runs/28820643489))
+
+The item 19 CI matrix (ubuntu/macos/windows × py3.10/3.14) failed on its first run — **all six jobs**. None of the failures are caused by item 19; the CI simply exercises the suite in environments the local macOS/OpenCV-4 dev box never did. This is the CI doing exactly its job. Three independent root causes:
+
+1. **OpenCV 5 forward-incompat (all platforms) — test fixture only.** CI resolves `opencv-python 5.0.0` (satisfies `opencv-python>=4.9`; local is 4.13.0). OpenCV 5's `cv2.putText` now asserts `img.depth() == CV_8U`. The `test_ocr.py` glyph-synthesis helper (~line 262-272) draws text on a `float32` image, so every test using it errors (`PreprocessStrategyTests`, `ScorebugGlyphIsolationTests` — ~7 tests). **Production is unaffected** — the only production `putText` is `calibration.py:134` (verify it draws on a uint8 canvas). Fix: build the fixture image as `uint8` before `putText` (draw on a uint8 array, add noise separately), or pin `opencv-python<5` and schedule an OpenCV-5 migration item. Prefer the fixture fix — it's a test bug, not a real incompat.
+2. **Test-isolation flake (all platforms).** `test_cli.py::test_run_youtube_uses_project_config_defaults` fails with `'NoneType' object has no attribute 'kwargs'` (mock never called) in a clean environment, but passes locally — almost certainly leaked state (a project config / `sidelinehd.cfg` written to cwd by an earlier test, or cwd-dependent config discovery). Fix: isolate the test's cwd/config (tmp cwd or patched config path) and ensure no test writes config into the repo/cwd.
+3. **Windows path-separator brittleness (windows-latest only).** Three tests hardcode `/` in expected strings while the code correctly emits OS-native separators: `test_cli.py::test_format_roster_next_command_mentions_roster_and_template` (`rosters/stars.csv` vs `rosters\stars.csv`), `test_cli.py::test_main_prints_clean_error_for_missing_file` (`runs/does-not-exist`), and `test_batch.py::test_run_playlist_batch_skips_already_done_entries` (a Windows `\` path serialized into JSON → `JSONDecodeError: Invalid \escape`). Fix: make assertions separator-agnostic (compare against `str(Path(...))` / `os.sep`, or normalize) and ensure any path written into JSON uses `as_posix()` or is JSON-escaped.
+
+**Scope:** test-quality only; no production code implicated (pending the `calibration.py` uint8 verification). Best handled by an implementer (Codex or Fable 5) who can validate on the CI matrix by pushing the branch — the Windows cases can't be reproduced on the macOS dev box.
+
 _No open items._
 
 ## Deferred Items
