@@ -20,25 +20,32 @@ Implementers may add new **Reported** items directly (bug found while working on
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### CR-54 — First CI run (item 19) is red: three classes of pre-existing latent test bugs
+**File:** [tests/test_ocr.py](tests/test_ocr.py), [tests/test_cli.py](tests/test_cli.py), [tests/test_batch.py](tests/test_batch.py)
+**Pass:** 31 — surfaced by item 19's new GitHub Actions matrix ([run 28820643489](https://github.com/BryceWillis/softball-vision/actions/runs/28820643489))
+**Status:** Ready for Review (by Fable 5, branch `impl/cr-54`)
+
+The item 19 CI matrix (ubuntu/macos/windows × py3.10/3.14) failed on its first run — **all six jobs**. None of the failures are caused by item 19; the CI simply exercises the suite in environments the local macOS/OpenCV-4 dev box never did. Three independent root causes:
+
+1. **OpenCV 5 forward-incompat (all platforms) — test fixture only.** CI resolves `opencv-python 5.0.0`; OpenCV 5's `cv2.putText` asserts `img.depth() == CV_8U`, and the `test_ocr.py` glyph-synthesis helper drew on `float32`.
+2. **Test-isolation flake (all platforms).** `test_cli.py::test_run_youtube_uses_project_config_defaults` fails in a clean environment (`'NoneType' object has no attribute 'kwargs'` — mock never called) but passes locally.
+3. **Windows path-separator brittleness (windows-latest only).** Three tests hardcode `/` in expected strings while the code correctly emits OS-native separators.
+
+**Implementation note (Fable 5).** All changes are test-only; no production source touched. Validated on the full matrix: **all six jobs green** — [run 28822130761](https://github.com/BryceWillis/softball-vision/actions/runs/28822130761). Locally: 508 pass (also green with tesseract removed from PATH, and under a real `opencv-python 5.0.0` + Python 3.14 venv), ruff clean.
+
+1. `_make_numeric_crop` now builds the gradient+noise background in float, converts to uint8, then draws — and drops `LINE_AA`, whose uint8 blending rounds differently across OpenCV versions and fragmented the thin `"11"` strokes (the real-Tesseract regression gate `NumericConfidenceRegressionTests` stays green). Verified production's only `putText` (`calibration.py` `render_template_guide`) draws exclusively on decoded video frames (uint8) — no production bug.
+2. **Root cause differed from the CR hypothesis:** not leaked cwd/config state — the test already isolates its cwd, and a full-suite run leaves the tree clean (no test writes `sidelinehd.cfg` into the repo/cwd; verified via `git status` after the run). The test invoked `main(["run-youtube", …])` without `--ocr`, and the default `tesseract` backend's PATH preflight (`ensure_tesseract_available`) exits `main()` before the mocked `run_youtube_game` on any host without Tesseract (CI installs none; the local box has it). Reproduced deterministically by hiding tesseract from PATH; fixed by passing `--ocr none` — the test asserts config-default plumbing, not OCR.
+3. Separator-agnostic assertions: the roster next-command and missing-file tests build expectations from `Path` objects (the latter via `repr(str(Path(...)))`, since `str(OSError)` quotes the filename with `repr()`, which escapes Windows backslashes); the batch state fixture writes its JSONL line with `json.dumps` instead of f-string interpolation so Windows absolute paths are escaped. The JSON write in production (`_write_playlist_state` → `write_jsonl_atomic`) already serializes correctly — test-only.
+
+**Additional fix surfaced by CI round 1 (same class as #1, test-only):** `test_isolation_rejects_banner_text_spanning_the_crop` overfit OpenCV 4's Hershey rasterization, where `"MASH"` merges into one crop-spanning blob that the isolator rejects; OpenCV 5 renders tighter glyphs whose *unclipped middle letters* legitimately pass isolation (≤2 clean glyph components is an accepted read by design, and the 32px crop can't fit ≥3 unclipped letters to trigger the component cap). The banner text is now drawn twice at a 2px offset so the letters bridge into a single edge-clipped run under both versions — reproduced and verified locally against `opencv-python 5.0.0`.
+
+**Deviations:** none in production code (none touched). Two local-tier test-fixture adjustments beyond the CR's prescribed fixes, both flagged above: dropping `LINE_AA` in `_make_numeric_crop` (fix 1) and the double-draw banner fixture (round-1 follow-up). The CR's issue-2 diagnosis (cwd/config leakage) was disproven and corrected to the tesseract PATH preflight, per the fix-the-root-cause instruction.
 
 ## Reported Items
 
 _No reported bugs pending triage._
 
 ## Open Items
-
-#### CR-54 — First CI run (item 19) is red: three classes of pre-existing latent test bugs
-**File:** [tests/test_ocr.py](tests/test_ocr.py), [tests/test_cli.py](tests/test_cli.py), [tests/test_batch.py](tests/test_batch.py)
-**Pass:** 31 — surfaced by item 19's new GitHub Actions matrix ([run 28820643489](https://github.com/BryceWillis/softball-vision/actions/runs/28820643489))
-
-The item 19 CI matrix (ubuntu/macos/windows × py3.10/3.14) failed on its first run — **all six jobs**. None of the failures are caused by item 19; the CI simply exercises the suite in environments the local macOS/OpenCV-4 dev box never did. This is the CI doing exactly its job. Three independent root causes:
-
-1. **OpenCV 5 forward-incompat (all platforms) — test fixture only.** CI resolves `opencv-python 5.0.0` (satisfies `opencv-python>=4.9`; local is 4.13.0). OpenCV 5's `cv2.putText` now asserts `img.depth() == CV_8U`. The `test_ocr.py` glyph-synthesis helper (~line 262-272) draws text on a `float32` image, so every test using it errors (`PreprocessStrategyTests`, `ScorebugGlyphIsolationTests` — ~7 tests). **Production is unaffected** — the only production `putText` is `calibration.py:134` (verify it draws on a uint8 canvas). Fix: build the fixture image as `uint8` before `putText` (draw on a uint8 array, add noise separately), or pin `opencv-python<5` and schedule an OpenCV-5 migration item. Prefer the fixture fix — it's a test bug, not a real incompat.
-2. **Test-isolation flake (all platforms).** `test_cli.py::test_run_youtube_uses_project_config_defaults` fails with `'NoneType' object has no attribute 'kwargs'` (mock never called) in a clean environment, but passes locally — almost certainly leaked state (a project config / `sidelinehd.cfg` written to cwd by an earlier test, or cwd-dependent config discovery). Fix: isolate the test's cwd/config (tmp cwd or patched config path) and ensure no test writes config into the repo/cwd.
-3. **Windows path-separator brittleness (windows-latest only).** Three tests hardcode `/` in expected strings while the code correctly emits OS-native separators: `test_cli.py::test_format_roster_next_command_mentions_roster_and_template` (`rosters/stars.csv` vs `rosters\stars.csv`), `test_cli.py::test_main_prints_clean_error_for_missing_file` (`runs/does-not-exist`), and `test_batch.py::test_run_playlist_batch_skips_already_done_entries` (a Windows `\` path serialized into JSON → `JSONDecodeError: Invalid \escape`). Fix: make assertions separator-agnostic (compare against `str(Path(...))` / `os.sep`, or normalize) and ensure any path written into JSON uses `as_posix()` or is JSON-escaped.
-
-**Scope:** test-quality only; no production code implicated (pending the `calibration.py` uint8 verification). Best handled by an implementer (Codex or Fable 5) who can validate on the CI matrix by pushing the branch — the Windows cases can't be reproduced on the macOS dev box.
 
 _No open items._
 
