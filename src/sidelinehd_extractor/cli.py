@@ -63,6 +63,20 @@ def _to_json(value: object) -> str:
     return json.dumps(to_plain_data(value), indent=2)
 
 
+def _next_commands(run_dir: object) -> list:
+    """Follow-up review commands for a finished run.
+
+    Item 19: uses the installed console script with double-quoted paths so the
+    commands are copy/pasteable on macOS/Linux shells, PowerShell, and cmd.exe
+    alike (single quotes are literal characters in cmd.exe).
+    """
+
+    return [
+        f'sidelinehd-extractor review-events "{run_dir}" --kind at-bats',
+        f'sidelinehd-extractor review-events "{run_dir}" --kind chapters',
+    ]
+
+
 def _format_progress_timestamp(seconds: float) -> str:
     total_seconds = int(seconds)
     hours, remainder = divmod(total_seconds, 3600)
@@ -402,8 +416,10 @@ def _format_roster_preview_row(row: tuple[str, str, str], widths: List[int]) -> 
 
 
 def _format_roster_next_command(roster_path: Path) -> str:
+    # Item 19: double quotes so the suggestion pastes cleanly on Windows
+    # shells too (cmd.exe treats single quotes as literal characters).
     return (
-        "sidelinehd-extractor run-youtube 'YOUTUBE_URL' "
+        'sidelinehd-extractor run-youtube "YOUTUBE_URL" '
         f"--roster {roster_path} "
         "--template YOUR_TEMPLATE"
     )
@@ -505,16 +521,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
                 "state_count": result.state_count,
                 "event_count": result.event_count,
                 "batting_half_inference": result.batting_half_inference,
-                "next_commands": [
-                    (
-                        "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
-                        f"review-events '{result.run_dir}' --kind at-bats"
-                    ),
-                    (
-                        "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
-                        f"review-events '{result.run_dir}' --kind chapters"
-                    ),
-                ],
+                "next_commands": _next_commands(result.run_dir),
             }
         )
     )
@@ -581,16 +588,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
                 "state_count": run.state_count,
                 "event_count": run.event_count,
                 "batting_half_inference": run.batting_half_inference,
-                "next_commands": [
-                    (
-                        "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
-                        f"review-events '{run.run_dir}' --kind at-bats"
-                    ),
-                    (
-                        "PYTHONPATH=src python3 -m sidelinehd_extractor.cli "
-                        f"review-events '{run.run_dir}' --kind chapters"
-                    ),
-                ],
+                "next_commands": _next_commands(run.run_dir),
             }
         )
     )
