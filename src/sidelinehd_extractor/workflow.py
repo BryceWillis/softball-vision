@@ -35,6 +35,7 @@ from sidelinehd_extractor.youtube import (
     DEFAULT_YOUTUBE_CLIENT,
     DownloadResult,
     download_youtube_video,
+    extract_video_id,
 )
 
 
@@ -384,7 +385,33 @@ def run_youtube_game(
         generate_review_report=generate_review_report,
         auto_detect_template=auto_detect_template,
     )
+    # Item 63: single-URL runs must carry the source video identity too — the
+    # review UI deep-links rows from ``youtube.video_id``. The batch path
+    # overwrites this with the richer playlist entry data afterwards.
+    record_youtube_source(run.manifest_path, extract_video_id(url), url)
     return RunYoutubeGameResult(download=download, run=run)
+
+
+def record_youtube_source(
+    manifest_path: Path,
+    video_id: Optional[str],
+    url: Optional[str],
+    *,
+    playlist_index: Optional[int] = None,
+    title: Optional[str] = None,
+) -> None:
+    """Persist the source YouTube identity to the manifest ``youtube`` section.
+
+    Shared by single-URL runs and the playlist batch path. The review UI reads
+    ``youtube.video_id`` back to deep-link review rows to the source video.
+    """
+
+    values: dict = {"video_id": video_id, "url": url}
+    if playlist_index is not None:
+        values["playlist_index"] = playlist_index
+    if title is not None:
+        values["title"] = title
+    update_manifest_section(manifest_path, "youtube", values)
 
 
 def finalize_run_exports(

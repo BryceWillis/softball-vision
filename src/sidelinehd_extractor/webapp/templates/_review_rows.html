@@ -51,7 +51,14 @@
         <li class="review-row {{ 'has-flags' if row.flags else 'no-flags' }} {{ 'tier-' + row.tier if row.tier }}">
           <div class="row-facts">
             <span class="row-index">#{{ row.index }}</span>
-            <span class="row-time">{{ format_timestamp(row.event.timestamp_seconds) }}</span>
+            {# Item 63: on YouTube-sourced runs the time deep-links to the
+               source video at this moment; local runs keep plain text. #}
+            {% if source_video_id %}
+              <a href="{{ youtube_watch_url(source_video_id, row.event.timestamp_seconds) }}"
+                 target="_blank" rel="noopener"><span class="row-time">{{ format_timestamp(row.event.timestamp_seconds) }}</span></a>
+            {% else %}
+              <span class="row-time">{{ format_timestamp(row.event.timestamp_seconds) }}</span>
+            {% endif %}
             <span class="row-type">{{ row.event.event_type.value }}</span>
             <span class="row-label">{{ row.event.label }}</span>
             {% if row.event.player_number %}

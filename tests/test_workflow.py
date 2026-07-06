@@ -415,6 +415,47 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result.run, run_result)
         self.assertEqual(stages, ["download"])
 
+    def test_run_youtube_game_records_video_id_in_manifest(self):
+        # Item 63: single-URL runs persist the source identity so the review
+        # UI can deep-link rows to the video.
+        url = "https://www.youtube.com/watch?v=abc123def45"
+        download = DownloadResult(
+            url=url,
+            output_dir=Path("videos"),
+            video_path=Path("videos/game.mp4"),
+            command=["yt-dlp", url],
+            stdout="videos/game.mp4\n",
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            manifest_path = run_dir / "manifest.json"
+            write_json(manifest_path, {"run": {"video": "game.mp4"}})
+            run_result = RunGameResult(
+                run_dir=run_dir,
+                manifest_path=manifest_path,
+                samples_path=run_dir / "samples.jsonl",
+                states_path=run_dir / "states.jsonl",
+                events_path=run_dir / "events.jsonl",
+                chapters_path=run_dir / "chapters.txt",
+                at_bats_path=run_dir / "at_bats.txt",
+                sample_count=4,
+                state_count=1,
+                event_count=2,
+            )
+
+            with patch(
+                "sidelinehd_extractor.workflow.download_youtube_video", return_value=download
+            ):
+                with patch("sidelinehd_extractor.workflow.run_game", return_value=run_result):
+                    run_youtube_game(url=url, video_dir=Path("videos"), output_dir=run_dir)
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["youtube"]["video_id"], "abc123def45")
+            self.assertEqual(manifest["youtube"]["url"], url)
+            # Existing sections survive the merge.
+            self.assertEqual(manifest["run"], {"video": "game.mp4"})
+
 
 if __name__ == "__main__":
     unittest.main()

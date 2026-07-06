@@ -20,7 +20,16 @@ Implementers may add new **Reported** items directly (bug found while working on
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 63 — Deep-link review rows to the source video timestamp
+**Status:** Ready for Review (Fable 5, branch `impl/item-63`)
+**Files:** `youtube.py` (`youtube_watch_url`, `extract_video_id`), `workflow.py` (`record_youtube_source`, `run_youtube_game`), `batch.py`, `webapp/app.py` (`_run_source_video_id`, `build_review_context`), `webapp/templates/_review_rows.html`
+
+Implemented per the item 63 design:
+- **Prerequisite:** `run_youtube_game` now records `youtube.video_id` (extracted from the submitted URL via new `youtube.extract_video_id`) plus the original watch URL to the run manifest. The batch path's `_record_youtube_video_id` was factored into a shared `workflow.record_youtube_source` used by both paths — batch still writes `playlist_index`/`title` on top, manifest content identical to before.
+- **URL helper:** `youtube_watch_url(video_id, seconds)` → `https://www.youtube.com/watch?v={id}&t={int(seconds)}s` (floors fractional seconds; no lead-in offset, per v1 design). Exposed to the review templates through `build_review_context` alongside `format_timestamp`.
+- **Wiring/render:** `build_review_context` reads `youtube.video_id` from the entry's own run-dir manifest via `_run_source_video_id` (None on missing manifest/section/blank id) and exposes `source_video_id`; `_review_rows.html` wraps the `row-time` span in `<a target="_blank" rel="noopener">` only when set — local runs and pre-item-63 YouTube manifests render the plain span exactly as before.
+- **Tests:** unit tests for `youtube_watch_url` (exact, fractional floor, `t=0s`) and `extract_video_id` (watch / short-link / shorts / live / embed / unrecognizable → None); workflow test that `run_youtube_game` writes `youtube.video_id`+`url` and merges with existing manifest sections; route tests that a YouTube run renders anchors with the correct escaped `&t=...s` and that local runs / blank `video_id` render no anchor. Full suite 507 passed; ruff clean.
+- **Deviations:** none. Corrections POST payloads, export contracts, `finalize_run_exports`, and `review_report.md` untouched; no roster/player name enters any URL.
 
 ## Reported Items
 

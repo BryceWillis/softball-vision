@@ -14,10 +14,13 @@ from sidelinehd_extractor.naming import slugify
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
 from sidelinehd_extractor.processing import (
     read_jsonl,
-    update_manifest_section,
     write_jsonl_atomic,
 )
-from sidelinehd_extractor.workflow import RunYoutubeGameResult, run_youtube_game
+from sidelinehd_extractor.workflow import (
+    RunYoutubeGameResult,
+    record_youtube_source,
+    run_youtube_game,
+)
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
     DEFAULT_YOUTUBE_CLIENT,
@@ -284,7 +287,13 @@ def _run_playlist_entry(
                 no_playlist=True,
                 youtube_client=youtube_client,
             )
-            _record_youtube_video_id(result.run.manifest_path, entry)
+            record_youtube_source(
+                result.run.manifest_path,
+                entry.video_id,
+                entry.url,
+                playlist_index=entry.index,
+                title=entry.title,
+            )
             return _result_from_entry(
                 entry,
                 status="done",
@@ -427,19 +436,6 @@ def _entry_output_prefix(output_prefix: Optional[Path], entry: PlaylistEntry) ->
     slug = slugify(entry.title or entry.video_id, fallback=entry.video_id or "game")
     base = output_prefix.expanduser()
     return base / slug / slug
-
-
-def _record_youtube_video_id(manifest_path: Path, entry: PlaylistEntry) -> None:
-    update_manifest_section(
-        manifest_path,
-        "youtube",
-        {
-            "video_id": entry.video_id,
-            "url": entry.url,
-            "playlist_index": entry.index,
-            "title": entry.title,
-        },
-    )
 
 
 def _is_complete_prior_result(result: PlaylistBatchItemResult) -> bool:

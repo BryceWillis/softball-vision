@@ -57,6 +57,7 @@ from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
 from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
+from sidelinehd_extractor.youtube import youtube_watch_url
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -199,6 +200,25 @@ def _run_health_warning(run_dir: Path) -> Optional[str]:
     if isinstance(health, dict) and health.get("no_scoreboard_detected"):
         return str(health.get("message") or NO_SCOREBOARD_WARNING)
     return None
+
+
+def _run_source_video_id(run_dir: Path) -> Optional[str]:
+    """The source YouTube video id from the run manifest, if recorded.
+
+    Item 63: local-file runs and manifests written before the ``youtube``
+    section existed simply return None — the review page then renders plain
+    timestamps instead of deep links.
+    """
+
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    youtube = manifest.get("youtube")
+    if not isinstance(youtube, dict):
+        return None
+    video_id = str(youtube.get("video_id") or "").strip()
+    return video_id or None
 
 
 def _entry_label(job: Job, index: int, result: dict) -> str:
@@ -370,6 +390,10 @@ def build_review_context(
         "event_types": [event_type.value for event_type in EventType],
         "halves": [half.value for half in HalfInning],
         "format_timestamp": format_timestamp,
+        # Item 63: deep-link row times to the source video when the run's
+        # manifest recorded a YouTube video id; None keeps plain text.
+        "source_video_id": _run_source_video_id(run_dir),
+        "youtube_watch_url": youtube_watch_url,
     }
 
 

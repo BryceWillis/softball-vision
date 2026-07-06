@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
+from urllib.parse import parse_qs, urlparse
 
 
 DEFAULT_OUTPUT_TEMPLATE = "%(upload_date>%Y%m%d)s_%(id)s_%(title).200B.%(ext)s"
@@ -286,6 +287,40 @@ def _playlist_entry_index(entry: dict, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def youtube_watch_url(video_id: str, seconds: float) -> str:
+    """Watch URL that opens ``video_id`` at ``seconds``, floored to whole seconds.
+
+    YouTube's ``t`` parameter is integer seconds; timestamps are non-negative,
+    so truncation is a floor.
+    """
+
+    return f"https://www.youtube.com/watch?v={video_id}&t={int(seconds)}s"
+
+
+def extract_video_id(url: str) -> Optional[str]:
+    """Best-effort video id from a YouTube URL, or None when unrecognizable.
+
+    Handles ``watch?v=``, ``youtu.be/<id>`` short links, and the ``shorts``/
+    ``live``/``embed`` path forms.
+    """
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    path_segments = [segment for segment in parsed.path.split("/") if segment]
+    if host == "youtu.be":
+        return path_segments[0] if path_segments else None
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        query_id = parse_qs(parsed.query).get("v", [""])[0]
+        if query_id:
+            return query_id
+        if len(path_segments) >= 2 and path_segments[0] in {"shorts", "live", "embed"}:
+            return path_segments[1]
+    return None
 
 
 def command_as_string(command: Sequence[str]) -> str:
