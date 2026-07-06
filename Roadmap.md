@@ -4390,6 +4390,33 @@ roster. Do not change the synthesized inferred-missing events or any other flag.
 3. Existing order-validator (item 32/34) tests stay green; add tests for both cases.
 4. Placeholder-only fixtures; suite + ruff green.
 
+### 60. Score Plausibility Guard (reject implausible OCR scores)
+
+Status: Ready to implement — isolated to state/score parsing
+Source: Live-fire 2026-07-05. Final score reported **164-21**; actual **16-21**.
+Frame inspection confirmed the cause: the scorebug shows `16 (diamond) FINAL 21`,
+and the base-diamond indicator next to the away score intermittently lands in the
+`left_score` crop and OCRs as a `4`, so `16` reads as `164`. Only ~9/1408
+left_score reads were corrupted, but the final-score marker (item 35) picked one.
+`right_score` (no adjacent diamond) was clean.
+
+**Change.** Apply a plausibility guard where a score OCR value enters state
+(`state.py`) and in final-score selection (item 35): reject a score read that is
+implausible — 3+ digits, or greater than a max (e.g. 50). Treat an implausible
+read as *missing* rather than a value, so the stable correct read (16) wins for
+the final score and every chapter `(a-b)` suffix. Reuse item 55's
+`_MAX_PLAUSIBLE_SCORE` concept.
+
+**Acceptance criteria.**
+1. A read like "164" is rejected; the final score and chapter suffixes use the
+   plausible value (16).
+2. Legitimate two-digit scores up to the max are still accepted (21 fine).
+3. Tests: an implausible score is dropped; final-score selection ignores it.
+
+**Root-cause note (feeds item 56).** The same base diamonds corrupt BOTH
+`left_score` and the `inning` region. The deeper fix is recalibrating those
+regions to exclude the diamonds — fold into item 56 (frame evidence now captured).
+
 ## Discussion / Later Deliverables
 
 ### Web App — CSRF / same-origin hardening (deferred)
