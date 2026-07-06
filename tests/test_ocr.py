@@ -259,17 +259,20 @@ def _make_numeric_crop(text, width=32, height=23):
     import numpy as np
 
     rng = np.random.default_rng(sum(ord(character) for character in text))
-    image = np.zeros((height, width, 3), dtype=np.float32)
+    background = np.zeros((height, width, 3), dtype=np.float32)
     for row in range(height):
-        image[row, :] = np.array([58, 48, 42], dtype=np.float32) * (1.0 + 0.25 * row / height)
-    image += rng.normal(0, 6.0, size=image.shape)
+        background[row, :] = np.array([58, 48, 42], dtype=np.float32) * (1.0 + 0.25 * row / height)
+    background += rng.normal(0, 6.0, size=background.shape)
+    # OpenCV 5's putText requires a CV_8U image, so convert before drawing.
+    # No LINE_AA: anti-aliased blending on uint8 rounds differently across
+    # OpenCV versions and fragments the thin "11" strokes; plain rasterization
+    # is deterministic everywhere.
+    image = np.clip(background, 0, 255).astype(np.uint8)
     font_scale = 0.62 if len(text) <= 2 else 0.5
     size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
     origin = ((width - size[0]) // 2, (height + size[1]) // 2)
-    cv2.putText(
-        image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (235, 235, 235), 2, cv2.LINE_AA
-    )
-    return np.clip(image, 0, 255).astype(np.uint8)
+    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (235, 235, 235), 2)
+    return image
 
 
 class MockOCRPreprocessed:

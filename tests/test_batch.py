@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,11 +63,22 @@ class PlaylistBatchTests(unittest.TestCase):
             state_path = root / "runs" / "playlist_state.jsonl"
             state_path.parent.mkdir(parents=True)
             prior = _run_result(root, "one").run
+            # json.dumps, not f-string interpolation: Windows absolute paths
+            # contain backslashes that must be JSON-escaped.
             state_path.write_text(
-                '{"video_id": "one", "url": "https://youtu.be/one", "title": "Game One", '
-                f'"index": 1, "status": "done", "run_dir": "{prior.run_dir}", '
-                f'"chapters_path": "{prior.chapters_path}", '
-                f'"at_bats_path": "{prior.at_bats_path}"}}\n',
+                json.dumps(
+                    {
+                        "video_id": "one",
+                        "url": "https://youtu.be/one",
+                        "title": "Game One",
+                        "index": 1,
+                        "status": "done",
+                        "run_dir": str(prior.run_dir),
+                        "chapters_path": str(prior.chapters_path),
+                        "at_bats_path": str(prior.at_bats_path),
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
 

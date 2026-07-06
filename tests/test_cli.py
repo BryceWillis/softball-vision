@@ -593,7 +593,12 @@ class CLITests(unittest.TestCase):
                 run_youtube.return_value.run.event_count = 0
                 run_youtube.return_value.run.batting_half_inference = None
                 run_youtube.return_value.download = {}
-                exit_code = main(["run-youtube", "https://youtu.be/example", "--quiet"])
+                # --ocr none: the default tesseract backend probes PATH and
+                # exits main() before run_youtube_game on hosts without
+                # Tesseract (e.g. CI); this test is about config defaults.
+                exit_code = main(
+                    ["run-youtube", "https://youtu.be/example", "--quiet", "--ocr", "none"]
+                )
 
             kwargs = run_youtube.call_args.kwargs
 
@@ -603,9 +608,12 @@ class CLITests(unittest.TestCase):
         self.assertIn("inning", kwargs["template"].regions)
 
     def test_format_roster_next_command_mentions_roster_and_template(self):
-        command = _format_roster_next_command(Path("rosters/stars.csv"))
+        # str(roster_path) keeps the platform's separators (backslashes on
+        # Windows), so build the expectation the same way.
+        roster_path = Path("rosters/stars.csv")
+        command = _format_roster_next_command(roster_path)
 
-        self.assertIn("--roster rosters/stars.csv", command)
+        self.assertIn(f"--roster {roster_path}", command)
         self.assertIn("--template YOUR_TEMPLATE", command)
 
     def test_next_commands_use_installed_cli_and_double_quotes(self):
@@ -674,7 +682,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Error:", stderr.getvalue())
-        self.assertIn("runs/does-not-exist", stderr.getvalue())
+        # The error echoes the path with the platform's separators.
+        self.assertIn(str(Path("runs/does-not-exist")), stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_main_prints_clean_error_when_ytdlp_dependency_is_unavailable(self):
