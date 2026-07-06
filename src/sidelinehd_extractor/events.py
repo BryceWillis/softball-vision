@@ -265,6 +265,7 @@ def detect_events(
     final_event = _detect_game_final(ordered_states, min_game_final_observations)
     if final_event is not None:
         events.append(final_event)
+    _apply_half_inning_end_scores(events)
 
     return sorted(events, key=lambda item: item.timestamp_seconds)
 
@@ -602,6 +603,52 @@ def _score_snapshot(
         if state.away_score is not None and state.home_score is not None:
             return state.away_score, state.home_score
     return None, None
+
+
+def _apply_half_inning_end_scores(events: List[Event]) -> None:
+    """Store each half-inning chapter's ending score in its export metadata."""
+
+    half_events = sorted(
+        (
+            event
+            for event in events
+            if event.event_type == EventType.HALF_INNING_START
+        ),
+        key=lambda event: event.timestamp_seconds,
+    )
+    if not half_events:
+        return
+    start_scores = {
+        id(event): _event_score(event)
+        for event in half_events
+    }
+    final_event = next(
+        (event for event in events if event.event_type == EventType.GAME_FINAL),
+        None,
+    )
+
+    for index, event in enumerate(half_events):
+        if index + 1 < len(half_events):
+            away_score, home_score = start_scores[id(half_events[index + 1])]
+        elif final_event is not None:
+            away_score, home_score = _event_score(final_event)
+        else:
+            away_score, home_score = None, None
+        if away_score is None or home_score is None:
+            event.metadata["away_score"] = None
+            event.metadata["home_score"] = None
+        else:
+            event.metadata["away_score"] = away_score
+            event.metadata["home_score"] = home_score
+
+
+def _event_score(event: Event) -> Tuple[Optional[int], Optional[int]]:
+    away_score = event.metadata.get("away_score")
+    home_score = event.metadata.get("home_score")
+    return (
+        away_score if isinstance(away_score, int) else None,
+        home_score if isinstance(home_score, int) else None,
+    )
 
 
 def _detect_game_final(
@@ -993,10 +1040,12 @@ def _game_active_timestamp(
             continue
         if _is_pregame_state(state):
             # Pregame status is a reliable negative signal, not a game-start
-            # trigger. A missed pregame OCR read followed by 0-0 must not
-            # bypass the existing positive activity gate.
+            # trigger. Banner-only states are handled by the active-scorebug
+            # signal below, which requires inning/count/score fields together.
             previous_batter_number = None
             continue
+        if _has_active_scorebug_signal(state):
+            return state.timestamp_seconds
         if not _is_plausible_batter_state(state):
             continue
         if (
@@ -1015,6 +1064,25 @@ def _game_active_timestamp(
         if state.batter_number and _has_batter_change_activity_signal(state):
             previous_batter_number = state.batter_number
     return None
+
+
+def _has_active_scorebug_signal(state: OverlayState) -> bool:
+    """Return true when OCR saw the full active scorebug, not only a banner."""
+
+    fields = state.metadata.get("fields")
+    if not isinstance(fields, dict):
+        return False
+    return (
+        _half_key(state) is not None
+        and state.balls is not None
+        and state.strikes is not None
+        and state.away_score is not None
+        and state.home_score is not None
+        and bool(fields.get("inning"))
+        and bool(fields.get("count"))
+        and bool(fields.get("left_score"))
+        and bool(fields.get("right_score"))
+    )
 
 
 def _game_status(state: OverlayState) -> Optional[str]:

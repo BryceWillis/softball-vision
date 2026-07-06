@@ -452,6 +452,20 @@ class StateParsingTests(unittest.TestCase):
         self.assertEqual(smoothed[0].inning, 2)
         self.assertEqual(smoothed[0].half, HalfInning.BOTTOM)
 
+    def test_smooth_states_preserves_long_leading_gap_from_next_known_state(self):
+        smoothed = smooth_states(
+            [
+                OverlayState(600.0, inning=None, half=None),
+                OverlayState(1040.0, inning=None, half=None),
+                OverlayState(1080.0, inning=1, half=HalfInning.TOP),
+            ]
+        )
+
+        self.assertEqual(
+            [(state.inning, state.half) for state in smoothed],
+            [(None, None), (None, None), (1, HalfInning.TOP)],
+        )
+
     def test_smooth_states_preserves_unknowns_when_no_neighbor_state_exists(self):
         smoothed = smooth_states(
             [

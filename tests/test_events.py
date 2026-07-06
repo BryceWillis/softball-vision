@@ -1549,14 +1549,14 @@ class EventDetectionTests(unittest.TestCase):
             (None, None),
         )
 
-    def test_detect_events_stores_score_snapshot_on_half_inning_start(self):
+    def test_detect_events_stores_score_from_next_half_inning_start(self):
         events = detect_events(
             [
                 OverlayState(
                     600,
                     inning=1,
                     half=HalfInning.TOP,
-                    away_score=None,
+                    away_score=2,
                     home_score=0,
                 ),
                 OverlayState(
@@ -1577,39 +1577,178 @@ class EventDetectionTests(unittest.TestCase):
                     615,
                     inning=1,
                     half=HalfInning.TOP,
+                    away_score=2,
+                    home_score=0,
+                ),
+                OverlayState(
+                    900,
+                    inning=1,
+                    half=HalfInning.BOTTOM,
+                    away_score=3,
+                    home_score=0,
+                ),
+                OverlayState(
+                    905,
+                    inning=1,
+                    half=HalfInning.BOTTOM,
+                    away_score=3,
+                    home_score=0,
+                ),
+                OverlayState(
+                    910,
+                    inning=1,
+                    half=HalfInning.BOTTOM,
+                    away_score=3,
+                    home_score=0,
+                ),
+                OverlayState(
+                    915,
+                    inning=1,
+                    half=HalfInning.BOTTOM,
                     away_score=3,
                     home_score=0,
                 ),
             ]
         )
 
-        chapter = next(event for event in events if event.event_type == EventType.HALF_INNING_START)
-        self.assertEqual(chapter.metadata["away_score"], 2)
-        self.assertEqual(chapter.metadata["home_score"], 0)
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual(chapters[0].metadata["away_score"], 3)
+        self.assertEqual(chapters[0].metadata["home_score"], 0)
+        self.assertIsNone(chapters[1].metadata["away_score"])
+        self.assertIsNone(chapters[1].metadata["home_score"])
 
-    def test_detect_events_stores_empty_score_when_confirmation_window_has_no_pair(self):
+    def test_detect_events_stores_final_score_on_last_half_inning(self):
         events = detect_events(
             [
                 OverlayState(
                     600,
                     inning=1,
                     half=HalfInning.TOP,
-                    away_score=None,
-                    home_score=0,
+                    away_score=2,
+                    home_score=1,
                 ),
                 OverlayState(
                     605,
                     inning=1,
                     half=HalfInning.TOP,
-                    away_score=1,
-                    home_score=None,
+                    away_score=2,
+                    home_score=1,
                 ),
+                OverlayState(
+                    610,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=2,
+                    home_score=1,
+                ),
+                OverlayState(
+                    615,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    away_score=2,
+                    home_score=1,
+                ),
+                OverlayState(900, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(905, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(910, away_score=4, home_score=3, metadata={"game_status": "final"}),
             ]
         )
 
         chapter = next(event for event in events if event.event_type == EventType.HALF_INNING_START)
-        self.assertIsNone(chapter.metadata["away_score"])
-        self.assertIsNone(chapter.metadata["home_score"])
+        self.assertEqual(chapter.metadata["away_score"], 4)
+        self.assertEqual(chapter.metadata["home_score"], 3)
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (4-3)\n15:00 Final (4-3)",
+        )
+
+    def test_detect_events_stores_empty_score_when_next_half_has_no_pair(self):
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP),
+                OverlayState(605, inning=1, half=HalfInning.TOP),
+                OverlayState(610, inning=1, half=HalfInning.TOP),
+                OverlayState(615, inning=1, half=HalfInning.TOP),
+                OverlayState(900, inning=1, half=HalfInning.BOTTOM, away_score=2, home_score=None),
+                OverlayState(905, inning=1, half=HalfInning.BOTTOM, away_score=2, home_score=None),
+                OverlayState(910, inning=1, half=HalfInning.BOTTOM, away_score=2, home_score=None),
+                OverlayState(915, inning=1, half=HalfInning.BOTTOM, away_score=2, home_score=None),
+            ]
+        )
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertIsNone(chapters[0].metadata["away_score"])
+        self.assertIsNone(chapters[0].metadata["home_score"])
+
+    def test_detect_events_defers_banner_only_first_chapter_to_active_scorebug(self):
+        active_fields = {
+            "inning": "1",
+            "count": "0-0",
+            "left_score": "0",
+            "right_score": "0",
+        }
+        events = detect_events(
+            [
+                OverlayState(0),
+                OverlayState(
+                    640,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    batter_number="2",
+                    metadata={
+                        "fields": {
+                            "inning": "",
+                            "count": "",
+                            "left_score": "",
+                            "right_score": "",
+                        }
+                    },
+                ),
+                OverlayState(
+                    1080,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=0,
+                    away_score=0,
+                    home_score=0,
+                    metadata={"fields": active_fields},
+                ),
+                OverlayState(
+                    1085,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=0,
+                    away_score=0,
+                    home_score=0,
+                    metadata={"fields": active_fields},
+                ),
+                OverlayState(
+                    1090,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=0,
+                    away_score=0,
+                    home_score=0,
+                    metadata={"fields": active_fields},
+                ),
+                OverlayState(
+                    1095,
+                    inning=1,
+                    half=HalfInning.TOP,
+                    balls=0,
+                    strikes=0,
+                    away_score=0,
+                    home_score=0,
+                    metadata={"fields": active_fields},
+                ),
+            ]
+        )
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual([(event.timestamp_seconds, event.label) for event in chapters], [(1080, "Top 1")])
 
     def test_detect_events_defers_first_chapter_to_game_active_timestamp_on_pregame_stream(
         self,
