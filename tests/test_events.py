@@ -109,6 +109,34 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(events[0].label, "Top 1")
         self.assertEqual(events[1].label, "Maya R. (#22)")
 
+    def test_detect_events_refires_same_batter_after_half_change(self):
+        # Item 61: the lineup highlight points at the upcoming leadoff batter
+        # during the opposing half, firing a phantom at-bat there. The real
+        # leadoff at-bat in the next half must still fire even though the
+        # batter identity matches the phantom.
+        def state(ts, half):
+            return OverlayState(
+                timestamp_seconds=ts,
+                inning=1,
+                half=half,
+                balls=0,
+                strikes=0,
+                batter_number="22",
+                metadata={"batter_name": "Maya R."},
+            )
+
+        states = [state(600 + offset, HalfInning.TOP) for offset in (0, 5, 10)]
+        states += [state(700 + offset, HalfInning.BOTTOM) for offset in (0, 5, 10)]
+
+        events = detect_events(states)
+
+        at_bats = [event for event in events if event.event_type == EventType.AT_BAT_START]
+        self.assertEqual(len(at_bats), 2)
+        self.assertEqual(at_bats[0].half, HalfInning.TOP)
+        self.assertEqual(at_bats[1].half, HalfInning.BOTTOM)
+        self.assertEqual(at_bats[1].timestamp_seconds, 700)
+        self.assertEqual(at_bats[1].player_number, "22")
+
     def test_detect_events_includes_stable_final_marker(self):
         events = detect_events(
             [

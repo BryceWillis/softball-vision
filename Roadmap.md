@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| 1 | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Ready for review (`impl/accuracy`, Fable 5) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
 | — | **54 live-fire fixes P1–P4** (default template, no-scoreboard health check, OCR progress, consolidated game page) | Ready for review (`impl/turnkey-fixes`, Fable 5) | Live-fire against a real 2.4h game: unconfigured runs silently produced zero results (P1/P2), the 20–40 min OCR phase looked frozen (P3), and managing a game required hopping across three pages (P4). See item 54 section for details. |
 | 2 | **55** — Overlay Template Auto-Detection (probe pass) | Done (Pass 25) | Item 54 P5 follow-up: probe a few frames, score known layouts, auto-select the template so users never configure one. One-candidate no-op until item 26 lands more layouts. |
 | — | **54** — Turnkey Web App (epic) | 54a/b/c/e Done; 54d design-only | **Release gate.** Make the web app usable by a non-technical coach: auto-provision ffmpeg via pip, one-command launch that opens the browser, in-app onboarding, and (endgame) a double-clickable bundled app. Phases 54a–54e. Motivated by live-fire prep — the owner couldn't start it unaided. |
@@ -4285,6 +4286,27 @@ and item 26 unlocks its full selection value. Note (separate follow-up): the
 `inning` misread on real 640×360 streams is its own calibration bug worth a small
 item — the current `inning` region likely overlaps adjacent digits.
 
+### 56. Scorebug Region Recalibration → Glyph Isolation (inning + single-digit scores)
+
+Status: Ready for review (`impl/accuracy`, Fable 5)
+Source: Live-fire 2026-07-05/06; first attempt (blind coordinate nudge) rejected in Pass 25 as validated-ineffective.
+
+Frame-based inspection (the recalibration the Pass 25 rejection asked for)
+showed the region coordinates were correct all along — the digits sit inside
+every box in both live-fire games. The real failure was Otsu binarization on
+the surrounding pixels: the green inning arrow fusing into reads ("43"/"72"),
+base-diamond/gradient edges breaking single-digit score reads, banner-mode
+text, and the FINAL view's dimmed losing score.
+
+**Implemented instead of moving coordinates:** an HSV glyph-isolation
+preprocessing strategy for left_score/right_score/inning (bright low-sat
+components, digit-shape filters, refuse-don't-guess on banner text), PSM 8
+with o→0 zero mapping, pixel-based inning-arrow direction detection feeding
+`half` via the sample's `source_detail`, a state-entry confidence floor, and
+pregame blanking. Full details, deviations, and before/after metrics are in
+the CODE-REVIEW.md cluster note (fused inning reads 1251→0 and 802→0; game-2
+left_score first-third reads 13→353 of 474).
+
 ### 57. Persistent Run History (view completed runs across restarts)
 
 Status: Ready to implement — HIGH priority (breaks the basic local flow)
@@ -4392,7 +4414,7 @@ roster. Do not change the synthesized inferred-missing events or any other flag.
 
 ### 60. Score Plausibility Guard (reject implausible OCR scores)
 
-Status: Ready to implement — isolated to state/score parsing
+Status: Ready for review (`impl/accuracy`, Fable 5) — implemented with items 61/56; see the CODE-REVIEW.md cluster note for deviations and before/after metrics (game 1 final now reads 16-21)
 Source: Live-fire 2026-07-05. Final score reported **164-21**; actual **16-21**.
 Frame inspection confirmed the cause: the scorebug shows `16 (diamond) FINAL 21`,
 and the base-diamond indicator next to the away score intermittently lands in the
@@ -4421,7 +4443,7 @@ regions to exclude the diamonds — fold into item 56 (frame evidence now captur
 
 ### 61. At-Bat Under-Detection (missing batters, esp. early innings)
 
-Status: Ready to implement — HIGH
+Status: Ready for review (`impl/accuracy`, Fable 5) — root cause was the opposing-half lineup highlight firing a phantom leadoff at-bat that the "same batter" gate then deduped against; fixed by resetting batter tracking at half-inning boundaries. See the CODE-REVIEW.md cluster note (game 2: 23→28 at-bats, no more 2-batter/3-out innings)
 Source: Live-fire 2026-07-06 (game 2, PrITEF1eozM). Many at-bats missing — innings
 show only ~2 batters despite 3 outs. The run detected only **23 at_bat_start
 events for a full game** (expect ~40-60+). Read-rate evidence: `batter_number`
