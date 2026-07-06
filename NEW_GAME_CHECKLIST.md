@@ -8,9 +8,20 @@ Use this after cloning the repo and installing dependencies.
 - [ ] Install Tesseract:
   - macOS: `brew install tesseract`
   - Linux: `sudo apt install tesseract-ocr` or your distribution's equivalent
-  - Windows: install from `https://github.com/UB-Mannheim/tesseract/wiki`
-- [ ] Create a virtual environment: `python3 -m venv .venv`
-- [ ] Activate it: `source .venv/bin/activate`
+  - Windows: install from `https://github.com/UB-Mannheim/tesseract/wiki` and
+    ensure `tesseract.exe` is on your `PATH`
+- [ ] Install ffmpeg (recommended — best-quality YouTube downloads; without it
+      `yt-dlp` falls back to lower-quality single-stream formats):
+  - macOS: `brew install ffmpeg`
+  - Linux: `sudo apt install ffmpeg` or your distribution's equivalent
+  - Windows: `winget install Gyan.FFmpeg` or download from `https://ffmpeg.org/download.html`
+- [ ] Create a virtual environment:
+  - macOS/Linux: `python3 -m venv .venv`
+  - Windows: `py -3 -m venv .venv`
+- [ ] Activate it:
+  - macOS/Linux: `source .venv/bin/activate`
+  - Windows (PowerShell): `.venv\Scripts\Activate.ps1`
+  - Windows (cmd.exe): `.venv\Scripts\activate.bat`
 - [ ] Install the tool: `python -m pip install -e .`
 - [ ] Confirm the CLI works: `sidelinehd-extractor --help`
 

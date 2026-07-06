@@ -20,7 +20,22 @@ Implementers may add new **Reported** items directly (bug found while working on
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 19 — Full Windows Support
+**Status:** Ready for Review (Fable 5, branch `impl/item-19`)
+**Files:** `README.md`, `NEW_GAME_CHECKLIST.md`, `pyproject.toml`, `.github/workflows/ci.yml` (new), `cli.py` (`_next_commands`, `_format_roster_next_command`)
+
+Implemented per the item 19 design (all 7 sub-tasks):
+- **README:** new "External dependencies" summary at the top of Developer Setup covering Tesseract (required) and ffmpeg (recommended, not required — bundled `imageio-ffmpeg` fallback noted) with labelled macOS / Linux / Windows install blocks; venv creation+activation shown for macOS/Linux, PowerShell (`Activate.ps1`), and cmd.exe (`activate.bat`) with `py -3` as the Windows launcher; the OCR section's second `brew install tesseract` replaced with the same three-platform list; Development Checks adds `$env:PYTHONPATH` (PowerShell) and `set PYTHONPATH` (cmd.exe) variants; no line continuations in any Windows block; the stale "Windows support is planned" banner now points Windows/Linux users at the labelled setup; "Python 3.10 or newer is required".
+- **NEW_GAME_CHECKLIST.md:** mirrored Tesseract + new ffmpeg install blocks; Windows venv creation (`py -3`) and activation (PowerShell + cmd.exe) alternatives.
+- **`next_commands` (user-visible output change):** run-game/run-youtube JSON now suggests `sidelinehd-extractor review-events "<run_dir>" --kind ...` via a shared `_next_commands` helper instead of `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...`; unit test asserts installed-CLI form, no `PYTHONPATH`, and no single quotes.
+- **`pyproject.toml`:** `requires-python = ">=3.10"`.
+- **CI:** `.github/workflows/ci.yml` — push + pull_request, fail-fast off, matrix {ubuntu, macos, windows}-latest × Python {3.10, 3.14}; steps: `pip install -e ".[dev,web]"` → `python -m unittest discover -s tests` → `python -m ruff check .`. Verified locally: unittest discover 379 tests OK, pytest 498 passed, ruff clean.
+- **Deviations:**
+  1. CI installs `".[dev,web]"`, not the design's `".[dev]"` — verified empirically that `pytest.importorskip("fastapi")` at module scope raises under `unittest discover` when fastapi is missing, so the designed install fails discovery outright; adding the `web` extra is the minimal fix. (`desktop`/rumps extra deliberately excluded — macOS-only, and `desktop.py` lazy-imports it.)
+  2. `[tool.ruff] target-version` bumped `py39` → `py310` to match the new `requires-python` (no rule-set change; ruff still clean).
+  3. `_format_roster_next_command` (setup-roster's suggested next command) switched from single to double quotes for the same cmd.exe copy/paste reason as `next_commands` — covered by the acceptance criterion "generated next_commands are copy/pasteable on Windows".
+  4. CI Python matrix pinned to `["3.10", "3.14"]` ("oldest supported + current stable" per design decision 2); wheel availability for 3.14 verified on PyPI for `uvloop` and `opencv-python` (abi3).
+- **Note for architect (not a change):** `unittest discover` collects only `unittest.TestCase` classes, so the five pytest-style modules (`test_webapp*`, `test_desktop`, `test_review_triage`, ~120 tests) are import-checked but not executed in CI. Switching the CI test step to `python -m pytest tests/` would run all 498; left as designed since decision 3 specifies unittest.
 
 ## Reported Items
 

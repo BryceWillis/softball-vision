@@ -11,6 +11,7 @@ from sidelinehd_extractor.cli import (
     _apply_config_defaults,
     _default_run_fields,
     _format_roster_next_command,
+    _next_commands,
     _offer_config_update,
     _read_roster_lines_interactive,
     build_parser,
@@ -606,6 +607,26 @@ class CLITests(unittest.TestCase):
 
         self.assertIn("--roster rosters/stars.csv", command)
         self.assertIn("--template YOUR_TEMPLATE", command)
+
+    def test_next_commands_use_installed_cli_and_double_quotes(self):
+        # Item 19: follow-up commands must paste cleanly on Windows shells —
+        # installed console script, no PYTHONPATH env-var syntax, double quotes
+        # (single quotes are literal characters in cmd.exe).
+        run_dir = Path("runs/game-20260706")
+        commands = _next_commands(run_dir)
+
+        # str(run_dir) keeps the platform's separators, so build expectations
+        # the same way instead of hard-coding forward slashes.
+        self.assertEqual(
+            commands,
+            [
+                f'sidelinehd-extractor review-events "{run_dir}" --kind at-bats',
+                f'sidelinehd-extractor review-events "{run_dir}" --kind chapters',
+            ],
+        )
+        for command in commands:
+            self.assertNotIn("PYTHONPATH", command)
+            self.assertNotIn("'", command)
 
     def test_read_roster_lines_interactive_stops_after_two_blank_lines(self):
         values = iter(["#22 Maya R.", "", "#26 Amelia V.", "", ""])

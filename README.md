@@ -67,19 +67,71 @@ cd ~/Downloads/softball-vision-main && source .venv/bin/activate && sidelinehd-e
 - Anything else: use the app's **Send feedback** button (player names are
   removed automatically) or open a GitHub issue.
 
-Windows support is planned (see Roadmap item 19); the sections below cover
-the developer/CLI workflow.
+The Quickstart above is Mac-specific. Windows and Linux users: follow the
+platform-labelled steps in Developer Setup below. The sections after that
+cover the developer/CLI workflow.
 
 ## Developer Setup
 
-Python 3.10 or newer is recommended. Python 3.9 may work, but recent `yt-dlp`
-versions warn that Python 3.9 support is deprecated.
+Python 3.10 or newer is required.
 
-Create a virtual environment and install the local package:
+### External dependencies
+
+Two system tools are used at runtime:
+
+- **Tesseract OCR** — required by the primary `run-game` and `run-youtube`
+  commands; it reads the scoreboard overlay.
+- **ffmpeg** — recommended for reliable, best-quality YouTube downloads.
+  `yt-dlp` needs it to merge YouTube's separate audio and video streams;
+  without it, downloads silently fall back to lower-quality single-stream
+  formats. (A bundled fallback via `imageio-ffmpeg` is installed with the
+  package, so this is a recommendation, not a hard requirement.)
+
+macOS:
+
+```sh
+brew install tesseract
+brew install ffmpeg
+```
+
+Linux (Debian/Ubuntu):
+
+```sh
+sudo apt-get install tesseract-ocr ffmpeg
+```
+
+Windows:
+
+- Tesseract: install the [UB Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki)
+  and ensure `tesseract.exe` is on your `PATH`.
+- ffmpeg: `winget install Gyan.FFmpeg`, or download it from
+  <https://ffmpeg.org/download.html>.
+
+### Create a virtual environment and install
+
+macOS / Linux:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Windows (PowerShell — use the `py -3` launcher instead of `python3`):
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Windows (cmd.exe):
+
+```bat
+py -3 -m venv .venv
+.venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
@@ -104,13 +156,10 @@ auth and must not be exposed beyond `127.0.0.1`):
 sidelinehd-extractor serve
 ```
 
-Install the external OCR engine. The primary `run-game` and `run-youtube`
-commands use Tesseract OCR by default; pass `--ocr none` only when you are
-running a non-OCR/debug workflow:
-
-```sh
-brew install tesseract
-```
+Install the external OCR engine per the
+[External dependencies](#external-dependencies) steps above. The primary
+`run-game` and `run-youtube` commands use Tesseract OCR by default; pass
+`--ocr none` only when you are running a non-OCR/debug workflow.
 
 Confirm the CLI is available:
 
@@ -120,7 +169,8 @@ sidelinehd-extractor --help
 
 If you do not want to install the package, you can run from the repo with
 `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...` after installing runtime
-dependencies:
+dependencies (see [Development Checks](#development-checks) for the Windows
+`PYTHONPATH` syntax):
 
 ```sh
 python -m pip install -r requirements.txt
@@ -387,9 +437,10 @@ The primary end-to-end commands, `run-game` and `run-youtube`, default to
 `--ocr tesseract` because OCR is required to extract overlay state and at-bat
 events. Install the Tesseract CLI before using those commands:
 
-```sh
-brew install tesseract
-```
+- macOS: `brew install tesseract`
+- Linux (Debian/Ubuntu): `sudo apt-get install tesseract-ocr`
+- Windows: install the [UB Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki)
+  and ensure `tesseract.exe` is on your `PATH`.
 
 End-to-end runs parallelize crop OCR across worker threads by default. Use
 `--ocr-workers 1` when debugging serially, or `--ocr-workers N` to cap CPU use.
@@ -568,10 +619,24 @@ not review findings use `Source: Product backlog`.
 
 ## Development Checks
 
-Run the local test suite:
+Run the local test suite.
+
+macOS / Linux:
 
 ```sh
 PYTHONPATH=src python -m unittest discover -s tests
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:PYTHONPATH = "src"; python -m unittest discover -s tests
+```
+
+Windows (cmd.exe):
+
+```bat
+set PYTHONPATH=src && python -m unittest discover -s tests
 ```
 
 Run lint checks after installing the development dependencies:
@@ -579,6 +644,9 @@ Run lint checks after installing the development dependencies:
 ```sh
 ruff check .
 ```
+
+Continuous integration (`.github/workflows/ci.yml`) runs the same test suite
+and ruff on Ubuntu, macOS, and Windows for every push and pull request.
 
 ## Prior Art and Independence
 

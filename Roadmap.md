@@ -46,7 +46,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **39** — Local Web App | Epic complete (Pass 20) | All phases done: 39a/39b/39c/39d/39e = items 46/47/49/50/51. Local-first FastAPI + HTMX. Cloud/hosted is a later seam (see deferred CSRF hardening). |
 | 11 | **30** — Originality Audit | Done (Pass 25) | Pre-release hygiene — research and documentation only, no code changes. Complete before broader release. |
 | 12 | **26** — Multi-Layout Template Support | Ready to implement | Enables other SidelineHD overlay types. Larger effort — **blocked until Ryan supplies example videos for the new layouts.** |
-| 13 | **19** — Full Windows Support | Ready to implement | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
+| 13 | **19** — Full Windows Support | Ready for review (Fable 5, `impl/item-19`) | Elevated relevance: the per-device install model (item 39) puts cross-platform packaging on the web-app path. Fold path/subprocess hygiene into items 46/47 as you go. |
 | — | **44** — Pregame Status as Game-Start Suppressor | Done | Approved Pass 13 (CR-48, CR-49 resolved). |
 | — | **37** — YouTube Playlist Batch Queue (CLI) | Done | Approved Pass 12 (CR-42–46 resolved; CR-47 deferred to item 22). |
 | — | **35** — Final Scorebug Marker | Done | Approved Pass 11. |
@@ -319,7 +319,7 @@ Acceptance criteria:
 ### 19. Full Windows Support
 
 Source: Product backlog
-Status: Ready to implement
+Status: Ready for review (Fable 5, `impl/item-19`)
 
 Make the tool fully usable on Windows with accurate documentation and a CI
 matrix that catches regressions on both platforms.
