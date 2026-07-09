@@ -20,7 +20,21 @@ Implementers may add new **Reported** items directly (bug found while working on
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### CR-58 — Phantom order-impossible lineup-recovered at-bats (live-fire 8WlQ-exJOkE)
+**File:** [events.py](src/sidelinehd_extractor/events.py) — `validate_batting_order` / `_is_phantom_lineup_recovery`
+**Status:** Ready for Review — implemented by Fable 5, branch `impl/item-64`
+
+Live-fire runs of video 8WlQ-exJOkE emitted a phantom `at_bat_start` for player #2 at 1:26:05 (bottom-5 leadoff, source lineup-recovered) in 3/3 runs; #2's real at-bat is at 1:29:55 and the established order says the slot belonged to #26. Implementation: a veto at the order-validator seam in `validate_batting_order`. An at-bat is suppressed only when all three hold: (a) its player id came solely from lineup-strip recovery (`batter_number_source == lineup_strip` and no name corroboration), (b) it sits at a non-zero forward offset from the expected position **within the established cycle**, and (c) the order-conforming expected batter (`cycle[cycle_pos]`) still bats later in the same half-inning. Players outside the seed cycle are never vetoed — rostered players beyond a short seed and genuine substitutes both replace the conforming batter, who then never reappears in the half, so condition (c) distinguishes them from phantoms. Suppression skips the event without advancing the cycle tracker, so the real conforming batter then matches cleanly.
+
+Unit tests: phantom suppressed; conforming lineup-recovered at-bat kept; order-breaking lineup-recovered substitute kept (3 new tests in test_events.py). Measured validation against both real runs (`…-20260709-132646` and `…-20260709-130437`): the 1:26:05 phantom is gone from events and at-bats exports in both; chapters exports byte-identical; all other at-bat export lines byte-identical. One expected knock-on delta in events.jsonl: the 1:26:50 #26 at-bat loses its spurious `out-of-order-candidate` flag, which existed only because the phantom desynced the cycle tracker.
+
+#### CR-55 — Plain-language handling for just-ended livestreams (post_live download failures)
+**File:** [youtube.py](src/sidelinehd_extractor/youtube.py) — `LiveStreamNotReadyError` / `probe_live_status` / `installed_ytdlp_version` / `_download_failure_error`
+**Status:** Ready for Review — implemented by Fable 5, branch `impl/item-64`
+
+A just-ended stream (`youtube.com/live/<id>`, `live_status=post_live`) fails to download on yt-dlp 2026.7.4 with the raw "ERROR: This live event has ended." shown verbatim to the user (2025.10.14 downloads the same video fine; `-F` listing succeeds even when download fails). Implementation: `download_youtube_video` now probes on failure only — when the download subprocess fails, a cheap metadata probe (`yt-dlp --skip-download --no-warnings --print live_status <url>`, subprocess pattern mirroring `list_playlist_videos`) checks `live_status`; if it is `post_live`/`is_live` the raised error becomes `LiveStreamNotReadyError` (a `YTDLPError` subclass) whose message is the wait-about-an-hour guidance plus the installed yt-dlp version and the known-good 2025.10.14 note. Zero cost on the happy path; if the probe itself fails or reports any other status, the original `YTDLPError` is raised unchanged. Because the fix is at the `download_youtube_video` seam and both the CLI `YTDLPError` handler (print + exit 1) and the web `JobStore` (`error=str(exc)`) already surface `str(exc)`, run-youtube CLI, playlist batch, and web job status all show the friendly message with no per-caller changes.
+
+Tests (mocked runners, 6 new in test_youtube.py): post_live → guidance message (raw error absent); normal video → original error unchanged; probe failing → original error unchanged; unknown yt-dlp version handled; probe helper returns status / returns None on exception.
 
 ## Reported Items
 

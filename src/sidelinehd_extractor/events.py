@@ -323,7 +323,7 @@ def validate_batting_order(
     at_seed_half_start = False
     result: List[Event] = []
 
-    for event in events:
+    for index, event in enumerate(events):
         if event.event_type == EventType.HALF_INNING_START and event.half == seed_half:
             prev_ts = event.timestamp_seconds
             at_seed_half_start = True
@@ -350,6 +350,10 @@ def validate_batting_order(
 
         actual_pos = cycle.index(player_number)
         forward_skip = (actual_pos - cycle_pos) % cycle_len
+        if forward_skip != 0 and _is_phantom_lineup_recovery(
+            event, events, index, cycle[cycle_pos]
+        ):
+            continue
         if forward_skip <= tolerance:
             if forward_skip > 0 and prev_ts is not None and not at_seed_half_start:
                 gap = event.timestamp_seconds - prev_ts
@@ -437,6 +441,39 @@ def _roster_has_number(roster: Optional[Roster], number: str) -> bool:
         return False
     normalized = str(number).strip().lstrip("#")
     return any(player.number.strip().lstrip("#") == normalized for player in roster.players)
+
+
+def _is_phantom_lineup_recovery(
+    event: Event,
+    events: List[Event],
+    index: int,
+    expected_number: str,
+) -> bool:
+    """True when an order-violating lineup-recovered at-bat duplicates the real one.
+
+    A lineup-strip highlight misread can emit an at-bat for a player whose real
+    turn is still slots away (CR-58). The event is a phantom only when the
+    player id came solely from lineup-strip recovery, it sits at an impossible
+    position in the established cycle, and the order-conforming next batter
+    still bats later in the same half-inning. Players outside the seed cycle
+    are never vetoed: rostered players beyond a short seed and genuine
+    substitutes both bat in place of the conforming batter, who then never
+    reappears in the half.
+    """
+
+    if event.metadata.get("batter_number_source") != BATTER_SOURCE_LINEUP_STRIP:
+        return False
+    if event.metadata.get("roster_match_source") == "name":
+        return False
+    if event.inning is None or event.half is None:
+        return False
+    return any(
+        later.event_type == EventType.AT_BAT_START
+        and later.inning == event.inning
+        and later.half == event.half
+        and later.player_number == expected_number
+        for later in events[index + 1 :]
+    )
 
 
 def _with_order_flag(event: Event, flag: str) -> Event:

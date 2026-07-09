@@ -66,6 +66,25 @@ class EventDetectionTests(unittest.TestCase):
             metadata={"roster_match_source": source},
         )
 
+    def _lineup_recovered_at_bat(
+        self,
+        number: str,
+        timestamp: float,
+        inning: int = 1,
+        half: HalfInning = HalfInning.BOTTOM,
+    ) -> Event:
+        event = self._at_bat(number, timestamp, inning, half, source="lineup_number")
+        return Event(
+            event.event_type,
+            event.timestamp_seconds,
+            event.label,
+            inning=event.inning,
+            half=event.half,
+            player_number=event.player_number,
+            player_name=event.player_name,
+            metadata={**event.metadata, "batter_number_source": "lineup_strip"},
+        )
+
     def test_detect_events_emits_half_inning_and_first_at_bat(self):
         events = detect_events(
             [
@@ -2239,6 +2258,75 @@ class EventDetectionTests(unittest.TestCase):
                 if event.metadata.get("order_flags") == ["inferred-missing"]
             ]
         )
+
+    def test_validate_batting_order_suppresses_phantom_lineup_recovered_at_bat(self):
+        # Live-fire CR-58: a lineup-strip misread emits an order-impossible
+        # leadoff at-bat whose real turn is still slots away, while the
+        # order-conforming batter bats moments later in the same half-inning.
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(290, inning=2),
+            self._lineup_recovered_at_bat("2", 300, inning=2),
+            self._at_bat("26", 360, inning=2),
+            self._at_bat("2", 420, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        inning_two = [
+            event
+            for event in validated
+            if event.event_type == EventType.AT_BAT_START and event.inning == 2
+        ]
+
+        self.assertEqual(
+            [(event.player_number, event.timestamp_seconds) for event in inning_two],
+            [("26", 360), ("2", 420)],
+        )
+        self.assertFalse(
+            [event for event in validated if event.metadata.get("order_flags")]
+        )
+
+    def test_validate_batting_order_keeps_conforming_lineup_recovered_at_bat(self):
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(290, inning=2),
+            self._lineup_recovered_at_bat("26", 300, inning=2),
+            self._at_bat("2", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        inning_two = [
+            event
+            for event in validated
+            if event.event_type == EventType.AT_BAT_START and event.inning == 2
+        ]
+
+        self.assertEqual(
+            [event.player_number for event in inning_two],
+            ["26", "2"],
+        )
+
+    def test_validate_batting_order_keeps_lineup_recovered_substitute(self):
+        # A genuine substitute breaks the order, but the batter they replaced
+        # never appears afterward in the half-inning, so no veto fires.
+        events = [
+            self._at_bat("26", 100),
+            self._at_bat("2", 160),
+            self._at_bat("13", 220),
+            self._chapter(290, inning=2),
+            self._lineup_recovered_at_bat("99", 300, inning=2),
+            self._at_bat("2", 360, inning=2),
+        ]
+
+        validated = validate_batting_order(events)
+        substitute = [event for event in validated if event.player_number == "99"]
+
+        self.assertEqual(len(substitute), 1)
+        self.assertIn("possible-substitute", substitute[0].metadata["order_flags"])
 
     def test_validate_batting_order_inferred_event_prefers_observed_name(self):
         roster = Roster(
