@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from sidelinehd_extractor.models import PathLike, RegionFraction
+from sidelinehd_extractor.models import OverlayTemplate, PathLike, RegionFraction
 from sidelinehd_extractor.video import read_frame_at
 
 
@@ -48,6 +48,37 @@ def fraction_to_pixel_region(
     y2 = min(max(y2, y + 1), frame_height)
 
     return PixelRegion(x=x, y=y, width=x2 - x, height=y2 - y)
+
+
+def normalize_frame_to_template(frame, template: OverlayTemplate):
+    """Resize a frame to the template's native dimensions when they differ.
+
+    The OCR preprocessing (glyph isolation, padding, thresholds) is tuned
+    against the template's native resolution; higher-resolution sources
+    (e.g. a 720p HLS download of a 640x360-calibrated overlay) measurably
+    degrade reads — leading digits drop and confidence collapses. Fractional
+    region crops are scale-invariant, so downscaling the frame first keeps
+    every downstream consumer at the calibrated resolution. Frames already
+    matching the template, or templates without recorded dimensions, pass
+    through untouched.
+    """
+
+    if template.video_width is None or template.video_height is None:
+        return frame
+    if frame is None or len(frame.shape) < 2:
+        return frame
+    frame_height, frame_width = frame.shape[:2]
+    if (frame_width, frame_height) == (template.video_width, template.video_height):
+        return frame
+
+    import cv2
+
+    shrinking = frame_width > template.video_width
+    return cv2.resize(
+        frame,
+        (template.video_width, template.video_height),
+        interpolation=cv2.INTER_AREA if shrinking else cv2.INTER_CUBIC,
+    )
 
 
 def crop_frame(frame, region: RegionFraction):

@@ -113,6 +113,22 @@ MULTI_PSM_VOTE_FIELDS = frozenset(NUMERIC_CONFIDENCE_FIELDS) - SCOREBUG_ISOLATED
 _VOTE_PSMS = (7, 10)
 _SCOREBUG_FALLBACK_PSMS = (8, 7, 10)
 
+# The scorebug digits are rendered by SidelineHD in one fixed blocky font, so
+# the isolated glyphs are classified by template matching against reference
+# digits harvested from real footage before Tesseract ever runs. Tesseract
+# misreads this font systematically ("9" -> "3" under every PSM, measured
+# 0/4 vs 11/11 for the template match on the 2026-07-08 game), so it is only
+# the fallback when a glyph matches no reference confidently. Agreement is
+# the fraction of pixels identical to the reference at canonical size; the
+# margin is the gap to the runner-up digit (measured worst correct margin:
+# 0.066 across 96 labeled crops from two games).
+SCOREBUG_DIGIT_MATCH_SOURCE = "scorebug_digit_match"
+_SCOREBUG_DIGIT_TEMPLATE_SIZE = (48, 64)  # (width, height)
+_SCOREBUG_DIGIT_MIN_AGREEMENT = 0.90
+_SCOREBUG_DIGIT_MIN_MARGIN = 0.03
+_SCOREBUG_DIGIT_MAX_GLYPHS = 2
+_SCOREBUG_DIGIT_MIN_HEIGHT_FRACTION = 0.5
+
 MIN_SUPPORTED_TESSERACT_VERSION = (4, 1)
 
 
@@ -354,6 +370,85 @@ _BATTER_CARD_NUMBER_MIN_GLYPH_VALUE = 145
 _BATTER_CARD_NUMBER_MIN_HEIGHT_FRACTION = 0.28
 _BATTER_CARD_NUMBER_MAX_WIDTH_FRACTION = 0.55
 _BATTER_CARD_NUMBER_MAX_COMPONENTS = 3
+
+
+_scorebug_digit_templates_cache: Optional[Dict[str, object]] = None
+
+
+def _scorebug_digit_templates() -> Dict[str, object]:
+    """Load (and cache) the bundled reference digit glyphs as boolean ink masks."""
+
+    global _scorebug_digit_templates_cache
+    if _scorebug_digit_templates_cache is None:
+        import cv2
+
+        from importlib import resources
+
+        templates: Dict[str, object] = {}
+        digits_dir = resources.files("sidelinehd_extractor") / "data" / "scorebug_digits"
+        for digit in "0123456789":
+            with resources.as_file(digits_dir / f"{digit}.png") as path:
+                image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise OCRError(f"bundled scorebug digit template missing: {digit}.png")
+            templates[digit] = image < 128
+        _scorebug_digit_templates_cache = templates
+    return _scorebug_digit_templates_cache
+
+
+def match_scorebug_digits(processed, backend: str) -> Optional[OCRBackendResult]:
+    """Classify isolated scorebug glyphs against the bundled reference digits.
+
+    ``processed`` is the white-background glyph rendering produced by
+    ``preprocess_for_ocr`` for a scorebug field. Returns ``None`` (caller
+    falls back to Tesseract) when there are no digit-height glyphs, too many
+    glyphs, or any glyph fails the agreement/margin thresholds. Confidence is
+    the weakest glyph's agreement score.
+    """
+
+    import cv2
+
+    if processed is None or not hasattr(processed, "shape") or len(processed.shape) != 2:
+        return None
+    height, width = processed.shape
+    ink = (processed < 128).astype("uint8")
+    if not ink.any():
+        return None
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink)
+    glyphs = []
+    for index in range(1, count):
+        x, y, w, h, _area = stats[index]
+        if h < _SCOREBUG_DIGIT_MIN_HEIGHT_FRACTION * height:
+            continue
+        glyphs.append((x, processed[y : y + h, x : x + w]))
+    if not glyphs or len(glyphs) > _SCOREBUG_DIGIT_MAX_GLYPHS:
+        return None
+
+    templates = _scorebug_digit_templates()
+    digits = []
+    weakest = 1.0
+    for _x, glyph in sorted(glyphs, key=lambda item: item[0]):
+        candidate = (
+            cv2.resize(glyph, _SCOREBUG_DIGIT_TEMPLATE_SIZE, interpolation=cv2.INTER_AREA) < 128
+        )
+        scores = {digit: float((candidate == mask).mean()) for digit, mask in templates.items()}
+        best = max(scores, key=scores.get)
+        runner_up = max(score for digit, score in scores.items() if digit != best)
+        if scores[best] < _SCOREBUG_DIGIT_MIN_AGREEMENT:
+            return None
+        if scores[best] - runner_up < _SCOREBUG_DIGIT_MIN_MARGIN:
+            return None
+        digits.append(best)
+        weakest = min(weakest, scores[best])
+
+    text = "".join(digits)
+    return OCRBackendResult(
+        text=text,
+        normalized_text=text,
+        confidence=weakest,
+        backend=backend,
+        source_detail=SCOREBUG_DIGIT_MATCH_SOURCE,
+    )
 
 
 def _isolate_scorebug_glyphs(image, scale: int, allow_relaxed_pass: bool = False):
@@ -709,6 +804,12 @@ def tesseract_ocr_image(image: object, field_name: str) -> OCRBackendResult:
 
     processed = preprocess_for_ocr(image, field_name)
     config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+    if field_name in SCOREBUG_ISOLATED_FIELDS:
+        matched = match_scorebug_digits(processed, "tesseract")
+        if matched is not None:
+            if field_name == "inning":
+                return _with_inning_arrow(matched, image)
+            return matched
     result = _ocr_with_psm_voting(
         lambda vote_config: _tesseract_ocr_preprocessed_image(processed, vote_config, field_name),
         config,
@@ -746,6 +847,12 @@ class TesserocrOCRBackend:
 
         processed = preprocess_for_ocr(image, field_name)
         config = FIELD_CONFIGS.get(field_name, OCRFieldConfig())
+        if field_name in SCOREBUG_ISOLATED_FIELDS:
+            matched = match_scorebug_digits(processed, "tesserocr")
+            if matched is not None:
+                if field_name == "inning":
+                    return _with_inning_arrow(matched, image)
+                return matched
         result = _ocr_with_psm_voting(
             lambda vote_config: self._ocr_preprocessed(processed, vote_config, field_name),
             config,

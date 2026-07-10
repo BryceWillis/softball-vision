@@ -694,5 +694,75 @@ class NumericConfidenceRegressionTests(unittest.TestCase):
         self.assertEqual(result.normalized_text, "")
 
 
+class ScorebugDigitMatchTests(unittest.TestCase):
+    """Template classification of isolated scorebug glyphs (pre-Tesseract)."""
+
+    @staticmethod
+    def _reference_glyph(digit: str):
+        import cv2
+
+        from importlib import resources
+
+        digits_dir = resources.files("sidelinehd_extractor") / "data" / "scorebug_digits"
+        with resources.as_file(digits_dir / f"{digit}.png") as path:
+            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        assert image is not None, f"missing bundled template {digit}.png"
+        return image
+
+    @staticmethod
+    def _on_canvas(*glyphs, gap: int = 12, pad: int = 16):
+        import cv2
+        import numpy as np
+
+        height = max(glyph.shape[0] for glyph in glyphs)
+        tiles = []
+        for index, glyph in enumerate(glyphs):
+            if index:
+                tiles.append(np.full((height, gap), 255, dtype=np.uint8))
+            tiles.append(cv2.resize(glyph, (glyph.shape[1], height)))
+        row = np.hstack(tiles)
+        return cv2.copyMakeBorder(row, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+
+    def test_each_bundled_digit_matches_itself(self):
+        from sidelinehd_extractor.ocr import SCOREBUG_DIGIT_MATCH_SOURCE, match_scorebug_digits
+
+        for digit in "0123456789":
+            result = match_scorebug_digits(self._on_canvas(self._reference_glyph(digit)), "test")
+            self.assertIsNotNone(result, f"digit {digit} did not match")
+            self.assertEqual(result.normalized_text, digit)
+            self.assertGreaterEqual(result.confidence, 0.9)
+            self.assertEqual(result.source_detail, SCOREBUG_DIGIT_MATCH_SOURCE)
+
+    def test_two_digit_score_reads_left_to_right(self):
+        from sidelinehd_extractor.ocr import match_scorebug_digits
+
+        canvas = self._on_canvas(self._reference_glyph("1"), self._reference_glyph("2"))
+        result = match_scorebug_digits(canvas, "test")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.normalized_text, "12")
+
+    def test_blank_canvas_returns_none_for_fallback(self):
+        import numpy as np
+
+        from sidelinehd_extractor.ocr import match_scorebug_digits
+
+        self.assertIsNone(match_scorebug_digits(np.full((64, 64), 255, dtype=np.uint8), "test"))
+
+    def test_non_digit_blob_returns_none_for_fallback(self):
+        import numpy as np
+
+        from sidelinehd_extractor.ocr import match_scorebug_digits
+
+        canvas = np.full((96, 96), 255, dtype=np.uint8)
+        canvas[16:80, 24:72] = 0  # solid block: digit-height but matches nothing well
+        self.assertIsNone(match_scorebug_digits(canvas, "test"))
+
+    def test_three_glyphs_returns_none_for_fallback(self):
+        from sidelinehd_extractor.ocr import match_scorebug_digits
+
+        canvas = self._on_canvas(*(self._reference_glyph(d) for d in "123"))
+        self.assertIsNone(match_scorebug_digits(canvas, "test"))
+
+
 if __name__ == "__main__":
     unittest.main()

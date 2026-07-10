@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from sidelinehd_extractor.config import default_overlay_template
-from sidelinehd_extractor.crops import crop_frame, save_crop
+from sidelinehd_extractor.crops import crop_frame, normalize_frame_to_template, save_crop
 from sidelinehd_extractor.models import OCRSample, OverlayTemplate, Roster
 from sidelinehd_extractor.ocr import FIELD_CONFIGS, OCRBackendResult, OCRCallable, no_ocr
 from sidelinehd_extractor.serialization import to_plain_data
@@ -263,6 +263,7 @@ def process_video(
             read_frames_at(video.path, timestamps),
             start=1,
         ):
+            frame = normalize_frame_to_template(frame, overlay_template)
             tasks = []
             for field_index, (field_name, region) in enumerate(selected_regions.items()):
                 crop = crop_frame(frame, region)

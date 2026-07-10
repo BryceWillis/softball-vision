@@ -544,5 +544,64 @@ class StateParsingTests(unittest.TestCase):
         self.assertIsNone(samples[0].source_detail)
 
 
+class SmoothScoreSequenceTests(unittest.TestCase):
+    """Scores are cumulative: unconfirmed decreases and wild jumps are OCR noise."""
+
+    def _smooth(self, values):
+        from sidelinehd_extractor.state import _smooth_score_sequence
+
+        return _smooth_score_sequence(values)
+
+    def test_flip_flop_from_dropped_leading_digit_holds_established_score(self):
+        # The live-fire failure: "12" alternating with "2" every few reads.
+        self.assertEqual(
+            self._smooth([12, 2, 12, 2, 12, 2, 12]),
+            [12, 12, 12, 12, 12, 12, 12],
+        )
+
+    def test_single_stray_decrease_at_a_boundary_is_suppressed(self):
+        self.assertEqual(self._smooth([12, 12, 2, 12, 12]), [12, 12, 12, 12, 12])
+
+    def test_stray_decrease_at_end_of_sequence_is_suppressed(self):
+        self.assertEqual(self._smooth([12, 12, 2]), [12, 12, 12])
+
+    def test_operator_correction_persisting_is_accepted(self):
+        self.assertEqual(self._smooth([3, 3, 2, 2, 2, 2]), [3, 3, 2, 2, 2, 2])
+
+    def test_normal_increments_pass_through(self):
+        self.assertEqual(self._smooth([0, 1, 1, 3, 3, 4]), [0, 1, 1, 3, 3, 4])
+
+    def test_none_gaps_stay_none_and_do_not_break_confirmation(self):
+        self.assertEqual(
+            self._smooth([7, None, None, 12, None, 12, 12]),
+            [7, None, None, 12, None, 12, 12],
+        )
+
+    def test_unconfirmed_wild_jump_is_suppressed(self):
+        self.assertEqual(self._smooth([6, 65, 7, 7]), [6, 6, 7, 7])
+
+    def test_confirmed_large_jump_after_gap_is_accepted(self):
+        # A real rally read back after a long unreadable stretch.
+        self.assertEqual(self._smooth([7, None, 12, 12, 13]), [7, None, 12, 12, 13])
+
+    def test_bad_initial_read_is_recovered_by_confirmed_decrease(self):
+        self.assertEqual(self._smooth([8, 0, 0, 0, 1]), [8, 0, 0, 0, 1])
+
+    def test_all_none_passes_through(self):
+        self.assertEqual(self._smooth([None, None]), [None, None])
+
+    def test_smooth_states_applies_score_guard(self):
+        from sidelinehd_extractor.models import OverlayState
+        from sidelinehd_extractor.state import smooth_states
+
+        states = [
+            OverlayState(timestamp_seconds=float(index * 5), away_score=score, home_score=6)
+            for index, score in enumerate([12, 2, 12])
+        ]
+        smoothed = smooth_states(states)
+        self.assertEqual([state.away_score for state in smoothed], [12, 12, 12])
+        self.assertEqual([state.home_score for state in smoothed], [6, 6, 6])
+
+
 if __name__ == "__main__":
     unittest.main()

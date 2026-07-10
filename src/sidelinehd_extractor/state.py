@@ -267,6 +267,8 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
     """Fill short OCR gaps from adjacent stable state values."""
 
     smoothed = []
+    away_scores = _smooth_score_sequence([state.away_score for state in states])
+    home_scores = _smooth_score_sequence([state.home_score for state in states])
 
     for index, state in enumerate(states):
         inning = state.inning
@@ -284,9 +286,77 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
             else:
                 half = previous_half if previous_half is not None else next_half
 
-        smoothed.append(replace(state, inning=inning, half=half))
+        smoothed.append(
+            replace(
+                state,
+                inning=inning,
+                half=half,
+                away_score=away_scores[index],
+                home_score=home_scores[index],
+            )
+        )
 
     return smoothed
+
+
+# Scores are cumulative, so a read below the established score is OCR noise
+# (measured: a stray leading-digit-dropped "2" landing on the exact half
+# boundary turned a 12-7 chapter into 2-7) unless the scoreboard operator
+# corrected a miskeyed score, which persists — hence the consecutive-read
+# confirmation. Large forward jumps get a shorter confirmation: a legitimate
+# multi-run rally read after an OCR gap persists, a corrupted read does not.
+_SCORE_DECREASE_CONFIRMATIONS = 3
+_SCORE_JUMP_CONFIRMATIONS = 2
+_SCORE_MAX_UNCONFIRMED_JUMP = 4
+
+
+def _smooth_score_sequence(values: List[Optional[int]]) -> List[Optional[int]]:
+    """Reject non-monotonic score reads unless consecutive reads confirm them.
+
+    ``None`` gaps stay ``None`` — this guard never invents a score, it only
+    suppresses contradictions: an unconfirmed decrease (or implausibly large
+    increase) is replaced with the established score.
+    """
+
+    result = list(values)
+    established: Optional[int] = None
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        if established is None or value == established:
+            established = value
+            continue
+        if value < established:
+            if _confirmed_by_consecutive_reads(values, index, _SCORE_DECREASE_CONFIRMATIONS):
+                established = value
+            else:
+                result[index] = established
+        elif value - established > _SCORE_MAX_UNCONFIRMED_JUMP:
+            if _confirmed_by_consecutive_reads(values, index, _SCORE_JUMP_CONFIRMATIONS):
+                established = value
+            else:
+                result[index] = established
+        else:
+            established = value
+    return result
+
+
+def _confirmed_by_consecutive_reads(
+    values: List[Optional[int]], index: int, required: int
+) -> bool:
+    """Whether the next non-``None`` reads repeat ``values[index]`` ``required`` times."""
+
+    target = values[index]
+    seen = 1
+    for value in values[index + 1 :]:
+        if value is None:
+            continue
+        if value != target:
+            return False
+        seen += 1
+        if seen >= required:
+            return True
+    return seen >= required
 
 
 def _nearby_known_value(

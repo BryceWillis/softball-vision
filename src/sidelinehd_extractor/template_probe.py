@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sidelinehd_extractor.crops import crop_frame
+from sidelinehd_extractor.crops import crop_frame, normalize_frame_to_template
 from sidelinehd_extractor.models import OverlayTemplate
 from sidelinehd_extractor.ocr import OCRCallable
 from sidelinehd_extractor.state import parse_count, parse_inning, parse_score
@@ -133,6 +133,7 @@ def score_template(
     total_weight = 0.0
     valid_weight = 0.0
     for _timestamp, frame in frames:
+        frame = normalize_frame_to_template(frame, template)
         for field_name, weight in fields:
             total_weight += weight
             crop = crop_frame(frame, template.regions[field_name])
