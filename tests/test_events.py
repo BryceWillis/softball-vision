@@ -308,6 +308,27 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(event.metadata["away_score"], 4)
         self.assertEqual(event.metadata["home_score"], 3)
 
+    def test_detect_game_final_recovers_score_when_banner_blanks_scorebug(self):
+        # CR-59 live-fire (Zv469PLcc7o): the FINAL banner blanks the live
+        # scorebug, so the score reads None across the final run even though it
+        # read solidly (11-0) right before the banner. Recover from the last
+        # complete pre-banner pair rather than exporting a scoreless Final.
+        event = _detect_game_final(
+            [
+                OverlayState(890, away_score=11, home_score=0),
+                OverlayState(895, away_score=11, home_score=0),
+                OverlayState(900, away_score=11, home_score=None, metadata={"game_status": "final"}),
+                OverlayState(905, away_score=None, home_score=None, metadata={"game_status": "final"}),
+                OverlayState(910, away_score=None, home_score=None, metadata={"game_status": "final"}),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.timestamp_seconds, 900)
+        self.assertEqual(event.metadata["away_score"], 11)
+        self.assertEqual(event.metadata["home_score"], 0)
+
     def test_detect_game_final_requires_stable_run(self):
         event = _detect_game_final(
             [

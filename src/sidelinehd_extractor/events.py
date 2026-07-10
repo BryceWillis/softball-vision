@@ -642,6 +642,23 @@ def _score_snapshot(
     return None, None
 
 
+def _last_complete_score_before(
+    states: List[OverlayState], index: int
+) -> Tuple[Optional[int], Optional[int]]:
+    """Return the nearest complete away/home pair in the states before ``index``.
+
+    The FINAL banner replaces the live scorebug, so the score often reads
+    ``None`` during the banner run (CR-59). Scores are cumulative and the game
+    has just ended, so the last complete pair before the banner *is* the final
+    score — the nearest one wins, scanning backward.
+    """
+
+    for state in reversed(states[:index]):
+        if state.away_score is not None and state.home_score is not None:
+            return state.away_score, state.home_score
+    return None, None
+
+
 def _apply_half_inning_end_scores(events: List[Event]) -> None:
     """Store each half-inning chapter's ending score in its export metadata."""
 
@@ -704,6 +721,12 @@ def _detect_game_final(
             if run_length >= min_observations:
                 run_start = states[run_start_index]
                 away_score, home_score = _score_snapshot(states, run_start_index, run_length)
+                if away_score is None or home_score is None:
+                    # The FINAL banner blanks the live scorebug; recover the
+                    # score from the last complete pre-banner read (CR-59).
+                    away_score, home_score = _last_complete_score_before(
+                        states, run_start_index
+                    )
                 return Event(
                     event_type=EventType.GAME_FINAL,
                     timestamp_seconds=run_start.timestamp_seconds,
