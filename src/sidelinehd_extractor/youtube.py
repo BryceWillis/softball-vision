@@ -23,6 +23,12 @@ YTDLP_REINSTALL_MESSAGE = (
     "yt-dlp is required and ships with this package. Reinstall with "
     "`pip install -e .` so the declared dependency is available."
 )
+# Streams in these live_status values have no processed VOD yet, so download
+# failures are expected rather than actionable errors.
+LIVE_STATUSES_STILL_PROCESSING = frozenset({"is_live", "post_live"})
+# Last yt-dlp release observed to download just-ended (post_live) streams;
+# 2026.7.4 fails on every player client for them (CR-55).
+KNOWN_GOOD_YTDLP_VERSION = "2025.10.14"
 
 
 @dataclass(frozen=True)
@@ -60,6 +66,36 @@ class YTDLPError(RuntimeError):
             f"yt-dlp failed with exit code {returncode}\n"
             f"Command: {command_as_string(command)}\n"
             f"{details}"
+        )
+
+
+class LiveStreamNotReadyError(YTDLPError):
+    """Raised when a download failed because the stream just ended.
+
+    YouTube keeps ``live_status`` at ``post_live`` until the VOD is processed;
+    downloads fail during that window even though ``-F`` format listing
+    succeeds. The message replaces the raw yt-dlp error with plain-language
+    guidance because waiting — not debugging — is the fix.
+    """
+
+    def __init__(
+        self,
+        command: Sequence[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        live_status: str,
+        ytdlp_version: Optional[str],
+    ) -> None:
+        super().__init__(command, returncode, stdout, stderr)
+        self.live_status = live_status
+        self.ytdlp_version = ytdlp_version
+        self.args = (
+            "This game just ended and YouTube is still processing the video. "
+            "Wait about an hour and try again.\n"
+            f"(Installed yt-dlp {ytdlp_version or 'unknown version'} could not "
+            f"download the just-ended stream; version {KNOWN_GOOD_YTDLP_VERSION} "
+            "is known to handle these.)",
         )
 
 
@@ -211,7 +247,13 @@ def download_youtube_video(
     )
     completed = runner(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
-        raise YTDLPError(command, completed.returncode, completed.stdout, completed.stderr)
+        raise _download_failure_error(
+            command,
+            completed,
+            url=url,
+            youtube_client=youtube_client,
+            runner=runner,
+        )
 
     video_path = parse_downloaded_video_path(completed.stdout)
     return DownloadResult(
@@ -222,6 +264,72 @@ def download_youtube_video(
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def _download_failure_error(
+    command: Sequence[str],
+    completed,
+    url: str,
+    youtube_client: Optional[str],
+    runner,
+) -> YTDLPError:
+    """Build the error for a failed download, probing only after failure.
+
+    The metadata probe costs nothing on the happy path and turns the raw
+    "This live event has ended" failure into wait-and-retry guidance when the
+    stream's VOD simply is not processed yet (CR-55).
+    """
+
+    live_status = probe_live_status(url, youtube_client=youtube_client, runner=runner)
+    if live_status in LIVE_STATUSES_STILL_PROCESSING:
+        return LiveStreamNotReadyError(
+            command,
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+            live_status=live_status,
+            ytdlp_version=installed_ytdlp_version(runner=runner),
+        )
+    return YTDLPError(command, completed.returncode, completed.stdout, completed.stderr)
+
+
+def probe_live_status(
+    url: str,
+    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
+    runner=subprocess.run,
+) -> Optional[str]:
+    """Return a URL's yt-dlp ``live_status``, or None when the probe fails."""
+
+    try:
+        command = default_ytdlp_executable() + [
+            "--skip-download",
+            "--no-warnings",
+            "--print",
+            "live_status",
+        ]
+        if youtube_client:
+            command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
+        command.append(url)
+        completed = runner(command, check=False, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return lines[-1] if lines else None
+
+
+def installed_ytdlp_version(runner=subprocess.run) -> Optional[str]:
+    """Return the installed yt-dlp version string, or None when unavailable."""
+
+    try:
+        command = default_ytdlp_executable() + ["--version"]
+        completed = runner(command, check=False, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
 
 
 def list_playlist_videos(

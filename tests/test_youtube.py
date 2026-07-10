@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -7,17 +8,41 @@ from unittest.mock import patch
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
     DEFAULT_YOUTUBE_CLIENT,
+    KNOWN_GOOD_YTDLP_VERSION,
+    LiveStreamNotReadyError,
     YTDLPError,
     build_ytdlp_playlist_command,
     build_ytdlp_command,
     default_ytdlp_executable,
+    download_youtube_video,
     extract_video_id,
     list_playlist_videos,
     parse_downloaded_video_path,
+    probe_live_status,
     resolve_ffmpeg_location,
     resolve_ytdlp_executable,
     youtube_watch_url,
 )
+
+
+class _Completed:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _failing_download_runner(live_status_result, version_result=None):
+    """Runner stub: download fails; probe/version answer as configured."""
+
+    def runner(command, check=False, capture_output=True, text=True):
+        if "--version" in command:
+            return version_result or _Completed(stdout="2026.7.4\n")
+        if "live_status" in command:
+            return live_status_result
+        return _Completed(returncode=1, stderr="ERROR: This live event has ended.")
+
+    return runner
 
 
 class YoutubeTests(unittest.TestCase):
@@ -323,6 +348,91 @@ class YoutubeTests(unittest.TestCase):
         self.assertIsNone(extract_video_id("https://example.com/watch?v=abc123"))
         self.assertIsNone(extract_video_id("https://www.youtube.com/playlist?list=PL1"))
         self.assertIsNone(extract_video_id("not a url"))
+
+    def _download_with_runner(self, runner):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "sidelinehd_extractor.youtube.default_ytdlp_executable",
+                return_value=["yt-dlp"],
+            ):
+                download_youtube_video(
+                    "https://www.youtube.com/live/abc123def45",
+                    output_dir=Path(tmp),
+                    runner=runner,
+                )
+
+    def test_download_failure_on_post_live_stream_gives_wait_guidance(self):
+        runner = _failing_download_runner(_Completed(stdout="post_live\n"))
+
+        with self.assertRaises(LiveStreamNotReadyError) as ctx:
+            self._download_with_runner(runner)
+
+        message = str(ctx.exception)
+        self.assertIn("still processing", message)
+        self.assertIn("Wait about an hour", message)
+        self.assertIn("2026.7.4", message)
+        self.assertIn(KNOWN_GOOD_YTDLP_VERSION, message)
+        self.assertNotIn("This live event has ended", message)
+        self.assertEqual(ctx.exception.live_status, "post_live")
+
+    def test_download_failure_on_normal_video_keeps_original_error(self):
+        runner = _failing_download_runner(_Completed(stdout="not_live\n"))
+
+        with self.assertRaises(YTDLPError) as ctx:
+            self._download_with_runner(runner)
+
+        self.assertNotIsInstance(ctx.exception, LiveStreamNotReadyError)
+        self.assertIn("This live event has ended", str(ctx.exception))
+
+    def test_download_failure_with_failing_probe_keeps_original_error(self):
+        runner = _failing_download_runner(_Completed(returncode=1, stderr="probe boom"))
+
+        with self.assertRaises(YTDLPError) as ctx:
+            self._download_with_runner(runner)
+
+        self.assertNotIsInstance(ctx.exception, LiveStreamNotReadyError)
+        self.assertIn("This live event has ended", str(ctx.exception))
+
+    def test_download_failure_message_handles_unknown_ytdlp_version(self):
+        runner = _failing_download_runner(
+            _Completed(stdout="post_live\n"),
+            version_result=_Completed(returncode=1),
+        )
+
+        with self.assertRaises(LiveStreamNotReadyError) as ctx:
+            self._download_with_runner(runner)
+
+        self.assertIn("unknown version", str(ctx.exception))
+
+    def test_probe_live_status_returns_status_line(self):
+        def runner(command, check=False, capture_output=True, text=True):
+            self.assertIn("--skip-download", command)
+            self.assertIn("live_status", command)
+            return _Completed(stdout="post_live\n")
+
+        with patch(
+            "sidelinehd_extractor.youtube.default_ytdlp_executable",
+            return_value=["yt-dlp"],
+        ):
+            status = probe_live_status(
+                "https://www.youtube.com/live/abc123def45", runner=runner
+            )
+
+        self.assertEqual(status, "post_live")
+
+    def test_probe_live_status_returns_none_when_probe_raises(self):
+        def runner(command, check=False, capture_output=True, text=True):
+            raise OSError("no yt-dlp")
+
+        with patch(
+            "sidelinehd_extractor.youtube.default_ytdlp_executable",
+            return_value=["yt-dlp"],
+        ):
+            status = probe_live_status(
+                "https://www.youtube.com/live/abc123def45", runner=runner
+            )
+
+        self.assertIsNone(status)
 
 
 if __name__ == "__main__":
