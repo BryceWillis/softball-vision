@@ -20,11 +20,24 @@ Implementers may add new **Reported** items directly (bug found while working on
 
 ## Ready for Review Items
 
-_No items ready for review._
+#### Item 65 — Web server lifecycle commands (`stop`/`status`/`restart`) + version/start banner
+**File:** [cli.py](src/sidelinehd_extractor/cli.py), [webapp/lifecycle.py](src/sidelinehd_extractor/webapp/lifecycle.py), [webapp/app.py](src/sidelinehd_extractor/webapp/app.py), [webapp/templates/_footer.html](src/sidelinehd_extractor/webapp/templates/_footer.html), [README.md](README.md), [NEW_GAME_CHECKLIST.md](NEW_GAME_CHECKLIST.md)
+**Status:** Ready for Review
+**Branch:** `impl/item-65`
+
+**Implementation note.** Added a shared `webapp.json` lifecycle record under `desktop.default_data_dir()` for `serve` and `start`, with cleanup on normal exit/SIGTERM, live/stale PID detection, `stop`, `status`, and foreground `restart`. Launch banners now include package version plus best-effort git SHA, and port-in-use handling gives a targeted restart/stop hint when the recorded server owns the busy port. The web app reads the same state at startup and renders a footer runtime label on the full-page templates. README and `NEW_GAME_CHECKLIST.md` document `status`/`stop`/`restart` and the rule to restart after code updates.
+
+**Tests.** `RUFF_CACHE_DIR=/private/tmp/sv-item-65-ruff-cache python3 -m ruff check .` passes. Focused tests pass: `PYTHONPATH=src python3 -m pytest tests/test_webapp_lifecycle.py tests/test_webapp.py -q`. Full suite was run with a writable pytest cache and outside the sandbox for existing localhost/socket tests: 549 passed, 1 failed. The remaining failure is `tests/test_ocr.py::NumericConfidenceRegressionTests::test_shipped_numeric_pipeline_does_not_regress` (`new_correct` 4, expected at least 5), reproduced unchanged on `origin/main`; filed below as CR-61 instead of fixing inside item 65.
+
+**Deviations:** Added a focused `webapp/lifecycle.py` module rather than keeping all state/PID logic in `cli.py`; this keeps the CLI command handlers small and gives the web UI a direct helper for the footer label. Also included the footer on all full web pages, not only results/review, so the runtime marker is visible wherever the user lands.
 
 ## Reported Items
 
-_No reported bugs pending triage._
+#### CR-61 — OCR numeric confidence regression test fails on current machine/main
+**File:** [tests/test_ocr.py](tests/test_ocr.py) — `NumericConfidenceRegressionTests.test_shipped_numeric_pipeline_does_not_regress`
+**Status:** Reported
+
+While verifying item 65, the full suite failed only this OCR regression test: `new_correct` was `4`, below the expected `len(CASES) - 1` threshold of `5`. Re-running the same single test on the untouched `main` worktree produced the same failure, so this is pre-existing/environmental and outside item 65's web-server lifecycle scope. Current available interpreter is `python3` 3.9.6 on this machine (no `python3.10` on PATH), which may be relevant because the project targets Python 3.10+.
 
 ## Open Items
 

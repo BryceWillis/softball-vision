@@ -51,17 +51,30 @@ full game takes roughly 30–45 minutes to read. When it's done, copy the
 timestamps into your video's YouTube description.
 
 To stop the app, go back to the Terminal window and press `Ctrl+C` (or just
-close the window). To start it again later:
+close the window). You can also check or stop it from any activated Terminal:
+
+```sh
+sidelinehd-extractor status
+sidelinehd-extractor stop
+```
+
+To start it again later:
 
 ```sh
 cd ~/Downloads/softball-vision-main && source .venv/bin/activate && sidelinehd-extractor start
 ```
 
+After updating this project, run `sidelinehd-extractor restart` so the running
+app loads the new code. A server that is already running does not pick up code
+changes on its own.
+
 **If something doesn't work:**
 
 - `command not found: sidelinehd-extractor` — run
   `source .venv/bin/activate` first (step 4 put the app inside that folder).
-- "Port 8000 is already in use" — run `sidelinehd-extractor start --port 8001`.
+- "Port 8000 is already in use" — if the message says this app is already
+  running, use `sidelinehd-extractor restart` or `sidelinehd-extractor stop`.
+  If it is another program, run `sidelinehd-extractor start --port 8001`.
 - A yellow "One-time setup needed" card in the app — it shows the exact
   install command to copy; run it in the Terminal, then click Re-check.
 - Anything else: use the app's **Send feedback** button (player names are
@@ -155,6 +168,11 @@ auth and must not be exposed beyond `127.0.0.1`):
 ```sh
 sidelinehd-extractor serve
 ```
+
+Use `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
+`sidelinehd-extractor restart` to manage the local web server. After pulling or
+installing updated code, run `restart`; an already-running server keeps the code
+it loaded at startup.
 
 Install the external OCR engine per the
 [External dependencies](#external-dependencies) steps above. The primary

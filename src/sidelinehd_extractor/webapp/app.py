@@ -56,6 +56,7 @@ from sidelinehd_extractor.roster import default_roster_path, parse_team_list, wr
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
+from sidelinehd_extractor.webapp.lifecycle import footer_runtime_label
 from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
 from sidelinehd_extractor.youtube import youtube_watch_url
 
@@ -603,7 +604,10 @@ def create_app(
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     templates = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
     templates.env.globals.update(
-        status_label=status_label, stage_label=stage_label, kind_label=kind_label
+        status_label=status_label,
+        stage_label=stage_label,
+        kind_label=kind_label,
+        server_runtime_label=footer_runtime_label(),
     )
 
     def _get_job_or_404(job_id: str) -> Job:

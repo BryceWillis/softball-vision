@@ -24,6 +24,11 @@ Use this after cloning the repo and installing dependencies.
   - Windows (cmd.exe): `.venv\Scripts\activate.bat`
 - [ ] Install the tool: `python -m pip install -e .`
 - [ ] Confirm the CLI works: `sidelinehd-extractor --help`
+- [ ] If you use the local web app, launch it with `sidelinehd-extractor start`.
+      Use `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
+      `sidelinehd-extractor restart` to manage it. After updating the code, run
+      `sidelinehd-extractor restart`; a running server does not pick up changes
+      on its own.
 
 ## Per-Team Setup
 
