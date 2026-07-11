@@ -18,8 +18,10 @@ import uvicorn  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from sidelinehd_extractor import cli as cli_module  # noqa: E402
 from sidelinehd_extractor.batch import PlaylistBatchItemResult, PlaylistBatchResult  # noqa: E402
 from sidelinehd_extractor.cli import main  # noqa: E402
+from sidelinehd_extractor.webapp import lifecycle as lifecycle_module  # noqa: E402
 from sidelinehd_extractor.webapp import jobs as jobs_module  # noqa: E402
 from sidelinehd_extractor.webapp.app import create_app  # noqa: E402
 from sidelinehd_extractor.webapp.jobs import (  # noqa: E402
@@ -180,6 +182,25 @@ def test_index_renders_form_and_jobs():
     assert "https://youtube.com/playlist?list=PL2" in response.text
     # Newest first.
     assert response.text.index("list=PL2") < response.text.index("youtu.be/first")
+
+
+def test_index_footer_shows_server_version_and_start_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(lifecycle_module, "default_data_dir", lambda: tmp_path)
+    lifecycle_module.write_server_state(
+        lifecycle_module.new_server_state(
+            "127.0.0.1",
+            8000,
+            pid=4242,
+            version="0.test",
+            started_at="2026-07-10T12:00:00Z",
+        )
+    )
+    client, _ = _make_client()
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "SidelineHD Extractor v0.test · started 2026-07-10T12:00:00Z" in response.text
 
 
 def test_job_detail_shows_stage_log_and_404s():
@@ -1198,13 +1219,17 @@ def test_index_error_clear_is_scoped_to_the_submit_request():
     assert 'evt.detail.requestConfig.path === "/jobs"' in response.text
 
 
-def test_cli_serve_wiring(monkeypatch, capsys):
+def test_cli_serve_wiring(tmp_path, monkeypatch, capsys):
     recorded = {}
 
     def fake_run(app, **kwargs):
+        recorded["state_during_run"] = lifecycle_module.read_server_state()
         recorded["app"] = app
         recorded.update(kwargs)
 
+    monkeypatch.setattr(lifecycle_module, "default_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(lifecycle_module, "package_version", lambda: "0.test")
+    monkeypatch.setattr("sidelinehd_extractor.cli.git_short_sha", lambda: None)
     monkeypatch.setattr(uvicorn, "run", fake_run)
     assert main(["serve", "--port", "9999"]) == 0
     assert recorded["app"] == "sidelinehd_extractor.webapp.app:create_app"
@@ -1212,7 +1237,9 @@ def test_cli_serve_wiring(monkeypatch, capsys):
     assert recorded["host"] == "127.0.0.1"
     assert recorded["port"] == 9999
     assert recorded["reload"] is False
-    assert "http://127.0.0.1:9999" in capsys.readouterr().err
+    assert recorded["state_during_run"].port == 9999
+    assert not (tmp_path / "webapp.json").exists()
+    assert "Serving v0.test on http://127.0.0.1:9999" in capsys.readouterr().err
 
 
 # --- Item 54a: dependency setup card on the index page ---
@@ -1267,11 +1294,18 @@ def test_index_hides_setup_card_when_dependencies_healthy(monkeypatch):
 # --- Item 54b: one-command `start` launch ---
 
 
-def _patch_start_environment(monkeypatch, recorded, preflight=None, port_in_use=False):
+def _patch_start_environment(
+    monkeypatch, recorded, tmp_path, preflight=None, port_in_use=False
+):
     def fake_run(app, **kwargs):
+        recorded["state_during_run"] = lifecycle_module.read_server_state()
         recorded["app"] = app
         recorded.update(kwargs)
 
+    monkeypatch.setattr(lifecycle_module, "default_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(lifecycle_module, "package_version", lambda: "0.test")
+    monkeypatch.setattr(lifecycle_module, "git_short_sha", lambda cwd=None: None)
+    monkeypatch.setattr("sidelinehd_extractor.cli.git_short_sha", lambda: None)
     monkeypatch.setattr(uvicorn, "run", fake_run)
     monkeypatch.setattr(
         "sidelinehd_extractor.cli.webbrowser.open",
@@ -1287,9 +1321,9 @@ def _patch_start_environment(monkeypatch, recorded, preflight=None, port_in_use=
     )
 
 
-def test_cli_start_opens_browser_and_serves(monkeypatch, capsys):
+def test_cli_start_opens_browser_and_serves(tmp_path, monkeypatch, capsys):
     recorded = {}
-    _patch_start_environment(monkeypatch, recorded)
+    _patch_start_environment(monkeypatch, recorded, tmp_path)
 
     assert main(["start", "--port", "9999"]) == 0
 
@@ -1298,26 +1332,32 @@ def test_cli_start_opens_browser_and_serves(monkeypatch, capsys):
     assert recorded["host"] == "127.0.0.1"
     assert recorded["port"] == 9999
     assert recorded["browser_urls"] == ["http://127.0.0.1:9999"]
+    state = recorded["state_during_run"]
+    assert state is not None
+    assert state.host == "127.0.0.1"
+    assert state.port == 9999
+    assert state.version == "0.test"
+    assert not (tmp_path / "webapp.json").exists()
     out = capsys.readouterr().out
-    assert "Open http://127.0.0.1:9999" in out
+    assert "Serving v0.test on http://127.0.0.1:9999" in out
     assert "press Ctrl+C here to stop" in out
 
 
-def test_cli_start_no_browser_skips_open(monkeypatch, capsys):
+def test_cli_start_no_browser_skips_open(tmp_path, monkeypatch, capsys):
     recorded = {}
-    _patch_start_environment(monkeypatch, recorded)
+    _patch_start_environment(monkeypatch, recorded, tmp_path)
 
     assert main(["start", "--no-browser"]) == 0
 
     assert recorded["port"] == 8000
     assert "browser_urls" not in recorded
-    assert "Open http://127.0.0.1:8000" in capsys.readouterr().out
+    assert "Serving v0.test on http://127.0.0.1:8000" in capsys.readouterr().out
 
 
-def test_cli_start_reports_missing_tesseract_but_still_serves(monkeypatch, capsys):
+def test_cli_start_reports_missing_tesseract_but_still_serves(tmp_path, monkeypatch, capsys):
     recorded = {}
     _patch_start_environment(
-        monkeypatch, recorded, preflight=_missing_tesseract_preflight()
+        monkeypatch, recorded, tmp_path, preflight=_missing_tesseract_preflight()
     )
 
     assert main(["start", "--no-browser"]) == 0
@@ -1329,9 +1369,9 @@ def test_cli_start_reports_missing_tesseract_but_still_serves(monkeypatch, capsy
     assert recorded["app"] == "sidelinehd_extractor.webapp.app:create_app"
 
 
-def test_cli_start_port_in_use_fails_with_suggestion(monkeypatch, capsys):
+def test_cli_start_port_in_use_fails_with_suggestion(tmp_path, monkeypatch, capsys):
     recorded = {}
-    _patch_start_environment(monkeypatch, recorded, port_in_use=True)
+    _patch_start_environment(monkeypatch, recorded, tmp_path, port_in_use=True)
 
     assert main(["start", "--port", "9999"]) == 1
 
@@ -1340,6 +1380,47 @@ def test_cli_start_port_in_use_fails_with_suggestion(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "port 9999" in err
     assert "--port" in err
+
+
+def test_cli_start_port_in_use_reports_recorded_server(tmp_path, monkeypatch, capsys):
+    recorded = {}
+    _patch_start_environment(monkeypatch, recorded, tmp_path, port_in_use=True)
+    lifecycle_module.write_server_state(
+        lifecycle_module.new_server_state(
+            "127.0.0.1",
+            9999,
+            pid=4242,
+            version="0.test",
+            started_at="2026-07-10T12:00:00Z",
+        )
+    )
+
+    assert main(["start", "--port", "9999"]) == 1
+
+    err = capsys.readouterr().err
+    assert "already running here" in err
+    assert "PID 4242" in err
+    assert "restart" in err
+    assert "stop" in err
+
+
+def test_cli_restart_stops_then_starts(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(
+        cli_module,
+        "stop_recorded_server",
+        lambda: calls.append("stop") or "Stopped (PID 4242).",
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_cmd_start",
+        lambda args: calls.append(("start", args.host, args.port, args.no_browser)) or 0,
+    )
+
+    assert main(["restart", "--port", "9999", "--no-browser"]) == 0
+
+    assert calls == ["stop", ("start", "127.0.0.1", 9999, True)]
+    assert "Stopped (PID 4242)." in capsys.readouterr().out
 
 
 # --- Item 54c: in-app onboarding + plain language ---

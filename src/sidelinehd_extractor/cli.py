@@ -51,6 +51,14 @@ from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.video import probe_video, read_frame_at
 from sidelinehd_extractor.workflow import export_paths as workflow_export_paths
 from sidelinehd_extractor.workflow import run_game, run_youtube_game
+from sidelinehd_extractor.webapp.lifecycle import (
+    ServerStateRegistration,
+    git_short_sha,
+    read_server_state,
+    status_message,
+    stop_recorded_server,
+    version_display,
+)
 from sidelinehd_extractor.youtube import (
     DEFAULT_FORMAT_SELECTOR,
     DEFAULT_YOUTUBE_CLIENT,
@@ -757,6 +765,29 @@ def _cmd_feedback(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    uvicorn = _load_uvicorn_or_report()
+    if uvicorn is None:
+        return 1
+    if _port_in_use(args.host, args.port):
+        _print_port_in_use(args.host, args.port)
+        return 1
+    with ServerStateRegistration(args.host, args.port) as state:
+        print(
+            f"Serving {version_display(state.version, git_short_sha())} on {state.url}",
+            file=sys.stderr,
+            flush=True,
+        )
+        uvicorn.run(
+            "sidelinehd_extractor.webapp.app:create_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+        )
+    return 0
+
+
+def _load_uvicorn_or_report():
     try:
         import uvicorn
 
@@ -767,16 +798,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             f"({error}). Install them with: pip install -e \".[web]\"",
             file=sys.stderr,
         )
-        return 1
-    print(f"Serving on http://{args.host}:{args.port}", file=sys.stderr, flush=True)
-    uvicorn.run(
-        "sidelinehd_extractor.webapp.app:create_app",
-        factory=True,
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-    )
-    return 0
+        return None
+    return uvicorn
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -789,6 +812,30 @@ def _port_in_use(host: str, port: int) -> bool:
         except OSError as error:
             return error.errno in (errno.EADDRINUSE, errno.EACCES)
     return False
+
+
+def _recorded_server_for_port(host: str, port: int):
+    state = read_server_state()
+    if state is None or state.host != host or state.port != port:
+        return None
+    return state
+
+
+def _print_port_in_use(host: str, port: int) -> None:
+    state = _recorded_server_for_port(host, port)
+    if state is not None:
+        print(
+            "A sidelinehd-extractor server is already running here "
+            f"(PID {state.pid}, started {state.started_at}). Use `restart` to reload it, "
+            "or `stop` to shut it down.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"Error: port {port} on {host} is already in use — is the app "
+        f"already running? Pick another port with --port (e.g. --port {port + 1}).",
+        file=sys.stderr,
+    )
 
 
 def _print_preflight_report() -> None:
@@ -804,44 +851,59 @@ def _print_preflight_report() -> None:
 
 
 def _cmd_start(args: argparse.Namespace) -> int:
-    try:
-        import uvicorn
-
-        from sidelinehd_extractor.webapp.app import create_app  # noqa: F401
-    except ImportError as error:
-        print(
-            "Error: the local web app requires the optional web dependencies "
-            f"({error}). Install them with: pip install -e \".[web]\"",
-            file=sys.stderr,
-        )
+    uvicorn = _load_uvicorn_or_report()
+    if uvicorn is None:
         return 1
 
     print("Checking dependencies...")
     _print_preflight_report()
 
     if _port_in_use(args.host, args.port):
-        print(
-            f"Error: port {args.port} on {args.host} is already in use — is the app "
-            f"already running? Pick another port with --port (e.g. --port {args.port + 1}).",
-            file=sys.stderr,
-        )
+        _print_port_in_use(args.host, args.port)
         return 1
 
     url = f"http://{args.host}:{args.port}"
-    print(f"Open {url} — press Ctrl+C here to stop.", flush=True)
-    if not args.no_browser:
-        webbrowser.open(url)
-    try:
-        uvicorn.run(
-            "sidelinehd_extractor.webapp.app:create_app",
-            factory=True,
-            host=args.host,
-            port=args.port,
+    with ServerStateRegistration(args.host, args.port) as state:
+        print(
+            f"Serving {version_display(state.version, git_short_sha())} on {url} "
+            "— press Ctrl+C here to stop.",
+            flush=True,
         )
-    except KeyboardInterrupt:
-        pass
+        if not args.no_browser:
+            webbrowser.open(url)
+        try:
+            uvicorn.run(
+                "sidelinehd_extractor.webapp.app:create_app",
+                factory=True,
+                host=args.host,
+                port=args.port,
+            )
+        except KeyboardInterrupt:
+            pass
     print("Stopped.")
     return 0
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    message = stop_recorded_server()
+    print(message)
+    if message == "No running server recorded." and _port_in_use(args.host, args.port):
+        print(
+            f"Port {args.port} on {args.host} is in use, but no "
+            "sidelinehd-extractor server state was found.",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    print(status_message())
+    return 0
+
+
+def _cmd_restart(args: argparse.Namespace) -> int:
+    print(stop_recorded_server())
+    return _cmd_start(args)
 
 
 def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1398,6 +1460,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not open the web browser automatically.",
     )
     start.set_defaults(func=_cmd_start)
+
+    stop = subparsers.add_parser("stop", help="Stop the recorded local web app server.")
+    stop.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
+    stop.add_argument("--port", type=int, default=8000, help=argparse.SUPPRESS)
+    stop.set_defaults(func=_cmd_stop)
+
+    status = subparsers.add_parser(
+        "status", help="Show whether the local web app server is running."
+    )
+    status.set_defaults(func=_cmd_status)
+
+    restart = subparsers.add_parser(
+        "restart",
+        help="Stop any recorded local web app server, then start a fresh one.",
+    )
+    restart.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address. Loopback by default; the app has no auth, so do not expose it.",
+    )
+    restart.add_argument("--port", type=int, default=8000)
+    restart.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the web browser automatically.",
+    )
+    restart.set_defaults(func=_cmd_restart)
 
     return parser
 

@@ -23,7 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
-| 1 | **65** — Web server lifecycle (`stop`/`status`/`restart`) + version banner | Ready to implement | Live-fire 2026-07-10: a `serve` process orphaned from a closed terminal kept serving **stale in-memory code for two days** (the just-landed CR-57 digit classifier never ran, silently producing wrong scores) and had to be found and killed by hand. Add PID-file-backed `stop`/`status`/`restart`, a version + start-time banner and web-UI footer so a stale server is obvious, and a targeted "already running — restart/stop" hint. No new deps; reuses the desktop app's `default_data_dir`/`find_open_port`. **Explicitly not** `--reload`-by-default (would interrupt long in-flight OCR jobs). Design filed below. |
+| — | **65** — Web server lifecycle (`stop`/`status`/`restart`) + version banner | Done (Pass 35) | Live-fire 2026-07-10: a `serve` process orphaned from a closed terminal kept serving **stale in-memory code for two days** (the just-landed CR-57 digit classifier never ran, silently producing wrong scores) and had to be found and killed by hand. Add PID-file-backed `stop`/`status`/`restart`, a version + start-time banner and web-UI footer so a stale server is obvious, and a targeted "already running — restart/stop" hint. No new deps; reuses the desktop app's `default_data_dir`/`find_open_port`. **Explicitly not** `--reload`-by-default (would interrupt long in-flight OCR jobs). Design filed below. |
 | — | **63** — Deep-link review rows to the source video timestamp | Done (Pass 30) | When a play needs a fix (e.g. "Couldn't read the batter's name"), the review UI should link its timestamp straight to the YouTube video at that exact moment, so the coach can verify in one click instead of scrubbing manually. Design filed below. Prerequisite: persist `youtube.video_id` on single runs too (batch already does). |
 | — | **62** — Improve Batter-Number OCR | Done (Pass 28) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
 | — | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Done (Pass 26) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
@@ -4591,6 +4591,7 @@ constraint. Do not put any roster/player name into the URL.
 ### 65. Web Server Lifecycle Commands (`stop`/`status`/`restart`) + Version/Start Banner
 
 Source: Ryan (live-fire, 2026-07-10)
+Status: Done (Pass 35, branch `impl/item-65`)
 
 **Problem.** The CLI `serve`/`start` commands run uvicorn in the foreground with no
 lifecycle management, and the web app runs the pipeline **in-process**
