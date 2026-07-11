@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| 1 | **65** — Web server lifecycle (`stop`/`status`/`restart`) + version banner | Ready to implement | Live-fire 2026-07-10: a `serve` process orphaned from a closed terminal kept serving **stale in-memory code for two days** (the just-landed CR-57 digit classifier never ran, silently producing wrong scores) and had to be found and killed by hand. Add PID-file-backed `stop`/`status`/`restart`, a version + start-time banner and web-UI footer so a stale server is obvious, and a targeted "already running — restart/stop" hint. No new deps; reuses the desktop app's `default_data_dir`/`find_open_port`. **Explicitly not** `--reload`-by-default (would interrupt long in-flight OCR jobs). Design filed below. |
 | — | **63** — Deep-link review rows to the source video timestamp | Done (Pass 30) | When a play needs a fix (e.g. "Couldn't read the batter's name"), the review UI should link its timestamp straight to the YouTube video at that exact moment, so the coach can verify in one click instead of scrubbing manually. Design filed below. Prerequisite: persist `youtube.video_id` on single runs too (batch already does). |
 | — | **62** — Improve Batter-Number OCR | Done (Pass 28) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
 | — | **60 + 61 + 56** — Scorebug accuracy cluster (implausible scores, missing at-bats, inning/single-digit reads) | Done (Pass 26) | Three live-fire accuracy bugs with one shared root (scorebug OCR binarization). Fixed via glyph-isolation preprocessing + arrow-direction detection + plausibility/confidence guards + half-boundary batter reset; validated on both live-fire videos with before/after metrics in CODE-REVIEW.md. |
@@ -4586,6 +4587,128 @@ constraint. Do not put any roster/player name into the URL.
 - Workflow: `run_youtube_game` writes `youtube.video_id` to the manifest.
 - Template/route: a YouTube run renders an anchor with the correct `&t=...s` for a
   known event; a local run renders no anchor.
+
+### 65. Web Server Lifecycle Commands (`stop`/`status`/`restart`) + Version/Start Banner
+
+Source: Ryan (live-fire, 2026-07-10)
+
+**Problem.** The CLI `serve`/`start` commands run uvicorn in the foreground with no
+lifecycle management, and the web app runs the pipeline **in-process**
+(`webapp/jobs.py` `ThreadPoolExecutor` → `run_youtube_game`), so a long-lived
+server keeps executing whatever code it imported at startup. Two failure modes hit
+in the field on 2026-07-10:
+- A `serve` process launched the previous morning, then its terminal was closed.
+  It kept running with no supported way to find or stop it — diagnosis required
+  `ps aux | grep`, `lsof -iTCP:8000`, and `kill` by hand.
+- Because it was started **before** the Pass 33 CR-57 digit classifier landed, that
+  process served stale in-memory code for ~2 days and silently produced wrong
+  scores (`9`→`3`, `11`→`1`). A code update (git pull / approved CR) does not take
+  effect until the server is restarted, and nothing signalled that the running
+  server was stale.
+
+The desktop menubar app (item 54d) already solved clean start/stop — a background
+`_ServerThread` with a graceful `should_exit`, `find_open_port`, and a Quit menu.
+This item brings the same discipline to the CLI.
+
+**Goal.** Make start/stop/restart of the local web server foolproof from the CLI,
+and make a stale (out-of-date) running server self-evident — with **no new
+dependency** and **no default auto-reload** that would interrupt long in-flight OCR
+jobs.
+
+**Scope: three changes.**
+
+**1. Server state file + `stop` / `status` / `restart` subcommands (the core fix).**
+- On `serve` and `start`, after the port is confirmed bindable, write a JSON state
+  file to `desktop.default_data_dir() / "webapp.json"`:
+  `{"pid": os.getpid(), "host", "port", "version", "started_at": <ISO8601 UTC>}`.
+  Remove it on clean exit via `atexit.register(...)` **and** a `SIGTERM` handler
+  (so `stop`'s SIGTERM also clears it). Reuse `default_data_dir()` — do not invent a
+  new location; the desktop app and CLI must agree on it.
+  - *Refactor note.* `default_data_dir()`/`prepare_data_dir()` live in `desktop.py`,
+    which is headless-safe above its lazy `rumps` import, so importing them from
+    `cli.py` is fine. If that coupling reads poorly, factor the two helpers into a
+    tiny `paths.py` and re-export from `desktop.py` — architect leans toward the
+    direct import to avoid churn; implementer may factor if cleaner (flag it).
+- `stop`: read the state file. Absent → print "No running server recorded." and, as
+  a courtesy, note if the configured port is bound by something else. Present but PID
+  dead (`os.kill(pid, 0)` raises) → remove the file, report "not running (cleared
+  stale record)." PID alive → `SIGTERM`, poll up to ~5s for exit, then `SIGKILL` if
+  still alive; remove the file; print "Stopped (PID N)."
+- `status`: live PID → `running · PID N · http://host:port · v<version> · started
+  <started_at> (<humanized age>)`; else `not running`. Always exit 0 (informational).
+- `restart`: run the `stop` path (tolerant of "not running"), then hand off to the
+  `start` path — it stops the old server, then launches a fresh **foreground** one
+  the user controls with Ctrl+C (new code loaded).
+
+**2. Version + start-time banner (makes staleness visible).**
+- `start`'s launch banner adds the running package version and, when resolvable, the
+  git short SHA: `Serving v0.2.0 (a1b2c3d) on http://127.0.0.1:8000 — press Ctrl+C to
+  stop.` Version via `importlib.metadata.version("sidelinehd-extractor")`; SHA
+  best-effort from `git rev-parse --short HEAD` (swallow failures — a wheel install
+  has no git).
+- Render the same `v<version> · started <time>` string in the **web-UI footer** (the
+  results/review pages already carry a footer credit line — extend it). This is the
+  change that would have made the 2026-07-10 incident self-diagnosing: the footer
+  would have shown a 2-day-old start time and the stale server would have been
+  obvious before the user trusted its output.
+
+**3. Smarter port-in-use handling (polish).**
+- Today `start` errors "port in use — is the app already running?" and suggests a
+  manual `--port` bump. Improve: if the state file shows the busy port belongs to
+  *our own* recorded server, print a targeted hint — "A sidelinehd-extractor server
+  is already running here (PID N, started ...). Use `restart` to reload it, or `stop`
+  to shut it down." If the port is busy but unrecorded (someone else's process), keep
+  the current message. Architect leans toward this hint over silently auto-moving the
+  port via `find_open_port()` (an explicit error is clearer for the CLI); implementer
+  may counter-propose.
+
+**Explicitly out of scope / not recommended.**
+- **uvicorn `--reload` as a default.** It restarts workers on any source change, which
+  would interrupt a long in-flight download+OCR job (e.g. reloading 40 min into a
+  90-min video). Keep the existing `--reload` flag on `serve` as an opt-in dev
+  convenience, off by default; do **not** add it to `start`. The deliberate `restart`
+  subcommand is the supported way to pick up new code.
+- A true background daemon (double-fork / launchd). Foreground `start` + `stop`-by-PID
+  is enough for a single-user local tool and keeps the process visible; a daemon is a
+  larger, platform-specific effort not justified now.
+
+**Cross-platform.** Use the PID-file + `os.kill` approach (works on Windows, where
+`lsof` does not). Gate the `SIGKILL` escalation on `hasattr(signal, "SIGKILL")`
+(absent on Windows — fall back to a second terminate). `default_data_dir` and
+`find_open_port` are already cross-platform. The new tests must **not** bind a
+real long-lived server on the CI runner (patch `uvicorn.run`).
+
+**Acceptance criteria.**
+- `serve`/`start` write `webapp.json` to the data dir on launch and remove it on
+  Ctrl+C / SIGTERM.
+- With a server running, `status` reports PID/URL/version/start-time; `stop`
+  terminates it and clears the file; a second `stop` reports "not running" cleanly.
+- A stale state file (recorded PID no longer alive) is detected and cleared by
+  `status`/`stop` without error.
+- `restart` stops a running server and launches a fresh foreground one.
+- `start`'s banner and the web-UI footer both show the running version + start time.
+- Starting when our own server already holds the port yields the targeted
+  "already running — use restart/stop" hint.
+- No new third-party dependency. Full suite + ruff green; the 3-OS CI matrix stays
+  green (no test binds a real server or shells to `lsof`).
+
+**Tests to add.**
+- State-file round-trip: a fake `start` (uvicorn.run patched to a no-op) writes
+  `webapp.json` with pid/host/port/version; the atexit/SIGTERM hook removes it.
+- `stop` with a live PID (patch `os.kill` to record signals, simulate exit) sends
+  SIGTERM then clears the file; escalates to SIGKILL when the fake process "survives"
+  the grace window (adjust/skip where `SIGKILL` is absent).
+- `stop`/`status` with a stale PID (`os.kill(pid, 0)` raises `ProcessLookupError`) →
+  "not running (cleared stale record)", file removed.
+- `status` formatting for running vs not-running.
+- Port-in-use branch: with a state file pointing at the bound port, `start` prints
+  the "already running — restart/stop" hint (patch `_port_in_use` → True).
+- Banner/footer: the version helper returns `v<version>` (+SHA when `git` present,
+  graceful when absent); a rendered page includes the footer version/start-time text.
+
+**Docs.** README "start the app" section documents `stop`/`status`/`restart` and the
+rule "after any code update, run `restart` — a running server does not pick up
+changes on its own." Add the same note to `NEW_GAME_CHECKLIST.md` at the launch step.
 
 ### 22. Detection Configuration Object
 
