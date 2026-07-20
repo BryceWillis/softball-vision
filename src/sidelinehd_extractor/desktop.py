@@ -17,9 +17,10 @@ import os
 import socket
 import sys
 import threading
+import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 
@@ -245,8 +246,44 @@ def run_menubar_app(controller: ServerController) -> None:
     _MenubarApp().run()
 
 
-def main() -> int:
+def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
+    """Headless smoke test of the startup path (item 67b): exit 0 iff it serves.
+
+    CI runners have no login GUI, so ``rumps`` cannot start there — this is
+    the full ``main()`` path minus the menubar: data dir, port pick, server
+    thread, one real request to ``/`` asserting 200. CI runs it against the
+    *built* bundle binary so a broken bundle fails the job instead of
+    reaching a coach. Also useful by hand when diagnosing a broken install.
+    """
+
+    prepare_data_dir()
+    port = find_open_port()
+    controller = ServerController(port=port)
+    try:
+        controller.start(timeout=timeout)
+        with urllib.request.urlopen(f"{controller.url}/", timeout=timeout) as response:
+            status = response.status
+    except Exception as exc:  # any failure at all is a failed selftest
+        print(f"selftest: FAIL: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        controller.stop()
+    if status != 200:
+        print(f"selftest: FAIL: GET / returned {status}", file=sys.stderr)
+        return 1
+    print(f"selftest: OK: GET / returned 200 on {controller.url}")
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     """Bundle entrypoint: chdir to the data dir, start the server, show the menubar."""
+
+    args = sys.argv[1:] if argv is None else argv
+    # Membership test rather than argparse: macOS passes legacy `-psn_...`
+    # args to launched bundles, and the launcher must not die over an
+    # unrecognized flag (see the milestone rule on never failing to launch).
+    if "--selftest" in args:
+        return run_selftest()
 
     prepare_data_dir()
     port = find_open_port()

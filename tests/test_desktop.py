@@ -144,6 +144,82 @@ def test_server_controller_starts_serves_and_stops():
     assert not controller.running
 
 
+async def _error_app(scope, receive, send):
+    if scope["type"] != "http":
+        return
+    await send({"type": "http.response.start", "status": 500, "headers": []})
+    await send({"type": "http.response.body", "body": b"boom"})
+
+
+def _point_selftest_at(monkeypatch, tmp_path, app):
+    """Wire run_selftest's collaborators to a tmp data dir and a stub app.
+
+    The real data-dir chdir and the real webapp factory are exercised
+    elsewhere; here the subject is the selftest orchestration itself.
+    """
+
+    prepared = []
+
+    def fake_prepare_data_dir(data_dir=None):
+        prepared.append(tmp_path)
+        return tmp_path
+
+    monkeypatch.setattr(desktop, "prepare_data_dir", fake_prepare_data_dir)
+    monkeypatch.setattr(
+        desktop,
+        "ServerController",
+        lambda port: ServerController(port=port, app_factory=lambda: app),
+    )
+    return prepared
+
+
+def test_selftest_passes_when_the_server_serves_200(monkeypatch, tmp_path, capsys):
+    prepared = _point_selftest_at(monkeypatch, tmp_path, _tiny_app)
+    assert desktop.run_selftest() == 0
+    # prepare_data_dir() is deliberate — exercising it is part of the point.
+    assert prepared == [tmp_path]
+    assert "selftest: OK" in capsys.readouterr().out
+
+
+def test_selftest_fails_on_a_non_200_response(monkeypatch, tmp_path, capsys):
+    _point_selftest_at(monkeypatch, tmp_path, _error_app)
+    assert desktop.run_selftest() == 1
+    assert "selftest: FAIL" in capsys.readouterr().err
+
+
+def test_selftest_fails_and_still_stops_when_the_server_never_starts(monkeypatch, capsys):
+    controllers = []
+
+    class _DeadController:
+        def __init__(self, port):
+            self.url = f"http://127.0.0.1:{port}"
+            self.stopped = False
+            controllers.append(self)
+
+        def start(self, timeout):
+            raise RuntimeError(f"web server failed to start on {self.url}")
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(desktop, "prepare_data_dir", lambda data_dir=None: None)
+    monkeypatch.setattr(desktop, "ServerController", _DeadController)
+    assert desktop.run_selftest() == 1
+    assert "selftest: FAIL" in capsys.readouterr().err
+    assert controllers and controllers[0].stopped
+
+
+def test_main_selftest_flag_dispatches_without_starting_the_gui(monkeypatch):
+    monkeypatch.setattr(desktop, "run_selftest", lambda: 7)
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("--selftest must not reach the launch path")
+
+    monkeypatch.setattr(desktop, "prepare_data_dir", _must_not_run)
+    monkeypatch.setattr(desktop, "run_menubar_app", _must_not_run)
+    assert desktop.main(["--selftest"]) == 7
+
+
 def test_server_controller_start_raises_when_port_is_taken():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
         taken.bind(("127.0.0.1", 0))

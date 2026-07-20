@@ -1,0 +1,114 @@
+# Item 67b: CI-built macOS .app artifact (the deferred 54d-3).
+# Mirrors packaging/build-macos.md step for step — the doc and this workflow
+# are one recipe, and whenever one changes the other changes in the same
+# commit. The packaging/** push trigger exists to make drift fail loudly.
+# Kept separate from ci.yml: different trigger, and a macOS-only runner cost
+# the three-OS test matrix should not pay on every push.
+name: Package macOS app
+
+on:
+  push:
+    branches: ["**"]
+    # GitHub does not evaluate path filters for tag pushes, so a v* tag
+    # always builds; branch pushes build only when the recipe changes.
+    tags: ["v*"]
+    paths:
+      - "packaging/**"
+      - ".github/workflows/package-macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # gh release upload on tag builds
+
+jobs:
+  build:
+    # arm64 only (macos-latest is Apple Silicon); Intel is not covered and
+    # the artifact name says so. Revisit only if an Intel user appears.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      APP_PATH: dist/SidelineHD Extractor.app
+      ZIP_NAME: SidelineHD-Extractor-macos-arm64.zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The 67a build stamp runs `git rev-parse --short HEAD`; a shallow
+          # checkout would silently drop the SHA from the baked stamp.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned (not "3.x") so the frozen interpreter is deliberate, and
+          # chosen to match a version tesserocr ships macOS arm64 wheels for.
+          python-version: "3.13"
+
+      - name: Install package with web, ocr, and desktop extras + PyInstaller
+        run: python -m pip install -e ".[web,ocr,desktop]" pyinstaller
+
+      - name: Fail fast if tesserocr came from a source build
+        # A source-built tesserocr links a host libtesseract that does not
+        # ship with the bundle: the build succeeds and the app dies on the
+        # first OCR call (the build doc's #1 troubleshooting entry). A wheel
+        # install bundles its own .dylibs/.
+        run: |
+          if ! python -m pip show -f tesserocr | grep -q '\.dylibs/'; then
+            echo "::error::tesserocr resolved to a source build (no bundled .dylibs/); the bundle would fail on its first OCR call. See packaging/build-macos.md."
+            exit 1
+          fi
+
+      - name: Download eng.traineddata (tessdata_fast)
+        # curl -f fails on HTTP errors; the size check catches a truncated
+        # or error-page download that still exited 0 — a truncated
+        # traineddata must not reach a bundle.
+        run: |
+          mkdir -p packaging/tessdata
+          curl -fL --retry 3 -o packaging/tessdata/eng.traineddata \
+            https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata
+          size=$(stat -f %z packaging/tessdata/eng.traineddata)
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::eng.traineddata is only ${size} bytes — truncated or failed download."
+            exit 1
+          fi
+
+      - name: Build the .app with PyInstaller
+        run: pyinstaller --noconfirm packaging/sidelinehd.spec
+
+      - name: Ad-hoc sign and verify
+        run: |
+          codesign --force --deep -s - "$APP_PATH"
+          codesign --verify "$APP_PATH"
+
+      - name: Smoke-test the built bundle
+        # The runner has no login GUI, so the menubar cannot start here;
+        # --selftest is the full startup path minus rumps (data dir, port,
+        # server, GET / must be 200). Run against the built binary, not the
+        # source tree — the source tree is not the thing being shipped.
+        run: '"$APP_PATH/Contents/MacOS/SidelineHD Extractor" --selftest'
+
+      - name: Package with ditto
+        # ditto, not zip: zip drops the symlinks and xattrs that make a
+        # bundle launchable, which surfaces to the recipient as the build
+        # doc's "app won't open (damaged)".
+        run: ditto -c -k --keepParent "$APP_PATH" "dist/$ZIP_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SidelineHD-Extractor-macos-arm64
+          path: dist/${{ env.ZIP_NAME }}
+          if-no-files-found: error
+
+      - name: Attach to the GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A bare `git push --tags` creates no Release object, so create one
+        # rather than silently dropping the asset after a successful build;
+        # --clobber so re-running a tag's workflow replaces the asset
+        # instead of erroring.
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes "Automated macOS (arm64) build of $GITHUB_REF_NAME."
+          fi
+          gh release upload "$GITHUB_REF_NAME" "dist/$ZIP_NAME" --clobber
