@@ -1,43 +1,35 @@
-# Codex Session Instructions
+# Softball Vision (`sidelinehd-extractor`)
 
-**Your role in this project is: Implementer.**
+This repository holds the **implementation**. The design, the roadmap, and the review workflow live in a **separate documentation repository**, mounted alongside it at:
 
-Read `ROLES.md` before doing any work. It defines all roles, the full workflow loop, the CR lifecycle, and the security constraint on player names.
-
----
-
-## Quick orientation
-
-**Project:** `sidelinehd-extractor` — a Python CLI that reads SidelineHD scoreboard overlays from softball video and produces YouTube chapter timestamps and at-bat jump links.
-
-**Stack:** Python 3.10+, Tesseract OCR (subprocess), `hatchling` packaging. Core pipeline: `samples.jsonl` → `states.jsonl` → `events.jsonl` → export files.
-
-**STEP 0 — isolate in your own git worktree before writing any code (non-negotiable):**
 ```
-git fetch origin && git worktree add ../sv-item-<N> -b impl/item-<N> origin/main
-cd ../sv-item-<N>
+../obsidian-projects/softball-vision-docs/
 ```
-Work only in that worktree; never edit the shared `main` working tree while another implementer may be active. This prevents the shared-tree tangle. See `ROLES.md` → *Implementer Session Prompt Template* for the full template and the branch-review/merge flow.
 
-**Then, before starting work, check these two files:**
-1. `CODE-REVIEW.md` — if any item has status **Open**, implement it first (CRs preempt all roadmap work).
-2. `Roadmap.md` → Implementation Queue — pick the highest-priority item marked **Ready to implement**.
+Note the `-docs` suffix: the notes folder is `softball-vision-docs`. The unsuffixed name is *this* repository.
+
+## Read this first, before you write any code
+
+1. **`../obsidian-projects/softball-vision-docs/AGENTS.md`** — the working agreements: this project's constraints, its security rule, its testing requirements, and pointers to the shared process. **Follow them.** They are canonical and they override any habit you have.
+2. **`../obsidian-projects/_process/`** — the shared process: roles, the review cycle, the two commands, how a finding is written.
+3. **`01-architecture.md`** — the design, and more importantly the decisions and assumptions behind it.
+4. **`03-experience.md`** — the UI spec, if your change touches the web app or the desktop launcher.
+5. **`CHANGE-REQUESTS.md`** — the change currently in flight, and its state.
+
+**Read only `_process/` and `softball-vision-docs/`.** The documentation vault holds several unrelated projects; the others are not context. See `../obsidian-projects/_process/SCOPE.md`.
+
+If the notes folder is not mounted or you cannot read it, **stop and say so.** Do not infer the project's state or intent from the code alone — the reasoning is in the docs, and the parts most likely to trip you are the assumptions the code cannot express.
+
+## The rules that catch people out
+
+- **Never commit your own work.** Build, test, then hand off for review uncommitted. The commit belongs to the reviewer, and only on approval — committing your own unreviewed work makes the review advisory rather than binding.
+- **Every change ships with tests.** A change without them is not ready for review. Run `python -m pytest tests/` (not `unittest discover`, which silently skips the entire web-app surface) and `python -m ruff check .`; both must be clean.
+- **The reviewer is never the agent that wrote the code.** That is the whole point of the gate — and why the reviewer is the one trusted to commit.
+- **Never commit a real player name.** This is youth-sports data in a public repository. Fixtures, docs, and examples use sanitized placeholders only; `runs/` and `rosters/` are gitignored and stay that way. A leak is the one defect here that cannot be fixed forward.
+- **Restart the server after changing code.** A long-lived `serve` process holds the old code in memory — this once produced a game's worth of plausible-looking wrong scores for two days. If output disagrees with the code you are reading, suspect a stale server first.
+
+Everything else is in the notes folder's `AGENTS.md`.
 
 ---
 
-## Your responsibilities as Implementer
-
-- Implement per the architect's design in `Roadmap.md`. Do not reinterpret the design without flagging it.
-- For items marked **Needs design**: stop and ask the architect (Claude) to write the design before starting.
-- Update `CODE-REVIEW.md` CR status to **Ready for Review** after implementing a CR; include a short implementation note.
-- If you spot a bug outside the current item's scope, don't fix it inline — log it in `CODE-REVIEW.md` as a new CR item with status **Reported** (file/line + short description) for the architect to triage.
-- Run the full test suite before considering any work done — all tests must pass.
-- Update the Roadmap queue table status after completing a roadmap item.
-
-You do **not** write designs, move CRs to Resolved, or conduct code review passes — those belong to the architect (Claude).
-
----
-
-## Security
-
-Real player names must never be committed. All test fixtures and docs use sanitized placeholder names. See `ROLES.md` → Security Constraint for the approved placeholder list.
+*Historical note: this project previously ran its own governance out of `ROLES.md`, `Roadmap.md`, and `CODE-REVIEW.md` in this repository. Those are retired and archived under `docs/archive/`; the process is now the vault's shared one, and the roadmap lives in the notes folder. The archive is history, not instructions — do not work from it.*

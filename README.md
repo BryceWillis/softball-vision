@@ -682,14 +682,11 @@ The paste kit contains:
 
 ## Project Tracking
 
-Use [CODE-REVIEW.md](CODE-REVIEW.md) for reviewed engineering findings and their
-approval lifecycle. Code review items use IDs like `CR-10a`; after implementation,
-Codex may mark an item `Ready for Review`, but the reviewer/user owns moving it
-to `Resolved`.
-
-Use [Roadmap.md](Roadmap.md) for the implementation queue and product backlog.
-Roadmap items from code review include `Source: CR-XX`; feature ideas that are
-not review findings use `Source: Product backlog`.
+The roadmap and review workflow are maintained in a private documentation
+vault alongside this repository. The historical in-repo tracking files —
+`Roadmap.md` (item designs) and `CODE-REVIEW.md` (review findings, `CR-XX`) —
+are preserved under [docs/archive/](docs/archive/) for reference; see
+[docs/archive/README.md](docs/archive/README.md) for what moved where.
 
 ## Development Checks
 

@@ -253,10 +253,9 @@ everything by hand.
 
 ## Project Direction
 
-Near-term improvements are tracked in:
-
-- [CODE-REVIEW.md](CODE-REVIEW.md): reviewed engineering findings.
-- [Roadmap.md](Roadmap.md): implementation queue and product backlog.
+Near-term improvements are tracked in a private documentation vault alongside
+this repository; the historical in-repo roadmap and review findings are
+preserved under [docs/archive/](docs/archive/).
 
 Possible future work:
 

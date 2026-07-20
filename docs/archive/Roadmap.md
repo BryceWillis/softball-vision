@@ -23,6 +23,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 
 | # | Item | Status | Rationale |
 |---|------|--------|-----------|
+| 1 | **67** — Make the packaged desktop app the primary onboarding path (phases 67a–67d) | Designed (2026-07-20) | Owner (2026-07-20): "I find it confusing to run this app, I still don't know how to do it... maybe we should ship this as an app that shows the browser windows and controls the server status." Item 54d already built exactly this (menubar app, Open/Status/Quit, auto-opens the browser) and it was approved in Pass 27, but the README Quickstart still leads with Terminal/Homebrew/venv/pip, no built `.app` existed anywhere, and 54d-3 (CI artifact) was explicitly deferred — so the owner never actually encountered it. Fable 5 rebuilt and verified the `.app` from the existing `packaging/build-macos.md` recipe on 2026-07-20 (serves 200 on 127.0.0.1:8000, auto-opens browser, correct data dir, clean menubar Quit) and installed it to `/Applications` for immediate use. Full design section below. |
 | — | **65** — Web server lifecycle (`stop`/`status`/`restart`) + version banner | Done (Pass 35) | Live-fire 2026-07-10: a `serve` process orphaned from a closed terminal kept serving **stale in-memory code for two days** (the just-landed CR-57 digit classifier never ran, silently producing wrong scores) and had to be found and killed by hand. Add PID-file-backed `stop`/`status`/`restart`, a version + start-time banner and web-UI footer so a stale server is obvious, and a targeted "already running — restart/stop" hint. No new deps; reuses the desktop app's `default_data_dir`/`find_open_port`. **Explicitly not** `--reload`-by-default (would interrupt long in-flight OCR jobs). Design filed below. |
 | — | **63** — Deep-link review rows to the source video timestamp | Done (Pass 30) | When a play needs a fix (e.g. "Couldn't read the batter's name"), the review UI should link its timestamp straight to the YouTube video at that exact moment, so the coach can verify in one click instead of scrubbing manually. Design filed below. Prerequisite: persist `youtube.video_id` on single runs too (batch already does). |
 | — | **62** — Improve Batter-Number OCR | Done (Pass 28) | Batter-card number OCR now gates absent lower-third crops and falls back to isolated bright glyphs only for empty reads; real-video validation metrics are in `CODE-REVIEW.md`. |
@@ -54,7 +55,7 @@ For items marked **Needs design**, Codex should stop and ask the architect (Clau
 | — | **29** — Score at Inning Transitions | Done | Approved Pass 9. |
 | — | **28** — Project Config Defaults | Done | Approved Pass 10. |
 
-Items 22, 23, 24, 25 are deferred architectural notes — they stay in the backlog but have no implementation slot until a concrete trigger arises.
+Items 22, 23, 24, 25, 66 are deferred architectural notes — they stay in the backlog but have no implementation slot until a concrete trigger arises.
 
 ## Accepted Deliverables
 
@@ -4756,3 +4757,282 @@ Reason to defer:
 Potential future acceptance criteria:
 - Add a documented policy for skipped innings.
 - Optionally expose a strict/permissive chapter progression mode.
+
+### 66. Slide-In Aware Batter-Card Name Reads
+
+Source: Architectural note / Product backlog (owner observation, 2026-07-11)
+
+The SidelineHD batter card (at least the primary layout) animates in from the
+side rather than appearing in place. Because sampling is a blind fixed grid
+(`sample_every_seconds=5.0`, `processing.py`) and the card name is read from a
+single frame with no cross-frame consensus (`state.py` `batter_name` →
+`_sample_text`), a sample landing mid-slide yields a horizontally offset/clipped
+name crop. That garbled read falls below the fuzzy roster-match gate
+(`SequenceMatcher(...).ratio() >= 0.84`, `models.py`) and can fail the
+name-based match — the same failure mode CR-25's `garbled-card-name` flag
+already surfaces.
+
+Reason to defer:
+- In practice the system already recovers the batter: the number-based
+  fallbacks (card number → lineup strip → derived) and existing error handling
+  catch these, so a garbled *name* usually only costs the
+  `roster_match_source == "name"` signal, not the at-bat. Owner confirms current
+  results are good.
+- The fix is real machinery (transition-aware densification near batter changes
+  + multi-frame name consensus, or a card-motion gate) for a mostly-cosmetic
+  gain. Not worth the complexity today.
+
+Trigger to revisit:
+- A concrete case where a wrong/missing *batter name* (not number) reaches the
+  published output, or where half-inning inference (which counts roster-name
+  matches) is thrown off by name-match loss.
+
+Verify-first before implementing:
+- Densely re-sample one known at-bat's start (~every 0.2s for the first ~2s) and
+  dump the `batter_card_name` crop + OCR per frame. Slide-in signature = first N
+  reads garbled/shifted, then a clean snap to a stable string. Uniformly
+  mediocre reads instead point at OCR/threshold, not animation — a different fix.
+
+Potential future acceptance criteria:
+- Batter-card name is resolved from a consensus of stable frames rather than the
+  single trigger frame.
+- Optionally, samples are densified around detected batter changes so a
+  mid-slide frame is never the only name read.
+
+### 67. Make the Packaged Desktop App the Primary Onboarding Path
+
+Source: Product owner (2026-07-20), verbatim: "I find it confusing to run
+this app, I still don't know how to do it. Is this the right architecture
+and design? maybe we should ship this as an app that shows the browser
+windows and controls the server status, etc."
+
+Status: Needs design — flagged by Fable 5, not designed (out of role scope
+for an implementer session; see `CLAUDE.md`).
+
+**The situation.** Item 54's whole premise was that the owner — who built
+this tool — could not start the web app unaided (Roadmap item 54 rationale,
+2026-07-03). Phase 54d then built exactly the thing being asked for again
+today: a macOS menubar app (`src/sidelinehd_extractor/desktop.py`, `rumps`)
+with Open / status / Quit, auto-opens the browser, runs uvicorn on a thread
+so Quit can shut it down gracefully, and chdirs to
+`~/Library/Application Support/SidelineHD Extractor/` for a stable data
+dir. It was built, launched, and approved in Pass 27 ("`.app`
+built+launched", "data dir confirmed correct by architect" — see
+`CODE-REVIEW.md`).
+
+Despite that, the owner still hit the confusing Terminal path today,
+because:
+- The README Quickstart (`README.md`) documents only Homebrew → venv →
+  `pip install -e ".[web]"` → `sidelinehd-extractor start`. It does not
+  mention the `.app` at all.
+- No built `.app` existed anywhere on the owner's machine before this
+  session — getting one requires manually running PyInstaller per
+  `packaging/build-macos.md`.
+- **54d-3 (CI artifact: auto-build and publish the `.app` on release)** was
+  explicitly called out as "out of local scope" when 54d shipped. Without
+  it, any `.app` a user has goes stale the moment code changes — the same
+  failure mode item 65 (stale orphaned `serve` process) was built to
+  prevent, just for the desktop entrypoint instead of the CLI.
+
+**What Fable 5 verified today (2026-07-20), read-only/build-only, no source
+changes:** installed the `web`/`ocr`/`desktop` extras + PyInstaller into the
+existing `.venv` (Python 3.13, arm64) — `tesserocr` resolved to a
+self-contained prebuilt wheel, no brew `libtesseract` needed. Downloaded
+`eng.traineddata`, ran `pyinstaller packaging/sidelinehd.spec`, ad-hoc
+signed with `codesign --force --deep -s -`. (Note: that bundle predates the
+67a stamp fix, so it reports `0.1.0` to macOS.) Launched the resulting
+`.app`: it served HTTP 200 on `127.0.0.1:8000`, opened the browser
+automatically, wrote its data dir under `~/Library/Application
+Support/SidelineHD Extractor/`, and quit cleanly via the standard macOS
+Quit AppleEvent (rumps' graceful shutdown path). Copied it to
+`/Applications/SidelineHD Extractor.app` for the owner's immediate use.
+This reconfirms the Pass 27 approval still holds against current `main`.
+
+**Architect decisions (2026-07-20, owner-confirmed).** The four open
+questions Fable 5 raised are resolved as follows:
+
+1. **README leads with the `.app`.** The current Terminal Quickstart moves
+   into Developer Setup as "Run from source." Phase 67c.
+2. **54d-3 (CI artifact) is scheduled now**, as phase 67b. It is the
+   prerequisite for everything else: a hand-built `.app` that only exists on
+   one machine cannot be the primary onboarding path.
+3. **Distribution: ad-hoc signing + documented Gatekeeper guidance.** Owner
+   audience is "me plus a few coaches I hand it to." Real Developer ID
+   signing and notarization stay deferred — see *Notarization pressure*
+   below for the trigger to revisit.
+4. **Item 65's CLI lifecycle commands are unchanged** and stay the
+   developer/no-GUI path. They are documented in Developer Setup, not the
+   Quickstart.
+
+**The staleness problem is the load-bearing constraint.** A `.app` freezes a
+code snapshot. Ryan is actively developing this — every review pass changes
+the code — so a primary `.app` means routinely running stale code. That is
+precisely the CR-59 failure mode (a stale server silently produced wrong
+scores for two days), and item 65's mitigation does not reach here: the
+desktop entrypoint never calls `lifecycle.record_server(...)`, so
+`footer_runtime_label()` (`webapp/lifecycle.py:266`) falls through to a bare
+`version_display()`. In a frozen bundle `git_short_sha()` also returns
+`None` (no checkout, CWD is the data dir), so the footer shows only
+`v0.2.0` — no build date, nothing that distinguishes a bundle built today
+from one built in March. **Making the `.app` primary without a visible build
+stamp would knowingly re-introduce CR-59.** Hence phase 67a comes first.
+
+Owner also chose an active update channel (check GitHub Releases on launch,
+offer the download) — phase 67d.
+
+**Pre-existing defect found while designing:** `packaging/sidelinehd.spec`
+hardcodes `CFBundleShortVersionString: "0.1.0"` while `pyproject.toml` is at
+`0.2.0`. Every bundle built since the version bump reports the wrong version
+to macOS. Fixed in 67a.
+
+---
+
+#### Phase 67a — Build stamp (foundation)
+
+Make a bundle's provenance visible without a terminal.
+
+New `src/sidelinehd_extractor/build_info.py`:
+- `BuildStamp` frozen dataclass: `version`, `sha` (optional), `built_at`
+  (optional ISO-8601 UTC), `origin` ∈ `{"bundle", "source"}`.
+- `build_stamp() -> BuildStamp` — when `sys.frozen`, read `build_info.json`
+  from `sys._MEIPASS`; otherwise fall back to
+  `lifecycle.package_version()` + `lifecycle.git_short_sha()` with
+  `origin="source"`. A missing, unreadable, or malformed `build_info.json`
+  degrades to the source path rather than raising — a launcher must never
+  fail to launch over a provenance file.
+- `stamp_label(stamp) -> str` — reuses item 65's banner vocabulary:
+  `v0.2.0 (a1b2c3d) · built 2026-07-20`, dropping absent segments.
+
+Build-time wiring in `packaging/sidelinehd.spec`:
+- Generate `build_info.json` (version from `importlib.metadata`, sha from
+  `git rev-parse --short HEAD` on the build machine, `built_at` from build
+  time) into a temp path and add it to `datas`.
+- Set `CFBundleShortVersionString` from the real package version, fixing the
+  hardcoded `0.1.0`.
+
+Surfacing:
+- `desktop.py` menubar gains a display-only item showing `stamp_label(...)`,
+  directly under the existing "Running on …" item.
+- `lifecycle.footer_runtime_label()` prefers the bundle stamp when frozen,
+  so the web footer shows the build date instead of a bare version.
+
+Acceptance criteria:
+- A launched bundle shows version + sha + build date in both the menubar and
+  the web footer.
+- Running from source is unchanged (`origin="source"`, existing label).
+- A corrupt `build_info.json` still launches, silently degrading.
+
+Tests: simulate the frozen path by monkeypatching `sys.frozen`/`sys._MEIPASS`
+to a `tmp_path` containing a `build_info.json`; cover the source fallback and
+the malformed-file degrade. No GUI needed — `build_info` is import-safe
+headless, matching `desktop.py`'s existing testability split.
+
+#### Phase 67b — CI-built `.app` artifact (54d-3)
+
+New `.github/workflows/package-macos.yml`, separate from `ci.yml` (different
+trigger, different runner cost). Triggers: `push` on `v*` tags,
+`workflow_dispatch`, and pushes touching `packaging/**` so the build recipe
+cannot rot unnoticed.
+
+Steps on `macos-latest` (arm64), mirroring `packaging/build-macos.md` so the
+doc and the workflow stay one recipe:
+1. `actions/checkout@v4` with `fetch-depth: 0` (the sha stamp needs history).
+2. `setup-python`, then `pip install -e ".[web,ocr,desktop]" pyinstaller`.
+3. **Fail fast if `tesserocr` came from a source build** — `pip show -f
+   tesserocr` must list bundled `.dylibs/`. This is the build doc's #1
+   troubleshooting entry and it silently produces a broken bundle.
+4. Download `eng.traineddata` into `packaging/tessdata/`.
+5. `pyinstaller --noconfirm packaging/sidelinehd.spec`.
+6. `codesign --force --deep -s -` and `codesign --verify`.
+7. Package with `ditto -c -k --keepParent` — **not** `zip`, which drops the
+   symlinks and xattrs that make a bundle launchable (the doc's "app won't
+   open (damaged)" entry).
+8. `upload-artifact`; on a tag, also `gh release upload`.
+
+**Bundle smoke test (design addition beyond a bare artifact build).** CI
+runners have no login GUI, so `rumps` cannot start and a real launch test is
+impossible. Shipping an untested bundle to coaches is the whole risk this
+phase exists to reduce, so add a `--selftest` flag to `desktop.main()`: run
+`prepare_data_dir()`, start the server, request `/` and assert 200, stop, and
+exit non-zero on any failure — the full startup path minus the menubar. CI
+runs the built binary with `--selftest` and fails the job on a bad bundle.
+This flag is also useful by hand when diagnosing a coach's broken install.
+
+Scope note: **arm64 only.** Intel Macs are not covered and the artifact name
+says so (`SidelineHD-Extractor-macos-arm64.zip`). Add a universal2 or second
+runner only if an Intel user actually appears.
+
+Acceptance criteria: a tag push produces a downloadable, ad-hoc-signed,
+`--selftest`-passing zip attached to the Release, carrying a 67a build stamp
+matching the tag.
+
+#### Phase 67c — README restructure + Gatekeeper guidance
+
+- New **"Quickstart (Mac — no Terminal)"**: download the zip from Releases →
+  unzip → drag to Applications → **right-click → Open** (once) → **SHD**
+  appears in the menubar and the browser opens. Explain up front that the
+  "unidentified developer" warning is expected and why (ad-hoc signed, not
+  notarized) — an unexplained Gatekeeper dialog is exactly the kind of wall
+  that stopped the owner before.
+- Move the existing Homebrew/venv/pip Quickstart body verbatim into
+  Developer Setup as "Run from source (any platform)". Nothing is deleted —
+  it stops being the *first* thing a coach reads.
+- New subsection **"Handing the app to another coach"**: send the zip
+  unmodified (re-zipping with Finder is fine; emailing the raw `.app` is
+  not), recipient right-click → Opens once.
+- Item 65's `start`/`stop`/`status`/`restart` stay documented under Developer
+  Setup, unchanged.
+- Check `NEW_GAME_CHECKLIST.md` for `start`-first assumptions and update to
+  match.
+
+Acceptance criterion, deliberately behavioral: a reader who has never opened
+Terminal can get to a running app using only the Quickstart.
+
+#### Phase 67d — Update check against GitHub Releases
+
+New `src/sidelinehd_extractor/updates.py`:
+- `latest_release(timeout=3.0)` queries
+  `https://api.github.com/repos/BryceWillis/softball-vision/releases/latest`
+  and returns the parsed `tag_name`, compared against `build_stamp().version`
+  via a small `v(\d+)\.(\d+)\.(\d+)` tuple compare (no new dependency).
+- Runs on a daemon thread **after** the server is up. It never blocks launch
+  and swallows every exception — there is no network at a ballpark, and a
+  failed update check must be indistinguishable from no update check.
+- Surfaced as a menubar item only when an update exists: "Update available:
+  v0.3.0 — Download…", opening the Releases page in the browser. Hidden when
+  current or offline.
+
+**No silent self-replacement.** The app opens the Releases page; the user
+downloads and replaces it themselves. An auto-swapped bundle would arrive
+re-quarantined and, being only ad-hoc signed, could leave the user with an
+app macOS refuses to open — a worse failure than a stale one. This is the
+honest limit of "offers to download" under ad-hoc signing.
+
+Privacy/opt-out: this is the project's first outbound network call not
+initiated by a user action. Document it plainly in the README and honor a
+`check_for_updates = false` key in `sidelinehd.cfg` (item 28's config) plus
+an env-var override for CI.
+
+Tests: stub the HTTP layer — newer/equal/older/malformed tags, timeout, and
+offline all covered; assert the offline and malformed paths surface nothing
+and raise nothing.
+
+#### Notarization pressure (revisit trigger)
+
+67b + 67d together create a real tension the owner should know about:
+publishing zips to Releases means every recipient's download carries the
+quarantine flag, so every coach hits the "unidentified developer" dialog and
+needs right-click → Open. That is tolerable for two or three people who can
+be walked through it and intolerable past that. **Revisit Developer ID
+signing + notarization ($99/yr Apple Developer account, plus secret
+management in CI) when the recipient count passes ~3, or on the first
+recipient who cannot get past Gatekeeper unaided.**
+
+#### Phase ordering
+
+67a → 67b → 67c → 67d, and the dependencies are real, not stylistic: 67b
+bakes the stamp 67a defines; 67c links a Release asset that only exists
+after 67b; 67d checks Releases that only carry assets after 67b. 67a is
+independently shippable and worth landing on its own — it fixes the
+`CFBundleShortVersionString` defect and closes the desktop-side CR-59 gap
+even if nothing else follows.
