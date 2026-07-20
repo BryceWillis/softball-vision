@@ -42,6 +42,13 @@ pyinstaller --noconfirm packaging/sidelinehd.spec
 
 The app lands at `dist/SidelineHD Extractor.app`.
 
+The spec bakes a `build_info.json` (package version, git short SHA, build
+date) into the bundle — item 67a's build stamp, shown in the menubar and
+the web footer so a stale bundle is self-evident. It also sets the bundle's
+`CFBundleShortVersionString` from the installed package version; the version
+macOS reports (Get Info) should match `pyproject.toml`. Building from a
+source tarball with no git is fine — the stamp just drops the SHA segment.
+
 ## 4. Ad-hoc signing (local distribution)
 
 Unsigned apps are blocked outright on Apple Silicon; ad-hoc signing makes
@@ -60,6 +67,8 @@ matters (explicitly out of scope for 54d).
 1. Copy the `.app` to a user account (or machine) with no brew/python setup.
 2. Double-click (first time: right-click → Open). The **SHD** menubar item
    appears and the browser opens `http://127.0.0.1:8000`.
+   The menubar and the web footer both show the build stamp, e.g.
+   `v0.2.0 (a1b2c3d) · built 2026-07-20` — check the date is today's.
 3. Data lives in `~/Library/Application Support/SidelineHD Extractor/`
    (`runs/`, `videos/`, `rosters/`, `sidelinehd.cfg`).
 4. Run a short game video end-to-end: OCR must work with no Tesseract

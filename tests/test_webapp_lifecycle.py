@@ -117,6 +117,30 @@ def test_footer_runtime_label_uses_state_when_present(tmp_path, monkeypatch):
     assert lifecycle.footer_runtime_label(path) == "v0.fallback"
 
 
+def test_footer_runtime_label_prefers_build_stamp_when_frozen(tmp_path, monkeypatch):
+    """Item 67a: a frozen bundle's footer shows the baked build stamp, even
+    when a (stale, CLI-written) server record exists in the data dir."""
+
+    import json
+    import sys
+
+    path = tmp_path / "webapp.json"
+    lifecycle.write_server_state(_state(), path)
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "build_info.json").write_text(
+        json.dumps(
+            {"version": "0.2.0", "sha": "a1b2c3d", "built_at": "2026-07-20T18:04:05Z"}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+
+    assert lifecycle.footer_runtime_label(path) == "v0.2.0 (a1b2c3d) · built 2026-07-20"
+
+
 def test_version_display_includes_sha_when_available():
     assert lifecycle.version_display("1.2.3", "abc123") == "v1.2.3 (abc123)"
     assert lifecycle.version_display("1.2.3", None) == "v1.2.3"

@@ -21,6 +21,8 @@ import webbrowser
 from pathlib import Path
 from typing import Callable, Optional
 
+from sidelinehd_extractor.build_info import build_stamp, stamp_label
+
 APP_NAME = "SidelineHD Extractor"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -222,10 +224,14 @@ def run_menubar_app(controller: ServerController) -> None:
             open_item = rumps.MenuItem(f"Open {APP_NAME}", callback=self._open)
             status_item = rumps.MenuItem(f"Running on {controller.url}")
             status_item.set_callback(None)  # display-only
+            # Item 67a: build provenance, so a stale bundle is self-evident
+            # from the menubar (a frozen app has no git checkout to ask).
+            stamp_item = rumps.MenuItem(stamp_label(build_stamp()))
+            stamp_item.set_callback(None)  # display-only
             super().__init__(
                 APP_NAME,
                 title="SHD",
-                menu=[open_item, status_item],
+                menu=[open_item, status_item, stamp_item],
                 quit_button=rumps.MenuItem("Quit", callback=self._quit),
             )
 

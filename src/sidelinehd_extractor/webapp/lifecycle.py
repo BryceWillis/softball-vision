@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -261,6 +262,12 @@ def status_message(
 
 
 def footer_runtime_label(path: Optional[Path] = None) -> str:
+    # Item 67a: a frozen bundle never records a server (the CLI does that),
+    # so prefer its baked build stamp — a build date beats a bare version.
+    if getattr(sys, "frozen", False):
+        from sidelinehd_extractor.build_info import build_stamp, stamp_label
+
+        return stamp_label(build_stamp())
     state = read_server_state(path)
     if state is None:
         return version_display()
