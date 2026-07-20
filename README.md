@@ -10,7 +10,71 @@ YouTube paste kit.
 For a non-technical overview of what this project does and why it exists, see
 [PROJECT-EXPLANATION.md](PROJECT-EXPLANATION.md).
 
-## Quickstart (Mac — no coding needed)
+## Quickstart (Mac — no Terminal)
+
+Everything in this section is downloads and clicks. No Terminal, no commands.
+
+> **Apple Silicon only:** the download below is built for Apple Silicon Macs
+> (M1 or later). On an Intel Mac — or on Windows or Linux — use
+> [Run from source (any platform)](#run-from-source-any-platform) instead.
+
+**1. Download the app.** Go to the project's
+[Releases page](https://github.com/BryceWillis/softball-vision/releases/latest)
+and download `SidelineHD-Extractor-macos-arm64.zip`.
+
+**2. Unzip it.** Double-click the zip in your Downloads folder. You get an
+app called **SidelineHD Extractor**.
+
+**3. Drag it into your Applications folder** — do this now, before opening it
+for the first time.
+
+**4. Open it once with right-click → Open.** macOS will warn you that the app
+is from an "unidentified developer." That warning is expected, not a sign
+that something is wrong: the app is signed, but it is not registered with
+Apple's paid developer program, so macOS cannot vouch for who built it.
+Right-click (or Control-click) **SidelineHD Extractor** in Applications and
+choose **Open**, then click **Open** in the dialog. macOS remembers your
+answer — from then on the app opens with a normal double-click. (Replacing
+the app with a newer download resets this, so an update needs the same
+one-time right-click → Open again.)
+
+   If you double-clicked first instead, macOS shows a warning with **no Open
+   button at all** — it looks like a dead end, but it isn't. Close the
+   dialog, then right-click the app and choose **Open**.
+
+**5. That's it.** **SHD** appears in your menu bar and your browser opens the
+app on its own. The first page explains the rest: add your team's roster,
+paste the YouTube link to your game, and wait — a full game takes roughly
+30–45 minutes to read. When it's done, copy the timestamps into your video's
+YouTube description.
+
+To stop the app, click **SHD** in the menu bar and choose **Quit**.
+
+If something doesn't work, use the app's **Send feedback** button (player
+names are removed automatically) or open a GitHub issue.
+
+### Handing the app to another coach
+
+Send the **zip file**, not the unpacked app. Re-zipping the app with Finder
+(right-click → **Compress**) is fine; emailing the raw `.app` is not — mail
+programs mangle app bundles, and the copy that arrives will not open. The
+other coach then follows the same steps above: unzip, drag to Applications,
+and right-click → **Open** once.
+
+The Quickstart above is for Apple Silicon Macs. Intel Mac, Windows, and Linux
+users: start with [Run from source (any platform)](#run-from-source-any-platform)
+in Developer Setup below. The sections after that cover the developer/CLI
+workflow.
+
+## Developer Setup
+
+Python 3.10 or newer is required.
+
+### Run from source (any platform)
+
+The walkthrough below is the Mac Terminal path, kept intact for anyone running
+from a source checkout. Windows and Linux users: the platform-labelled steps in
+the rest of Developer Setup below cover the same ground for your OS.
 
 You need to do this once. Afterward, starting the app is a single command.
 
@@ -79,14 +143,6 @@ changes on its own.
   install command to copy; run it in the Terminal, then click Re-check.
 - Anything else: use the app's **Send feedback** button (player names are
   removed automatically) or open a GitHub issue.
-
-The Quickstart above is Mac-specific. Windows and Linux users: follow the
-platform-labelled steps in Developer Setup below. The sections after that
-cover the developer/CLI workflow.
-
-## Developer Setup
-
-Python 3.10 or newer is required.
 
 ### External dependencies
 

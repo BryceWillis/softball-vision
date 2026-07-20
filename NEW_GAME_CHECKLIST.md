@@ -1,6 +1,9 @@
 # New Game Checklist
 
-Use this after cloning the repo and installing dependencies.
+This checklist covers the developer/CLI workflow from a source checkout. If
+you just want to use the app, the packaged Mac app is the easier path — see
+"Quickstart (Mac — no Terminal)" in the [README](README.md); it needs none of
+the setup below.
 
 ## One-Time Setup
 
@@ -24,8 +27,10 @@ Use this after cloning the repo and installing dependencies.
   - Windows (cmd.exe): `.venv\Scripts\activate.bat`
 - [ ] Install the tool: `python -m pip install -e .`
 - [ ] Confirm the CLI works: `sidelinehd-extractor --help`
-- [ ] If you use the local web app, launch it with `sidelinehd-extractor start`.
-      Use `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
+- [ ] If you use the local web app: the packaged Mac app (README Quickstart)
+      starts and stops it from the menu bar with no commands. From a source
+      checkout, launch it with `sidelinehd-extractor start` and use
+      `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
       `sidelinehd-extractor restart` to manage it. After updating the code, run
       `sidelinehd-extractor restart`; a running server does not pick up changes
       on its own.
