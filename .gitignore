@@ -6,6 +6,8 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+# The packaging venv (packaging/build-macos.md step 1)
+.venv-build/
 
 # Local generated artifacts
 videos/

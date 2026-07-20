@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
+from sidelinehd_extractor.updates import (
+    RELEASES_PAGE_URL,
+    UpdateCheck,
+    update_menu_title,
+)
 
 APP_NAME = "SidelineHD Extractor"
 DEFAULT_HOST = "127.0.0.1"
@@ -215,7 +220,9 @@ class ServerController:
         self._thread = None
 
 
-def run_menubar_app(controller: ServerController) -> None:
+def run_menubar_app(
+    controller: ServerController, update_check: Optional[UpdateCheck] = None
+) -> None:
     """The rumps menubar UI: Open / Status / Quit. Blocks until Quit."""
 
     import rumps
@@ -227,7 +234,8 @@ def run_menubar_app(controller: ServerController) -> None:
             status_item.set_callback(None)  # display-only
             # Item 67a: build provenance, so a stale bundle is self-evident
             # from the menubar (a frozen app has no git checkout to ask).
-            stamp_item = rumps.MenuItem(stamp_label(build_stamp()))
+            self._stamp_title = stamp_label(build_stamp())
+            stamp_item = rumps.MenuItem(self._stamp_title)
             stamp_item.set_callback(None)  # display-only
             super().__init__(
                 APP_NAME,
@@ -235,9 +243,31 @@ def run_menubar_app(controller: ServerController) -> None:
                 menu=[open_item, status_item, stamp_item],
                 quit_button=rumps.MenuItem("Quit", callback=self._quit),
             )
+            # Item 67d: the check runs on its own daemon thread, but rumps
+            # menus are AppKit and must only be touched from the main thread
+            # — which is where rumps.Timer callbacks run. Poll until the
+            # check finishes, then stop; the item appears only when an
+            # update actually exists (never a "you're up to date" item).
+            self._update_timer = None
+            if update_check is not None:
+                self._update_timer = rumps.Timer(self._poll_update_check, 1)
+                self._update_timer.start()
+
+        def _poll_update_check(self, _timer) -> None:
+            if update_check is None or not update_check.done:
+                return
+            self._update_timer.stop()
+            tag = update_check.result
+            if tag is None:
+                return
+            item = rumps.MenuItem(update_menu_title(tag), callback=self._open_releases)
+            self.menu.insert_after(self._stamp_title, item)
 
         def _open(self, _sender) -> None:
             webbrowser.open(controller.url)
+
+        def _open_releases(self, _sender) -> None:
+            webbrowser.open(RELEASES_PAGE_URL)
 
         def _quit(self, _sender) -> None:
             controller.stop()
@@ -289,11 +319,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     port = find_open_port()
     controller = ServerController(port=port)
     controller.start()
+    # Item 67d: only after the server is up, and on a daemon thread — the
+    # check must never block launch, and --selftest never reaches this path.
+    update_check = UpdateCheck()
+    update_check.start()
     # First launch orientation (matches the 54b `start` behavior): open the
     # browser so a double-click visibly does something.
     webbrowser.open(controller.url)
     try:
-        run_menubar_app(controller)
+        run_menubar_app(controller, update_check)
     finally:
         controller.stop()
     return 0

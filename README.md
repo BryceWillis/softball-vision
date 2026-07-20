@@ -61,6 +61,31 @@ programs mangle app bundles, and the copy that arrives will not open. The
 other coach then follows the same steps above: unzip, drag to Applications,
 and right-click → **Open** once.
 
+### How the app checks for updates
+
+Each time it launches, the app asks GitHub **once** whether a newer release
+exists — a single anonymous request to `api.github.com` that carries nothing
+about you or your games, gives up after 3 seconds, and does nothing at all
+when you're offline. If a newer version exists, the **SHD** menu shows an
+**Update available … Download…** item that opens the Releases page; download
+the new zip and replace the app yourself (the app never replaces itself).
+The fresh download needs the same one-time right-click → **Open** described
+in step 4 above. When you're up to date, no update item appears.
+
+To turn the check off entirely, add this to `sidelinehd.cfg` in the app's
+data folder — in Finder, press `Cmd+Shift+G` and go to
+`~/Library/Application Support/SidelineHD Extractor/` (create the file if it
+doesn't exist):
+
+```ini
+[defaults]
+check_for_updates = false
+```
+
+(For developers and CI: the `SIDELINEHD_CHECK_FOR_UPDATES` environment
+variable overrides the config file — `0` suppresses the check, `1` forces it
+on even when running from source, where it is otherwise skipped.)
+
 The Quickstart above is for Apple Silicon Macs. Intel Mac, Windows, and Linux
 users: start with [Run from source (any platform)](#run-from-source-any-platform)
 in Developer Setup below. The sections after that cover the developer/CLI

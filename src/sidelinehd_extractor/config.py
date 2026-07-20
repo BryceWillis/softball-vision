@@ -15,6 +15,11 @@ from sidelinehd_extractor.models import OverlayTemplate, RegionFraction, Roster,
 
 CONFIG_FILENAME = "sidelinehd.cfg"
 _PROJECT_CONFIG_SECTION = "defaults"
+#: The keys ``write_project_config`` owns (from ``ProjectConfig``); anything
+#: else found in the section — e.g. item 67d's ``check_for_updates`` opt-out
+#: — is passed through a rewrite verbatim rather than silently dropped.
+_MANAGED_CONFIG_KEYS = ("roster", "template", "team_name")
+_KNOWN_CONFIG_KEYS = _MANAGED_CONFIG_KEYS + ("check_for_updates",)
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,7 @@ def load_project_config_values(cwd: Optional[Path] = None) -> Dict[str, str]:
 
     section = parser[_PROJECT_CONFIG_SECTION]
     values = {}
-    for key in ("roster", "template", "team_name"):
+    for key in _KNOWN_CONFIG_KEYS:
         value = (section.get(key) or "").strip()
         if value:
             values[key] = value
@@ -70,6 +75,7 @@ def write_project_config(config: ProjectConfig, cwd: Optional[Path] = None) -> P
 
     root = cwd or Path.cwd()
     path = root / CONFIG_FILENAME
+    existing = load_project_config_values(cwd=root)
     parser = configparser.ConfigParser()
     parser[_PROJECT_CONFIG_SECTION] = {}
     if config.roster is not None:
@@ -78,6 +84,11 @@ def write_project_config(config: ProjectConfig, cwd: Optional[Path] = None) -> P
         parser[_PROJECT_CONFIG_SECTION]["template"] = str(config.template)
     if config.team_name:
         parser[_PROJECT_CONFIG_SECTION]["team_name"] = config.team_name
+    # A roster change (CLI setup or the web UI's set-default) must not eat a
+    # hand-written check_for_updates opt-out.
+    for key, value in existing.items():
+        if key not in _MANAGED_CONFIG_KEYS:
+            parser[_PROJECT_CONFIG_SECTION][key] = value
     with path.open("w", encoding="utf-8") as handle:
         parser.write(handle)
     return path

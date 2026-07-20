@@ -83,6 +83,11 @@ jobs:
         # --selftest is the full startup path minus rumps (data dir, port,
         # server, GET / must be 200). Run against the built binary, not the
         # source tree — the source tree is not the thing being shipped.
+        # SIDELINEHD_CHECK_FOR_UPDATES=0 is item 67d's CI override:
+        # --selftest never starts the update check, but the suppression is
+        # explicit so a selftest run provably never touches the network.
+        env:
+          SIDELINEHD_CHECK_FOR_UPDATES: "0"
         run: '"$APP_PATH/Contents/MacOS/SidelineHD Extractor" --selftest'
 
       - name: Package with ditto

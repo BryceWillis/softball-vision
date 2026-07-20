@@ -84,12 +84,15 @@ M1 distribution decision).
 ## 5. Smoke-test the built bundle
 
 ```sh
-"dist/SidelineHD Extractor.app/Contents/MacOS/SidelineHD Extractor" --selftest
+SIDELINEHD_CHECK_FOR_UPDATES=0 \
+  "dist/SidelineHD Extractor.app/Contents/MacOS/SidelineHD Extractor" --selftest
 ```
 
 `--selftest` (item 67b) runs the full startup path minus the menubar — data
 dir, port pick, server thread, one `GET /` that must return 200 — and exits
-non-zero on any failure. It runs the *built binary*, not the source tree,
+non-zero on any failure. The env var is item 67d's update-check override:
+`--selftest` never starts the check, but the suppression is explicit so a
+selftest run provably never touches the network (CI sets the same variable). It runs the *built binary*, not the source tree,
 so it catches bundle-only breakage (missing data files, a source-built
 tesserocr). CI has no login GUI, so this is also the only launch test a
 runner can do. Note it uses the real data dir

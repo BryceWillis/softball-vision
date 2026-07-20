@@ -12,6 +12,7 @@ from sidelinehd_extractor.config import (
     full_frame_overlay_template,
     load_overlay_template,
     load_project_config,
+    load_project_config_values,
     load_roster,
     write_project_config,
 )
@@ -149,6 +150,41 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.roster, Path("roster.csv"))
         self.assertEqual(config.template, Path("template.json"))
         self.assertEqual(config.team_name, "Stars")
+
+    def test_load_project_config_values_includes_check_for_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\ncheck_for_updates = false\n",
+                encoding="utf-8",
+            )
+
+            values = load_project_config_values(cwd=root)
+
+        self.assertEqual(values.get("check_for_updates"), "false")
+
+    def test_write_project_config_preserves_unmanaged_keys(self):
+        """Item 67d: a roster update (CLI setup or the web UI's set-default)
+        must not silently drop a hand-written check_for_updates opt-out."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\n"
+                "team_name = Old Name\n"
+                "check_for_updates = false\n",
+                encoding="utf-8",
+            )
+
+            write_project_config(
+                ProjectConfig(roster=Path("roster.csv"), team_name="Stars"),
+                cwd=root,
+            )
+            values = load_project_config_values(cwd=root)
+
+        self.assertEqual(values.get("roster"), "roster.csv")
+        self.assertEqual(values.get("team_name"), "Stars")  # managed key replaced
+        self.assertEqual(values.get("check_for_updates"), "false")  # preserved
 
     def test_load_project_config_warns_and_skips_missing_paths(self):
         with tempfile.TemporaryDirectory() as directory:

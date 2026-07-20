@@ -220,6 +220,48 @@ def test_main_selftest_flag_dispatches_without_starting_the_gui(monkeypatch):
     assert desktop.main(["--selftest"]) == 7
 
 
+def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_menubar(
+    monkeypatch,
+):
+    """Item 67d: the check starts only once the server is up (it must never
+    block launch) and the menubar app receives it to poll."""
+
+    events = []
+
+    class _Controller:
+        def __init__(self, port):
+            self.url = f"http://127.0.0.1:{port}"
+
+        def start(self):
+            events.append("server-start")
+
+        def stop(self):
+            events.append("server-stop")
+
+    class _Check:
+        def start(self):
+            events.append("update-check-start")
+
+    check = _Check()
+    captured = {}
+
+    def fake_menubar(controller, update_check=None):
+        captured["update_check"] = update_check
+        events.append("menubar")
+
+    monkeypatch.setattr(desktop, "prepare_data_dir", lambda: events.append("data-dir"))
+    monkeypatch.setattr(desktop, "find_open_port", lambda: 8000)
+    monkeypatch.setattr(desktop, "ServerController", _Controller)
+    monkeypatch.setattr(desktop, "UpdateCheck", lambda: check)
+    monkeypatch.setattr(desktop.webbrowser, "open", lambda url: events.append("browser"))
+    monkeypatch.setattr(desktop, "run_menubar_app", fake_menubar)
+
+    assert desktop.main([]) == 0
+    assert captured["update_check"] is check
+    assert events.index("server-start") < events.index("update-check-start")
+    assert events.index("update-check-start") < events.index("menubar")
+
+
 def test_server_controller_start_raises_when_port_is_taken():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
         taken.bind(("127.0.0.1", 0))
