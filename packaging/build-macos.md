@@ -81,20 +81,32 @@ matters — revisit when the recipient count passes about three, or on the
 first recipient who cannot get past Gatekeeper unaided (see the roadmap's
 M1 distribution decision).
 
-## 5. Smoke-test the built bundle
+## 5. Smoke-test the built bundle with a scrubbed PATH
 
 ```sh
 SIDELINEHD_CHECK_FOR_UPDATES=0 \
+  env PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
   "dist/SidelineHD Extractor.app/Contents/MacOS/SidelineHD Extractor" --selftest
 ```
 
 `--selftest` (item 67b) runs the full startup path minus the menubar — data
-dir, port pick, server thread, one `GET /` that must return 200 — and exits
-non-zero on any failure. The env var is item 67d's update-check override:
-`--selftest` never starts the check, but the suppression is explicit so a
-selftest run provably never touches the network (CI sets the same variable). It runs the *built binary*, not the source tree,
-so it catches bundle-only breakage (missing data files, a source-built
-tesserocr). CI has no login GUI, so this is also the only launch test a
+dir, dependency self-containment, port pick, server thread, one `GET /`
+that must return 200 — and exits non-zero on any failure. It asserts every
+dependency resolves *inside the bundle*: `missing_dependencies()` empty,
+and OCR backed by the bundled tesserocr engine rather than a Tesseract CLI.
+
+**The scrubbed `PATH` is not optional.** It reproduces the bare launchd
+environment a double-clicked `.app` actually gets — no `/opt/homebrew/bin`.
+Every pre-v0.4.0 verification ran from a terminal whose PATH silently
+supplied tesseract and yt-dlp, which is exactly how a bundle that could
+neither OCR nor download passed its checks (bundle CR, 2026-07-20).
+
+The env var is item 67d's update-check override: `--selftest` never starts
+the check, but the suppression is explicit so a selftest run provably never
+touches the network (CI sets the same variable). It runs the *built
+binary*, not the source tree, so it catches bundle-only breakage (missing
+data files, a source-built tesserocr, a module PyInstaller failed to
+collect). CI has no login GUI, so this is also the only launch test a
 runner can do. Note it uses the real data dir
 (`~/Library/Application Support/SidelineHD Extractor/`) deliberately —
 exercising `prepare_data_dir()` is part of the point.

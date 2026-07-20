@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sidelinehd_extractor.ocr import (
+    OCR_BUNDLE_DAMAGED_MESSAGE,
     OCRBackendUnavailable,
     OCRBackendResult,
     OCRFieldConfig,
@@ -30,6 +31,7 @@ from sidelinehd_extractor.ocr import (
     preprocess_for_ocr,
     tesseract_ocr_image,
     tesseract_version,
+    tesserocr_engine_version,
 )
 
 
@@ -87,6 +89,42 @@ class OCRTests(unittest.TestCase):
 
         ensure.assert_not_called()
         self.assertIs(backend, sentinel)
+
+    def test_create_tesserocr_backend_frozen_raises_instead_of_cli_fallback(self):
+        # The silent CLI fallback is exactly what masked the broken v0.4.0
+        # bundle behind a terminal PATH; frozen apps must fail loudly instead.
+        with patch("sidelinehd_extractor.ocr._optional_tesserocr_backend", return_value=None):
+            with patch("sidelinehd_extractor.ocr.running_frozen", return_value=True):
+                with patch("sidelinehd_extractor.ocr.ensure_tesseract_available") as ensure:
+                    with self.assertRaises(OCRBackendUnavailable) as ctx:
+                        create_ocr_backend("tesserocr")
+
+        ensure.assert_not_called()
+        message = str(ctx.exception)
+        self.assertEqual(message, OCR_BUNDLE_DAMAGED_MESSAGE)
+        self.assertNotIn("brew", message)
+        self.assertNotIn("--ocr", message)
+
+    def test_ensure_tesseract_frozen_error_never_advises_brew(self):
+        with patch("sidelinehd_extractor.ocr.shutil.which", return_value=None):
+            with patch("sidelinehd_extractor.ocr.running_frozen", return_value=True):
+                with self.assertRaises(OCRBackendUnavailable) as ctx:
+                    create_ocr_backend("tesseract")
+
+        message = str(ctx.exception)
+        self.assertEqual(message, OCR_BUNDLE_DAMAGED_MESSAGE)
+        self.assertNotIn("brew", message)
+
+    def test_tesserocr_engine_version_parses_version_line(self):
+        fake_tesserocr = SimpleNamespace(
+            tesseract_version=lambda: "tesseract 5.5.1\n leptonica-1.85.0\n"
+        )
+        with patch.dict("sys.modules", {"tesserocr": fake_tesserocr}):
+            self.assertEqual(tesserocr_engine_version(), "5.5.1")
+
+    def test_tesserocr_engine_version_none_when_module_missing(self):
+        with patch.dict("sys.modules", {"tesserocr": None}):
+            self.assertIsNone(tesserocr_engine_version())
 
     def test_optional_tesserocr_backend_returns_none_when_dependency_missing(self):
         def fake_import(name, *args, **kwargs):

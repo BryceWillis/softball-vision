@@ -165,6 +165,10 @@ def _point_selftest_at(monkeypatch, tmp_path, app):
         return tmp_path
 
     monkeypatch.setattr(desktop, "prepare_data_dir", fake_prepare_data_dir)
+    # Dependency self-containment is exercised by its own tests below; the
+    # stub keeps these orchestration tests independent of the host's OCR and
+    # yt-dlp installs.
+    monkeypatch.setattr(desktop, "bundle_dependency_failures", lambda: [])
     monkeypatch.setattr(
         desktop,
         "ServerController",
@@ -187,6 +191,72 @@ def test_selftest_fails_on_a_non_200_response(monkeypatch, tmp_path, capsys):
     assert "selftest: FAIL" in capsys.readouterr().err
 
 
+def test_selftest_fails_when_dependencies_lean_on_the_host(monkeypatch, tmp_path, capsys):
+    _point_selftest_at(monkeypatch, tmp_path, _tiny_app)
+    monkeypatch.setattr(
+        desktop,
+        "bundle_dependency_failures",
+        lambda: ["dependency yt-dlp unhealthy: the yt_dlp module is not importable"],
+    )
+    assert desktop.run_selftest() == 1
+    err = capsys.readouterr().err
+    assert "selftest: FAIL" in err
+    assert "yt-dlp" in err
+
+
+def test_bundle_dependency_failures_empty_for_a_healthy_bundle(monkeypatch):
+    from sidelinehd_extractor import ocr as ocr_module
+
+    backend = ocr_module.TesserocrOCRBackend(object(), object())
+    monkeypatch.setattr("sidelinehd_extractor.preflight.missing_dependencies", lambda: [])
+    monkeypatch.setattr("sidelinehd_extractor.ocr.create_ocr_backend", lambda name: backend)
+    assert desktop.bundle_dependency_failures() == []
+
+
+def test_bundle_dependency_failures_flag_the_cli_fallback(monkeypatch):
+    from sidelinehd_extractor import ocr as ocr_module
+
+    monkeypatch.setattr("sidelinehd_extractor.preflight.missing_dependencies", lambda: [])
+    monkeypatch.setattr(
+        "sidelinehd_extractor.ocr.create_ocr_backend",
+        lambda name: ocr_module.tesseract_ocr_image,
+    )
+    failures = desktop.bundle_dependency_failures()
+    assert any("fell back to the Tesseract CLI" in failure for failure in failures)
+
+
+def test_bundle_dependency_failures_report_unhealthy_dependencies(monkeypatch):
+    from sidelinehd_extractor import ocr as ocr_module
+
+    backend = ocr_module.TesserocrOCRBackend(object(), object())
+    monkeypatch.setattr(
+        "sidelinehd_extractor.preflight.missing_dependencies",
+        lambda: [
+            {
+                "name": "yt-dlp",
+                "ok": False,
+                "detail": "the yt_dlp module is not importable",
+                "install_hint": "reinstall",
+            }
+        ],
+    )
+    monkeypatch.setattr("sidelinehd_extractor.ocr.create_ocr_backend", lambda name: backend)
+    failures = desktop.bundle_dependency_failures()
+    assert failures == [
+        "dependency yt-dlp unhealthy: the yt_dlp module is not importable"
+    ]
+
+
+def test_bundle_dependency_failures_capture_backend_errors(monkeypatch):
+    def broken_backend(name):
+        raise RuntimeError("bundled OCR failed to load")
+
+    monkeypatch.setattr("sidelinehd_extractor.preflight.missing_dependencies", lambda: [])
+    monkeypatch.setattr("sidelinehd_extractor.ocr.create_ocr_backend", broken_backend)
+    failures = desktop.bundle_dependency_failures()
+    assert any("bundled OCR failed to load" in failure for failure in failures)
+
+
 def test_selftest_fails_and_still_stops_when_the_server_never_starts(monkeypatch, capsys):
     controllers = []
 
@@ -203,6 +273,7 @@ def test_selftest_fails_and_still_stops_when_the_server_never_starts(monkeypatch
             self.stopped = True
 
     monkeypatch.setattr(desktop, "prepare_data_dir", lambda data_dir=None: None)
+    monkeypatch.setattr(desktop, "bundle_dependency_failures", lambda: [])
     monkeypatch.setattr(desktop, "ServerController", _DeadController)
     assert desktop.run_selftest() == 1
     assert "selftest: FAIL" in capsys.readouterr().err

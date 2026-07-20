@@ -211,7 +211,7 @@ class PlaylistBatchTests(unittest.TestCase):
 
             def run_youtube(**kwargs):
                 calls.append(kwargs["url"])
-                raise YTDLPError(["yt-dlp", kwargs["url"]], 1, "", "rate limited")
+                raise YTDLPError("rate limited")
 
             result = run_playlist_batch(
                 "playlist",
@@ -304,9 +304,6 @@ def _run_result(root: Path, stem: str) -> RunYoutubeGameResult:
         url=f"https://youtu.be/{stem}",
         output_dir=root / "videos",
         video_path=root / "videos" / f"{stem}.mp4",
-        command=["yt-dlp", stem],
-        stdout="",
-        stderr="",
     )
     run = RunGameResult(
         run_dir=run_dir,

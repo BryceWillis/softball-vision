@@ -86,6 +86,20 @@ check_for_updates = false
 variable overrides the config file — `0` suppresses the check, `1` forces it
 on even when running from source, where it is otherwise skipped.)
 
+### Uninstalling
+
+The app keeps everything in two places and touches nothing else on your
+Mac — it installs no helpers, changes no settings, and needs no admin
+password. Removing it completely is two steps:
+
+1. Drag **SidelineHD Extractor** from Applications to the Trash.
+2. Delete its data folder: in Finder press `Cmd+Shift+G` and go to
+   `~/Library/Application Support/SidelineHD Extractor/`, then move that
+   folder to the Trash. (This holds your rosters, downloaded game videos,
+   and results — skip this step if you might reinstall later.)
+
+That's the whole uninstall.
+
 The Quickstart above is for Apple Silicon Macs. Intel Mac, Windows, and Linux
 users: start with [Run from source (any platform)](#run-from-source-any-platform)
 in Developer Setup below. The sections after that cover the developer/CLI

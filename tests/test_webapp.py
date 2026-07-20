@@ -317,9 +317,6 @@ def test_summarize_result_single_dataclass(tmp_path):
         url="https://youtu.be/abc123",
         output_dir=tmp_path,
         video_path=tmp_path / "video.mp4",
-        command=["yt-dlp"],
-        stdout="",
-        stderr="",
     )
     summary = summarize_result(RunYoutubeGameResult(download=download, run=run))
     assert summary["kind"] == "single"

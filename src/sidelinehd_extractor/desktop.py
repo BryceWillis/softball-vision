@@ -20,7 +20,7 @@ import threading
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
@@ -276,32 +276,72 @@ def run_menubar_app(
     _MenubarApp().run()
 
 
+def bundle_dependency_failures() -> List[str]:
+    """Self-containment check: every helper must resolve inside this process.
+
+    The v0.4.0 bundle shipped unable to OCR or download, masked because every
+    verification ran from a terminal whose PATH supplied the missing pieces
+    (bundle CR, 2026-07-20). These checks pass only when the dependencies the
+    app will actually use — the tesserocr and yt_dlp modules, the bundled
+    ffmpeg — are healthy with no help from the host environment; a GET-/
+    check alone provably cannot catch that.
+    """
+
+    from sidelinehd_extractor.ocr import TesserocrOCRBackend, create_ocr_backend
+    from sidelinehd_extractor.preflight import missing_dependencies
+
+    failures = [
+        f"dependency {status['name']} unhealthy: {status['detail']}"
+        for status in missing_dependencies()
+    ]
+    try:
+        backend = create_ocr_backend("tesserocr")
+    except Exception as exc:
+        failures.append(f"tesserocr OCR backend unavailable: {exc}")
+    else:
+        if not isinstance(backend, TesserocrOCRBackend):
+            failures.append(
+                "create_ocr_backend('tesserocr') fell back to the Tesseract CLI"
+                " — the app is leaning on the host environment instead of its"
+                " bundled engine"
+            )
+    return failures
+
+
 def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
-    """Headless smoke test of the startup path (item 67b): exit 0 iff it serves.
+    """Headless smoke test of the startup path (item 67b): exit 0 iff healthy.
 
     CI runners have no login GUI, so ``rumps`` cannot start there — this is
-    the full ``main()`` path minus the menubar: data dir, port pick, server
+    the full ``main()`` path minus the menubar: data dir, dependency
+    self-containment (``bundle_dependency_failures``), port pick, server
     thread, one real request to ``/`` asserting 200. CI runs it against the
-    *built* bundle binary so a broken bundle fails the job instead of
-    reaching a coach. Also useful by hand when diagnosing a broken install.
+    *built* bundle binary with a scrubbed PATH so a bundle that leans on the
+    host environment fails the job instead of reaching a coach. Also useful
+    by hand when diagnosing a broken install.
     """
 
     prepare_data_dir()
+    failures = bundle_dependency_failures()
     port = find_open_port()
     controller = ServerController(port=port)
     try:
         controller.start(timeout=timeout)
         with urllib.request.urlopen(f"{controller.url}/", timeout=timeout) as response:
             status = response.status
+        if status != 200:
+            failures.append(f"GET / returned {status}")
     except Exception as exc:  # any failure at all is a failed selftest
-        print(f"selftest: FAIL: {exc}", file=sys.stderr)
-        return 1
+        failures.append(str(exc))
     finally:
         controller.stop()
-    if status != 200:
-        print(f"selftest: FAIL: GET / returned {status}", file=sys.stderr)
+    if failures:
+        for failure in failures:
+            print(f"selftest: FAIL: {failure}", file=sys.stderr)
         return 1
-    print(f"selftest: OK: GET / returned 200 on {controller.url}")
+    print(
+        f"selftest: OK: dependencies are self-contained and GET / returned 200 "
+        f"on {controller.url}"
+    )
     return 0
 
 

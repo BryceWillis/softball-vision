@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
+from sidelinehd_extractor.build_info import running_frozen
 from sidelinehd_extractor.constants import (
     INNING_ARROW_DOWN,
     INNING_ARROW_UP,
@@ -172,6 +173,16 @@ def no_ocr(_image: object, _field_name: str) -> OCRBackendResult:
     return OCRBackendResult(text="", normalized_text="", backend="none")
 
 
+#: What a frozen app says when its embedded OCR engine fails to load. Never
+#: brew/pip advice: a bundle user has no environment to install into, and the
+#: only real fix is a fresh copy of the app.
+OCR_BUNDLE_DAMAGED_MESSAGE = (
+    "This app includes its own text reader (OCR), but this copy of the app "
+    "failed to load it. Download a fresh copy of the app from the Releases "
+    "page and replace this one."
+)
+
+
 def create_ocr_backend(name: str) -> OCRCallable:
     """Create an OCR callable by backend name."""
 
@@ -186,6 +197,11 @@ def create_ocr_backend(name: str) -> OCRCallable:
         if backend is not None:
             _record_tesseract_version(backend)
             return backend
+        if running_frozen():
+            # The bundle ships tesserocr; falling back to a host CLI here is
+            # exactly the masking that hid a broken bundle behind a healthy
+            # terminal PATH. Fail loudly with bundle-appropriate advice.
+            raise OCRBackendUnavailable(OCR_BUNDLE_DAMAGED_MESSAGE)
         ensure_tesseract_available()
         _record_tesseract_version(tesseract_ocr_image)
         return tesseract_ocr_image
@@ -196,6 +212,8 @@ def ensure_tesseract_available() -> None:
     """Raise a clear error if the Tesseract CLI is unavailable."""
 
     if shutil.which("tesseract") is None:
+        if running_frozen():
+            raise OCRBackendUnavailable(OCR_BUNDLE_DAMAGED_MESSAGE)
         raise OCRBackendUnavailable(
             "Tesseract OCR was not found on PATH. "
             f"{_tesseract_install_hint()} Then rerun with `--ocr tesseract`."
@@ -224,7 +242,10 @@ def tesseract_version() -> Optional[str]:
 
 
 def _record_tesseract_version(backend: OCRCallable) -> None:
-    version = tesseract_version()
+    if isinstance(backend, TesserocrOCRBackend):
+        version = tesserocr_engine_version()
+    else:
+        version = tesseract_version()
     _warn_for_tesseract_version(version)
     try:
         setattr(backend, "tesseract_version", version)
@@ -910,6 +931,52 @@ def _optional_tesserocr_backend() -> Optional[OCRCallable]:
     except ImportError:
         return None
     return TesserocrOCRBackend(tesserocr, Image)
+
+
+def tesserocr_backend_available() -> bool:
+    """True when the in-process tesserocr backend can be constructed."""
+
+    return _optional_tesserocr_backend() is not None
+
+
+def warm_tesserocr_import() -> None:
+    """Import tesserocr from the main thread, tolerating every failure.
+
+    The tesserocr wheel initializes cysignals on first import, and cysignals
+    installs signal handlers — which Python allows only in the main thread.
+    Web requests and job runners execute on worker threads, so whichever of
+    them triggered the first import would die with ``ValueError: signal only
+    works in main thread``. Calling this at startup makes every later import
+    a cached ``sys.modules`` lookup, safe from any thread. Failures are the
+    callers' problem to diagnose (preflight, ``create_ocr_backend``); this
+    warm-up must never break startup.
+    """
+
+    try:
+        import tesserocr  # noqa: F401
+    except Exception:
+        pass
+
+
+def tesserocr_engine_version() -> Optional[str]:
+    """Tesseract engine version reported by the tesserocr module, or None.
+
+    This is the version of the *embedded* libtesseract — inside a bundle the
+    only engine that runs — where ``tesseract_version()`` asks whatever CLI
+    happens to be on PATH, which may be a different install entirely.
+    """
+
+    try:
+        import tesserocr
+    except ImportError:
+        return None
+    try:
+        raw = str(tesserocr.tesseract_version())
+    except Exception:
+        return None
+    first_line = raw.splitlines()[0].strip() if raw.strip() else ""
+    match = re.match(r"(?:tesseract\s+)?(\S+)", first_line, flags=re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _tesseract_ocr_preprocessed_image(

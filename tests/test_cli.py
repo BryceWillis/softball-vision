@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -692,8 +693,9 @@ class CLITests(unittest.TestCase):
         stdout = io.StringIO()
 
         with (
-            patch("sidelinehd_extractor.youtube.shutil.which", return_value=None),
-            patch("sidelinehd_extractor.youtube.importlib.util.find_spec", return_value=None),
+            # A None entry makes `import yt_dlp` raise ImportError, which
+            # load_ytdlp_module converts to the actionable FileNotFoundError.
+            patch.dict(sys.modules, {"yt_dlp": None}),
             redirect_stderr(stderr),
             redirect_stdout(stdout),
         ):

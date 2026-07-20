@@ -78,6 +78,20 @@ a = Analysis(
         "uvicorn.protocols.http.auto",
         "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on",
+        # Bundle-CR (2026-07-20): the v0.4.0 bundle shipped unable to import
+        # tesserocr, so the app silently fell back to a Tesseract CLI the GUI
+        # PATH does not have. Root cause (confirmed with a local debug
+        # build): tesserocr's compiled Cython extension imports cysignals at
+        # init — an import that lives in compiled code, which PyInstaller's
+        # bytecode scan cannot see — so cysignals was never collected and
+        # `import tesserocr` died with ImportError inside the bundle.
+        # cysignals is the load-bearing entry; tesserocr/PIL.Image/yt_dlp are
+        # declared so none of them ever depends on an import buried in
+        # application code. The scrubbed-PATH selftest asserts all of this.
+        "cysignals",
+        "tesserocr",
+        "PIL.Image",
+        "yt_dlp",
     ],
     hookspath=[],
     runtime_hooks=[],

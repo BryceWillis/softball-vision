@@ -48,6 +48,7 @@ from sidelinehd_extractor.feedback import (
     sanitize_feedback,
 )
 from sidelinehd_extractor.models import EventType, HalfInning, Roster, RosterPlayer
+from sidelinehd_extractor.ocr import warm_tesserocr_import
 from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish_kit_fragment
 from sidelinehd_extractor.review import collect_event_review_rows
@@ -597,6 +598,10 @@ def create_app(
     store = store or JobStore()
     runner = runner or JobRunner(store)
     rehydrate_jobs_from_runs(store, runs_dir if runs_dir is not None else runner.output_dir)
+    # tesserocr must be first-imported from the main thread (cysignals
+    # installs signal handlers on import); request handlers and job threads
+    # would otherwise race to be that first import and crash.
+    warm_tesserocr_import()
 
     app = FastAPI(title="SidelineHD Extractor")
     app.state.store = store

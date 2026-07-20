@@ -23,6 +23,16 @@ from typing import Literal, Optional
 BUILD_INFO_FILENAME = "build_info.json"
 
 
+def running_frozen() -> bool:
+    """True when running inside a PyInstaller bundle.
+
+    The bundle ships every helper it needs, so frozen code must never give
+    source-install advice (pip, brew) — this is the one switch that decides.
+    """
+
+    return bool(getattr(sys, "frozen", False))
+
+
 @dataclass(frozen=True)
 class BuildStamp:
     version: str

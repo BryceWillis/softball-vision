@@ -373,9 +373,6 @@ class WorkflowTests(unittest.TestCase):
             url="https://youtu.be/example",
             output_dir=Path("videos"),
             video_path=Path("videos/game.mp4"),
-            command=["yt-dlp", "https://youtu.be/example"],
-            stdout="videos/game.mp4\n",
-            stderr="",
         )
         run_result = RunGameResult(
             run_dir=Path("runs/game"),
@@ -423,9 +420,6 @@ class WorkflowTests(unittest.TestCase):
             url=url,
             output_dir=Path("videos"),
             video_path=Path("videos/game.mp4"),
-            command=["yt-dlp", url],
-            stdout="videos/game.mp4\n",
-            stderr="",
         )
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory)

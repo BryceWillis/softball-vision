@@ -78,17 +78,26 @@ jobs:
           codesign --force --deep -s - "$APP_PATH"
           codesign --verify "$APP_PATH"
 
-      - name: Smoke-test the built bundle
+      - name: Smoke-test the built bundle with a scrubbed PATH
         # The runner has no login GUI, so the menubar cannot start here;
-        # --selftest is the full startup path minus rumps (data dir, port,
-        # server, GET / must be 200). Run against the built binary, not the
-        # source tree — the source tree is not the thing being shipped.
+        # --selftest is the full startup path minus rumps (data dir,
+        # dependency self-containment, port, server, GET / must be 200). Run
+        # against the built binary, not the source tree — the source tree is
+        # not the thing being shipped.
+        # PATH is scrubbed to the bare launchd set a double-clicked .app
+        # gets: every prior verification ran from a terminal whose Homebrew
+        # PATH silently supplied tesseract and yt-dlp, which is exactly how
+        # the broken v0.4.0 bundle passed (bundle CR, 2026-07-20). The
+        # selftest itself also asserts missing_dependencies() is empty and
+        # that OCR resolves to the bundled tesserocr engine, not a CLI.
         # SIDELINEHD_CHECK_FOR_UPDATES=0 is item 67d's CI override:
         # --selftest never starts the update check, but the suppression is
         # explicit so a selftest run provably never touches the network.
         env:
           SIDELINEHD_CHECK_FOR_UPDATES: "0"
-        run: '"$APP_PATH/Contents/MacOS/SidelineHD Extractor" --selftest'
+        run: |
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            "$APP_PATH/Contents/MacOS/SidelineHD Extractor" --selftest
 
       - name: Package with ditto
         # ditto, not zip: zip drops the symlinks and xattrs that make a

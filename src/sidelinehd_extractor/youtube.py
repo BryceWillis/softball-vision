@@ -1,27 +1,38 @@
-"""YouTube download helpers backed by the external yt-dlp command."""
+"""YouTube download helpers backed by the in-process ``yt_dlp`` API.
+
+Downloads run through ``yt_dlp.YoutubeDL`` imported into this process rather
+than a ``yt-dlp`` executable found on PATH. The frozen ``.app`` bundle has no
+PATH worth trusting and no external Python to run ``-m yt_dlp`` with, so the
+imported module is the only resolution that works in both worlds — and it
+makes source and bundle runs use provably the same yt-dlp version (the one
+the package declares), instead of whatever a host happened to have installed.
+"""
 
 from __future__ import annotations
 
 import importlib.util
-import json
 import shutil
-import subprocess
-import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
+from sidelinehd_extractor.build_info import running_frozen
 
 DEFAULT_OUTPUT_TEMPLATE = "%(upload_date>%Y%m%d)s_%(id)s_%(title).200B.%(ext)s"
 # Sentinel default: builders resolve ffmpeg automatically unless the caller
-# passes an explicit location (or None to omit the flag entirely).
+# passes an explicit location (or None to omit the setting entirely).
 _AUTO_FFMPEG = object()
 DEFAULT_FORMAT_SELECTOR = "best[ext=mp4]/best"
 DEFAULT_YOUTUBE_CLIENT = "android"
 YTDLP_REINSTALL_MESSAGE = (
     "yt-dlp is required and ships with this package. Reinstall with "
     "`pip install -e .` so the declared dependency is available."
+)
+YTDLP_BUNDLE_DAMAGED_MESSAGE = (
+    "This app includes its own video downloader, but this copy of the app "
+    "failed to load it. Download a fresh copy of the app from the Releases "
+    "page and replace this one."
 )
 # Streams in these live_status values have no processed VOD yet, so download
 # failures are expected rather than actionable errors.
@@ -38,9 +49,7 @@ class DownloadResult:
     url: str
     output_dir: Path
     video_path: Optional[Path]
-    command: List[str]
-    stdout: str
-    stderr: str
+    options: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,40 +63,29 @@ class PlaylistEntry:
 
 
 class YTDLPError(RuntimeError):
-    """Raised when yt-dlp exits unsuccessfully."""
+    """Raised when a yt-dlp operation fails."""
 
-    def __init__(self, command: Sequence[str], returncode: int, stdout: str, stderr: str) -> None:
-        self.command = list(command)
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-        details = stderr.strip() or stdout.strip() or "yt-dlp did not provide error output"
-        super().__init__(
-            f"yt-dlp failed with exit code {returncode}\n"
-            f"Command: {command_as_string(command)}\n"
-            f"{details}"
-        )
+    def __init__(self, details: str) -> None:
+        details = details.strip() or "yt-dlp did not provide error output"
+        super().__init__(f"yt-dlp failed: {details}")
 
 
 class LiveStreamNotReadyError(YTDLPError):
     """Raised when a download failed because the stream just ended.
 
     YouTube keeps ``live_status`` at ``post_live`` until the VOD is processed;
-    downloads fail during that window even though ``-F`` format listing
+    downloads fail during that window even though metadata extraction
     succeeds. The message replaces the raw yt-dlp error with plain-language
     guidance because waiting — not debugging — is the fix.
     """
 
     def __init__(
         self,
-        command: Sequence[str],
-        returncode: int,
-        stdout: str,
-        stderr: str,
+        details: str,
         live_status: str,
         ytdlp_version: Optional[str],
     ) -> None:
-        super().__init__(command, returncode, stdout, stderr)
+        super().__init__(details)
         self.live_status = live_status
         self.ytdlp_version = ytdlp_version
         self.args = (
@@ -99,8 +97,51 @@ class LiveStreamNotReadyError(YTDLPError):
         )
 
 
-def build_ytdlp_command(
-    url: str,
+def ytdlp_install_hint() -> str:
+    """Actionable fix for a missing yt-dlp module, aware of frozen bundles.
+
+    A frozen app must never advise ``pip`` — there is no environment to
+    install into, so the only real fix is a fresh download of the app.
+    """
+
+    if running_frozen():
+        return YTDLP_BUNDLE_DAMAGED_MESSAGE
+    return YTDLP_REINSTALL_MESSAGE
+
+
+def load_ytdlp_module():
+    """Import and return ``yt_dlp``, raising an actionable error if absent.
+
+    Raises ``FileNotFoundError`` (the same contract the old PATH-based
+    resolver had) so preflight and callers keep one exception to handle.
+    """
+
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise FileNotFoundError(ytdlp_install_hint()) from exc
+    return yt_dlp
+
+
+def ytdlp_available() -> bool:
+    """True when the ``yt_dlp`` module can be imported."""
+
+    return importlib.util.find_spec("yt_dlp") is not None
+
+
+def installed_ytdlp_version(ydl_module=None) -> Optional[str]:
+    """Return the imported yt-dlp version string, or None when unavailable."""
+
+    if ydl_module is None:
+        try:
+            ydl_module = load_ytdlp_module()
+        except FileNotFoundError:
+            return None
+    version = getattr(ydl_module, "version", None)
+    return getattr(version, "__version__", None)
+
+
+def build_ytdlp_options(
     output_dir: Path,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
     output_template: str = DEFAULT_OUTPUT_TEMPLATE,
@@ -108,63 +149,46 @@ def build_ytdlp_command(
     write_info_json: bool = True,
     no_playlist: bool = True,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
-    executable: Optional[Sequence[str]] = None,
     ffmpeg_location: object = _AUTO_FFMPEG,
-) -> List[str]:
-    """Build the yt-dlp command used by the CLI."""
+) -> Dict[str, object]:
+    """Build the ``YoutubeDL`` download options used by the CLI and web app.
 
-    command_prefix = list(executable) if executable is not None else default_ytdlp_executable()
-    command = command_prefix + [
-        "--paths",
-        str(output_dir.expanduser()),
-        "--output",
-        output_template,
-        "--format",
-        format_selector,
-        "--merge-output-format",
-        merge_output_format,
-        "--restrict-filenames",
-        "--no-overwrites",
-        "--print",
-        "after_move:filepath",
-    ]
-    if no_playlist:
-        command.append("--no-playlist")
-    if write_info_json:
-        command.append("--write-info-json")
+    Mirrors the flag set the tool historically passed to the ``yt-dlp``
+    command line, translated to API parameter names.
+    """
+
+    options: Dict[str, object] = {
+        "paths": {"home": str(output_dir.expanduser())},
+        "outtmpl": output_template,
+        "format": format_selector,
+        "merge_output_format": merge_output_format,
+        "restrictfilenames": True,
+        "overwrites": False,
+        "noplaylist": no_playlist,
+        "writeinfojson": write_info_json,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
     if youtube_client:
-        command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
-    _extend_with_ffmpeg_location(command, ffmpeg_location)
-    command.append(url)
-    return command
-
-
-def build_ytdlp_playlist_command(
-    playlist_url: str,
-    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
-    executable: Optional[Sequence[str]] = None,
-    ffmpeg_location: object = _AUTO_FFMPEG,
-) -> List[str]:
-    """Build a cheap flat-playlist enumeration command."""
-
-    command_prefix = list(executable) if executable is not None else default_ytdlp_executable()
-    command = command_prefix + [
-        "--flat-playlist",
-        "--dump-single-json",
-        "--no-warnings",
-    ]
-    if youtube_client:
-        command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
-    _extend_with_ffmpeg_location(command, ffmpeg_location)
-    command.append(playlist_url)
-    return command
-
-
-def _extend_with_ffmpeg_location(command: List[str], ffmpeg_location: object) -> None:
+        options["extractor_args"] = {"youtube": {"player_client": [youtube_client]}}
     if ffmpeg_location is _AUTO_FFMPEG:
         ffmpeg_location = resolve_ffmpeg_location()
     if ffmpeg_location:
-        command.extend(["--ffmpeg-location", str(ffmpeg_location)])
+        options["ffmpeg_location"] = str(ffmpeg_location)
+    return options
+
+
+def _probe_options(youtube_client: Optional[str]) -> Dict[str, object]:
+    options: Dict[str, object] = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    if youtube_client:
+        options["extractor_args"] = {"youtube": {"player_client": [youtube_client]}}
+    return options
 
 
 def resolve_ffmpeg_location() -> Optional[str]:
@@ -173,7 +197,7 @@ def resolve_ffmpeg_location() -> Optional[str]:
     Prefers an ``ffmpeg`` already on PATH; otherwise falls back to the static
     build shipped by the ``imageio-ffmpeg`` dependency. Returns ``None`` when
     neither is available so callers can degrade to guidance instead of failing.
-    Mirrors the item-53 yt-dlp resolver: safe to call with the module absent.
+    Safe to call with the module absent.
     """
 
     system_ffmpeg = shutil.which("ffmpeg")
@@ -189,34 +213,23 @@ def resolve_ffmpeg_location() -> Optional[str]:
         return None
 
 
-def default_ytdlp_executable() -> List[str]:
-    """Return the default runnable yt-dlp command prefix."""
+def downloaded_video_path(info: object) -> Optional[Path]:
+    """Return the final downloaded file path from an ``extract_info`` result.
 
-    executable = shutil.which("yt-dlp")
-    if executable is not None:
-        return [executable]
-    if importlib.util.find_spec("yt_dlp") is not None:
-        return [sys.executable, "-m", "yt_dlp"]
-    raise FileNotFoundError(YTDLP_REINSTALL_MESSAGE)
+    ``requested_downloads`` carries the post-move, post-merge ``filepath`` —
+    the API equivalent of the old ``--print after_move:filepath``.
+    """
 
-
-def resolve_ytdlp_executable() -> List[str]:
-    """Return a runnable yt-dlp command prefix."""
-
-    return default_ytdlp_executable()
-
-
-def parse_downloaded_video_path(stdout: str) -> Optional[Path]:
-    """Return the last likely video path printed by yt-dlp."""
-
-    video_extensions = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
-    for line in reversed(stdout.splitlines()):
-        value = line.strip()
-        if not value:
-            continue
-        path = Path(value).expanduser()
-        if path.suffix.lower() in video_extensions:
-            return path
+    if not isinstance(info, dict):
+        return None
+    downloads = info.get("requested_downloads")
+    if isinstance(downloads, list):
+        for download in downloads:
+            if isinstance(download, dict) and download.get("filepath"):
+                return Path(str(download["filepath"])).expanduser()
+    filepath = info.get("filepath")
+    if filepath:
+        return Path(str(filepath)).expanduser()
     return None
 
 
@@ -229,14 +242,13 @@ def download_youtube_video(
     write_info_json: bool = True,
     no_playlist: bool = True,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
-    runner=subprocess.run,
+    ydl_module=None,
 ) -> DownloadResult:
-    """Download a YouTube URL with yt-dlp and return the resulting local path."""
+    """Download a YouTube URL in-process and return the resulting local path."""
 
     destination = output_dir.expanduser()
     destination.mkdir(parents=True, exist_ok=True)
-    command = build_ytdlp_command(
-        url=url,
+    options = build_ytdlp_options(
         output_dir=destination,
         format_selector=format_selector,
         output_template=output_template,
@@ -245,33 +257,28 @@ def download_youtube_video(
         no_playlist=no_playlist,
         youtube_client=youtube_client,
     )
-    completed = runner(command, check=False, capture_output=True, text=True)
-    if completed.returncode != 0:
+    module = ydl_module if ydl_module is not None else load_ytdlp_module()
+    try:
+        with module.YoutubeDL(dict(options)) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except module.utils.DownloadError as exc:
         raise _download_failure_error(
-            command,
-            completed,
-            url=url,
-            youtube_client=youtube_client,
-            runner=runner,
-        )
+            url, exc, youtube_client=youtube_client, ydl_module=module
+        ) from exc
 
-    video_path = parse_downloaded_video_path(completed.stdout)
     return DownloadResult(
         url=url,
         output_dir=destination,
-        video_path=video_path,
-        command=command,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        video_path=downloaded_video_path(info),
+        options=options,
     )
 
 
 def _download_failure_error(
-    command: Sequence[str],
-    completed,
     url: str,
+    exc: Exception,
     youtube_client: Optional[str],
-    runner,
+    ydl_module,
 ) -> YTDLPError:
     """Build the error for a failed download, probing only after failure.
 
@@ -280,78 +287,53 @@ def _download_failure_error(
     stream's VOD simply is not processed yet (CR-55).
     """
 
-    live_status = probe_live_status(url, youtube_client=youtube_client, runner=runner)
+    live_status = probe_live_status(url, youtube_client=youtube_client, ydl_module=ydl_module)
     if live_status in LIVE_STATUSES_STILL_PROCESSING:
         return LiveStreamNotReadyError(
-            command,
-            completed.returncode,
-            completed.stdout,
-            completed.stderr,
+            str(exc),
             live_status=live_status,
-            ytdlp_version=installed_ytdlp_version(runner=runner),
+            ytdlp_version=installed_ytdlp_version(ydl_module),
         )
-    return YTDLPError(command, completed.returncode, completed.stdout, completed.stderr)
+    return YTDLPError(str(exc))
 
 
 def probe_live_status(
     url: str,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
-    runner=subprocess.run,
+    ydl_module=None,
 ) -> Optional[str]:
     """Return a URL's yt-dlp ``live_status``, or None when the probe fails."""
 
     try:
-        command = default_ytdlp_executable() + [
-            "--skip-download",
-            "--no-warnings",
-            "--print",
-            "live_status",
-        ]
-        if youtube_client:
-            command.extend(["--extractor-args", f"youtube:player_client={youtube_client}"])
-        command.append(url)
-        completed = runner(command, check=False, capture_output=True, text=True)
-    except (OSError, subprocess.SubprocessError):
+        module = ydl_module if ydl_module is not None else load_ytdlp_module()
+        with module.YoutubeDL(_probe_options(youtube_client)) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception:
         return None
-    if completed.returncode != 0:
+    if not isinstance(info, dict):
         return None
-    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-    return lines[-1] if lines else None
-
-
-def installed_ytdlp_version(runner=subprocess.run) -> Optional[str]:
-    """Return the installed yt-dlp version string, or None when unavailable."""
-
-    try:
-        command = default_ytdlp_executable() + ["--version"]
-        completed = runner(command, check=False, capture_output=True, text=True)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
+    live_status = info.get("live_status")
+    return str(live_status) if live_status else None
 
 
 def list_playlist_videos(
     playlist_url: str,
     youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
-    runner=subprocess.run,
+    ydl_module=None,
 ) -> List[PlaylistEntry]:
     """Return YouTube playlist entries without downloading video media."""
 
-    command = build_ytdlp_playlist_command(
-        playlist_url=playlist_url,
-        youtube_client=youtube_client,
-    )
-    completed = runner(command, check=False, capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise YTDLPError(command, completed.returncode, completed.stdout, completed.stderr)
-
+    options = _probe_options(youtube_client)
+    options["extract_flat"] = "in_playlist"
+    module = ydl_module if ydl_module is not None else load_ytdlp_module()
     try:
-        data = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError("yt-dlp returned invalid playlist JSON") from exc
+        with module.YoutubeDL(options) as ydl:
+            data = ydl.extract_info(playlist_url, download=False)
+    except module.utils.DownloadError as exc:
+        raise YTDLPError(str(exc)) from exc
 
+    if not isinstance(data, dict):
+        return []
     entries = data.get("entries")
     if not isinstance(entries, list):
         return []
@@ -429,9 +411,3 @@ def extract_video_id(url: str) -> Optional[str]:
         if len(path_segments) >= 2 and path_segments[0] in {"shorts", "live", "embed"}:
             return path_segments[1]
     return None
-
-
-def command_as_string(command: Sequence[str]) -> str:
-    """Render a command for display without shell-specific quoting cleverness."""
-
-    return " ".join(command)
