@@ -11,6 +11,7 @@ import json
 from sidelinehd_extractor.corrections import EventCorrection, apply_event_corrections
 from sidelinehd_extractor.events import (
     BattingHalfInference,
+    DetectionConfig,
     detect_events_file,
     filter_at_bats_to_half,
     infer_batting_half,
@@ -18,7 +19,7 @@ from sidelinehd_extractor.events import (
     validate_batting_order,
 )
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
-from sidelinehd_extractor.models import HalfInning, OverlayTemplate, Roster
+from sidelinehd_extractor.models import OverlayTemplate, Roster
 from sidelinehd_extractor.naming import game_slug_for_run
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
 from sidelinehd_extractor.processing import (
@@ -151,12 +152,7 @@ def run_game(
     chapter_intro_label: str = "Pregame",
     include_inning_score: bool = True,
     include_at_bat_inning_headers: bool = True,
-    batting_half: Optional[HalfInning] = None,
-    auto_detect_batting_half: bool = False,
-    min_at_bat_spacing_seconds: float = 45.0,
-    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
-    min_game_final_observations: int = 3,
-    order_validation: bool = True,
+    detection: DetectionConfig = DetectionConfig(),
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     generate_review_report: bool = True,
     auto_detect_template: bool = True,
@@ -213,25 +209,21 @@ def run_game(
     event_result = detect_events_file(
         state_result.output_path,
         roster=roster,
-        batting_half=None if auto_detect_batting_half else batting_half,
-        min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
-        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
-        min_game_final_observations=min_game_final_observations,
-        order_validation=order_validation and not auto_detect_batting_half,
+        config=detection,
     )
-    order_validation_ran = bool(roster is not None and order_validation and not auto_detect_batting_half)
+    order_validation_ran = bool(roster is not None and detection.initial_order_validation())
 
     _stage(stage_progress, "export")
     events = load_events(event_result.output_path)
     batting_half_inference = None
-    if auto_detect_batting_half:
+    if detection.auto_detect_batting_half:
         batting_half_inference = infer_batting_half(events, roster)
         if batting_half_inference_progress is not None:
             batting_half_inference_progress(batting_half_inference)
         events = filter_at_bats_to_half(events, batting_half_inference.inferred_half)
         if (
             roster is not None
-            and order_validation
+            and detection.order_validation
             and batting_half_inference.inferred_half is not None
         ):
             events = validate_batting_order(events, roster=roster)
@@ -240,13 +232,7 @@ def run_game(
     _update_manifest_detection_config(
         process_result.manifest_path,
         {
-            "min_at_bat_spacing_seconds": min_at_bat_spacing_seconds,
-            "min_at_bat_spacing_roster_confirmed_seconds": (
-                min_at_bat_spacing_roster_confirmed_seconds
-            ),
-            "min_game_final_observations": min_game_final_observations,
-            "batting_half": "auto" if auto_detect_batting_half else _half_value(batting_half),
-            "order_validation_requested": order_validation,
+            **detection.to_manifest(),
             "order_validation_ran": order_validation_ran,
         },
     )
@@ -324,12 +310,7 @@ def run_youtube_game(
     chapter_intro_label: str = "Pregame",
     include_inning_score: bool = True,
     include_at_bat_inning_headers: bool = True,
-    batting_half: Optional[HalfInning] = None,
-    auto_detect_batting_half: bool = False,
-    min_at_bat_spacing_seconds: float = 45.0,
-    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
-    min_game_final_observations: int = 3,
-    order_validation: bool = True,
+    detection: DetectionConfig = DetectionConfig(),
     batting_half_inference_progress: Optional[Callable[[BattingHalfInference], None]] = None,
     generate_review_report: bool = True,
     auto_detect_template: bool = True,
@@ -375,12 +356,7 @@ def run_youtube_game(
         chapter_intro_label=chapter_intro_label,
         include_inning_score=include_inning_score,
         include_at_bat_inning_headers=include_at_bat_inning_headers,
-        batting_half=batting_half,
-        auto_detect_batting_half=auto_detect_batting_half,
-        min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
-        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
-        min_game_final_observations=min_game_final_observations,
-        order_validation=order_validation,
+        detection=detection,
         batting_half_inference_progress=batting_half_inference_progress,
         generate_review_report=generate_review_report,
         auto_detect_template=auto_detect_template,
@@ -552,7 +528,3 @@ def _emit_process_warnings(
 
 def _update_manifest_detection_config(manifest_path: Path, values: dict) -> None:
     update_manifest_section(manifest_path, "detection", values)
-
-
-def _half_value(half: Optional[HalfInning]) -> str:
-    return half.value if half is not None else "both"

@@ -16,6 +16,7 @@ from typing import Callable, Dict, List, Literal, Optional
 
 from sidelinehd_extractor.batch import PlaylistBatchResult, run_playlist_batch
 from sidelinehd_extractor.config import load_project_config, load_overlay_template, load_roster
+from sidelinehd_extractor.events import DetectionConfig
 from sidelinehd_extractor.ocr import create_ocr_backend
 from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.workflow import RunYoutubeGameResult, run_youtube_game
@@ -120,7 +121,7 @@ def default_pipeline_kwargs() -> dict:
         "template": template,
         "roster": roster,
         "ocr": create_ocr_backend("tesseract"),
-        "auto_detect_batting_half": True,
+        "detection": DetectionConfig(auto_detect_batting_half=True),
     }
 
 

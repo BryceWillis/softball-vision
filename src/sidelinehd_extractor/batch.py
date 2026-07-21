@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from sidelinehd_extractor.corrections import EventCorrection
-from sidelinehd_extractor.models import HalfInning, OverlayTemplate, Roster
+from sidelinehd_extractor.events import DetectionConfig
+from sidelinehd_extractor.models import OverlayTemplate, Roster
 from sidelinehd_extractor.naming import slugify
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
 from sidelinehd_extractor.processing import (
@@ -83,12 +84,7 @@ def run_playlist_batch(
     chapter_intro_label: str = "Pregame",
     include_inning_score: bool = True,
     include_at_bat_inning_headers: bool = True,
-    batting_half: Optional[HalfInning] = None,
-    auto_detect_batting_half: bool = False,
-    min_at_bat_spacing_seconds: float = 45.0,
-    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
-    min_game_final_observations: int = 3,
-    order_validation: bool = True,
+    detection: DetectionConfig = DetectionConfig(),
     batting_half_inference_progress: Optional[Callable[[object], None]] = None,
     auto_detect_template: bool = True,
     format_selector: str = DEFAULT_FORMAT_SELECTOR,
@@ -160,14 +156,7 @@ def run_playlist_batch(
             chapter_intro_label=chapter_intro_label,
             include_inning_score=include_inning_score,
             include_at_bat_inning_headers=include_at_bat_inning_headers,
-            batting_half=batting_half,
-            auto_detect_batting_half=auto_detect_batting_half,
-            min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
-            min_at_bat_spacing_roster_confirmed_seconds=(
-                min_at_bat_spacing_roster_confirmed_seconds
-            ),
-            min_game_final_observations=min_game_final_observations,
-            order_validation=order_validation,
+            detection=detection,
             batting_half_inference_progress=batting_half_inference_progress,
             auto_detect_template=auto_detect_template,
             format_selector=format_selector,
@@ -231,12 +220,7 @@ def _run_playlist_entry(
     chapter_intro_label: str,
     include_inning_score: bool,
     include_at_bat_inning_headers: bool,
-    batting_half: Optional[HalfInning],
-    auto_detect_batting_half: bool,
-    min_at_bat_spacing_seconds: float,
-    min_at_bat_spacing_roster_confirmed_seconds: float,
-    min_game_final_observations: int,
-    order_validation: bool,
+    detection: DetectionConfig,
     batting_half_inference_progress: Optional[Callable[[object], None]],
     auto_detect_template: bool,
     format_selector: str,
@@ -271,14 +255,7 @@ def _run_playlist_entry(
                 chapter_intro_label=chapter_intro_label,
                 include_inning_score=include_inning_score,
                 include_at_bat_inning_headers=include_at_bat_inning_headers,
-                batting_half=batting_half,
-                auto_detect_batting_half=auto_detect_batting_half,
-                min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
-                min_at_bat_spacing_roster_confirmed_seconds=(
-                    min_at_bat_spacing_roster_confirmed_seconds
-                ),
-                min_game_final_observations=min_game_final_observations,
-                order_validation=order_validation,
+                detection=detection,
                 batting_half_inference_progress=batting_half_inference_progress,
                 auto_detect_template=auto_detect_template,
                 format_selector=format_selector,

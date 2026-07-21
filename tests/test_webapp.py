@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sidelinehd_extractor import cli as cli_module  # noqa: E402
 from sidelinehd_extractor.batch import PlaylistBatchItemResult, PlaylistBatchResult  # noqa: E402
 from sidelinehd_extractor.cli import main  # noqa: E402
+from sidelinehd_extractor.events import DetectionConfig  # noqa: E402
 from sidelinehd_extractor.webapp import lifecycle as lifecycle_module  # noqa: E402
 from sidelinehd_extractor.webapp import jobs as jobs_module  # noqa: E402
 from sidelinehd_extractor.webapp.app import create_app  # noqa: E402
@@ -80,6 +81,41 @@ def test_submit_single_job_runs_to_done(monkeypatch):
     assert job.result == {"kind": "single", "run_dir": "runs/fake"}
     assert job.finished_at is not None
     assert job.id in response.text
+
+
+def test_submitted_job_reaches_the_pipeline_with_the_default_detection_config(
+    monkeypatch, tmp_path
+):
+    """M4: web jobs auto-detect the batting half, via DetectionConfig.
+
+    The web app has no detection knobs of its own — it overrides exactly one
+    field of the shared dataclass, so every other knob tracks the CLI's.
+    """
+
+    monkeypatch.setattr(jobs_module, "create_ocr_backend", lambda name: object())
+    monkeypatch.chdir(tmp_path)  # no sidelinehd.cfg -> template/roster None
+    forwarded = {}
+
+    def fake(url, video_dir, output_dir, stage_progress=None, **kwargs):
+        forwarded.update(kwargs)
+        return {"kind": "single", "run_dir": "runs/fake"}
+
+    monkeypatch.setattr(jobs_module, "run_youtube_game", fake)
+    store = JobStore()
+    runner = JobRunner(
+        store,
+        executor=InlineExecutor(),
+        pipeline_kwargs=jobs_module.default_pipeline_kwargs,
+    )
+    app = create_app(store=store, runner=runner, runs_dir=Path("no-such-runs-dir"))
+
+    with TestClient(app) as client:
+        response = client.post("/jobs", data={"url": "https://youtu.be/abc123", "kind": "single"})
+
+    assert response.status_code == 200
+    assert store.list()[0].status == "done"
+    assert forwarded["detection"] == DetectionConfig(auto_detect_batting_half=True)
+    assert "auto_detect_batting_half" not in forwarded
 
 
 def test_submit_playlist_dispatches_to_batch(monkeypatch):

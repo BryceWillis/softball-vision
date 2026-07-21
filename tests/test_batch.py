@@ -4,11 +4,68 @@ import unittest
 from pathlib import Path
 
 from sidelinehd_extractor.batch import run_playlist_batch
+from sidelinehd_extractor.events import DetectionConfig
+from sidelinehd_extractor.models import HalfInning
 from sidelinehd_extractor.workflow import RunGameResult, RunYoutubeGameResult
 from sidelinehd_extractor.youtube import DownloadResult, PlaylistEntry, YTDLPError
 
 
 class PlaylistBatchTests(unittest.TestCase):
+    def test_run_playlist_batch_forwards_the_detection_config_untouched(self):
+        # M4: the batch path declares no detection knob of its own, so one
+        # equality check covers all ten — and a batch run cannot diverge from
+        # a single-game run on the same video (CR-47).
+        entries = [PlaylistEntry("one", "https://youtu.be/one", "Game One", 1)]
+        detection = DetectionConfig(
+            batting_half=HalfInning.BOTTOM,
+            min_at_bat_spacing_seconds=30.0,
+            min_game_final_observations=5,
+            half_inning_confirmation_window=9,
+            order_validation=False,
+        )
+        forwarded = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def run_youtube(**kwargs):
+                forwarded.append(kwargs["detection"])
+                return _run_result(root, "one")
+
+            run_playlist_batch(
+                "playlist",
+                video_dir=root / "videos",
+                output_dir=root / "runs",
+                detection=detection,
+                list_videos=lambda *_args, **_kwargs: entries,
+                run_youtube=run_youtube,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(forwarded, [detection])
+
+    def test_run_playlist_batch_defaults_the_detection_config(self):
+        entries = [PlaylistEntry("one", "https://youtu.be/one", "Game One", 1)]
+        forwarded = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def run_youtube(**kwargs):
+                forwarded.append(kwargs["detection"])
+                return _run_result(root, "one")
+
+            run_playlist_batch(
+                "playlist",
+                video_dir=root / "videos",
+                output_dir=root / "runs",
+                list_videos=lambda *_args, **_kwargs: entries,
+                run_youtube=run_youtube,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(forwarded, [DetectionConfig()])
+
     def test_run_playlist_batch_processes_entries_in_order_and_writes_state(self):
         entries = [
             PlaylistEntry("one", "https://youtu.be/one", "Game One", 1),

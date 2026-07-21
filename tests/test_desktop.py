@@ -21,6 +21,7 @@ from sidelinehd_extractor.desktop import (
     find_open_port,
     prepare_data_dir,
 )
+from sidelinehd_extractor.events import DetectionConfig
 
 pytest.importorskip("uvicorn")
 
@@ -114,7 +115,7 @@ def test_desktop_pipeline_kwargs_requests_tesserocr_backend(monkeypatch, tmp_pat
     monkeypatch.chdir(tmp_path)  # no sidelinehd.cfg -> template/roster None
     kwargs = desktop_pipeline_kwargs()
     assert requested == ["tesserocr"]
-    assert kwargs["auto_detect_batting_half"] is True
+    assert kwargs["detection"] == DetectionConfig(auto_detect_batting_half=True)
     assert kwargs["template"] is None and kwargs["roster"] is None
 
 

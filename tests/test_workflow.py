@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sidelinehd_extractor.events import EventDetectionResult
+from sidelinehd_extractor.events import DetectionConfig, EventDetectionResult
 from sidelinehd_extractor.exports import PROJECT_CREDIT
 from sidelinehd_extractor.models import Event, EventType, HalfInning
 from sidelinehd_extractor.processing import ProcessResult, write_json, write_jsonl
@@ -122,11 +122,7 @@ class WorkflowTests(unittest.TestCase):
             detect.assert_called_once_with(
                 state_result.output_path,
                 roster=None,
-                batting_half=None,
-                min_at_bat_spacing_seconds=45.0,
-                min_at_bat_spacing_roster_confirmed_seconds=20.0,
-                min_game_final_observations=3,
-                order_validation=True,
+                config=DetectionConfig(),
             )
             self.assertEqual(
                 stages,
@@ -406,7 +402,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["video_path"], Path("videos/game.mp4"))
         self.assertEqual(run.call_args.kwargs["output_prefix"], Path("scratch/full"))
         self.assertTrue(run.call_args.kwargs["compute_video_hash"])
-        self.assertEqual(run.call_args.kwargs["min_game_final_observations"], 3)
+        self.assertEqual(run.call_args.kwargs["detection"], DetectionConfig())
         self.assertTrue(run.call_args.kwargs["generate_review_report"])
         self.assertEqual(result.download, download)
         self.assertEqual(result.run, run_result)

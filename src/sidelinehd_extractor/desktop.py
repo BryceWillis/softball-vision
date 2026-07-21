@@ -97,6 +97,7 @@ def desktop_pipeline_kwargs() -> dict:
         load_project_config,
         load_roster,
     )
+    from sidelinehd_extractor.events import DetectionConfig
     from sidelinehd_extractor.ocr import create_ocr_backend
 
     config = load_project_config()
@@ -108,7 +109,7 @@ def desktop_pipeline_kwargs() -> dict:
         "template": template,
         "roster": roster,
         "ocr": create_ocr_backend("tesserocr"),
-        "auto_detect_batting_half": True,
+        "detection": DetectionConfig(auto_detect_batting_half=True),
     }
 
 

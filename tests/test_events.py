@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from sidelinehd_extractor.events import (
+    DetectionConfig,
     _at_bat_spacing_for_roster_match,
     _detect_game_final,
     _enrich_states_digit_runs,
@@ -165,7 +166,7 @@ class EventDetectionTests(unittest.TestCase):
                 OverlayState(905, metadata={"game_status": "final"}),
                 OverlayState(910, metadata={"game_status": "final"}),
             ],
-            min_game_final_observations=3,
+            config=DetectionConfig(min_game_final_observations=3),
         )
 
         self.assertEqual(events[-1].event_type, EventType.GAME_FINAL)
@@ -1330,7 +1331,7 @@ class EventDetectionTests(unittest.TestCase):
                 ),
             ],
             roster=roster,
-            min_at_bat_spacing_roster_confirmed_seconds=30,
+            config=DetectionConfig(min_at_bat_spacing_roster_confirmed_seconds=30),
         )
 
         self.assertEqual(
@@ -1471,7 +1472,10 @@ class EventDetectionTests(unittest.TestCase):
                 ],
             )
 
-            result = detect_events_file(states_path, min_game_final_observations=2)
+            result = detect_events_file(
+                states_path,
+                config=DetectionConfig(min_game_final_observations=2),
+            )
 
             self.assertEqual(result.event_count, 1)
             self.assertIn('"event_type": "game_final"', result.output_path.read_text())
@@ -2085,7 +2089,7 @@ class EventDetectionTests(unittest.TestCase):
                 OverlayState(1330, inning=2, half=HalfInning.TOP, batter_number="24"),
                 OverlayState(1335, inning=2, half=HalfInning.TOP, batter_number="24"),
             ],
-            batting_half=HalfInning.TOP,
+            config=DetectionConfig(batting_half=HalfInning.TOP),
         )
 
         self.assertEqual(

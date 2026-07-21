@@ -29,7 +29,7 @@ from sidelinehd_extractor.config import (
     write_project_config,
 )
 from sidelinehd_extractor.corrections import apply_event_corrections, load_event_corrections
-from sidelinehd_extractor.events import detect_events_file, load_events
+from sidelinehd_extractor.events import DetectionConfig, detect_events_file, load_events
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.feedback import write_feedback_log
 from sidelinehd_extractor.models import HalfInning, RegionFraction, Roster
@@ -159,6 +159,12 @@ def _default_run_fields(args: argparse.Namespace) -> List[str]:
     ]
 
 
+#: The one source of the detection defaults the parsers advertise. Every
+#: ``default=`` below reads a field off this instead of repeating a literal,
+#: so a tuning change lands in ``DetectionConfig`` alone (M4 / CR-47).
+_DETECTION_DEFAULTS = DetectionConfig()
+
+
 def _parse_batting_half(value: str) -> Optional[HalfInning]:
     if value == "top":
         return HalfInning.TOP
@@ -169,6 +175,24 @@ def _parse_batting_half(value: str) -> Optional[HalfInning]:
 
 def _is_auto_batting_half(value: str) -> bool:
     return value == "auto"
+
+
+def _detection_config_from_args(args: argparse.Namespace) -> DetectionConfig:
+    """Build the detection config every run/detect command shares.
+
+    ``detect-events`` offers no ``auto`` choice for ``--batting-half`` — half
+    inference runs in ``run_game``, above ``detect_events_file`` — so for that
+    command ``_is_auto_batting_half`` is simply always False.
+    """
+
+    return DetectionConfig(
+        batting_half=_parse_batting_half(args.batting_half),
+        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
+        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
+        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
+        min_game_final_observations=args.min_game_final_observations,
+        order_validation=not args.no_order_validation,
+    )
 
 
 def _build_batting_half_inference_callback():
@@ -504,12 +528,7 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         chapter_intro_label=args.chapter_intro_label,
         include_inning_score=not args.no_inning_score,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
-        batting_half=_parse_batting_half(args.batting_half),
-        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
-        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
-        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
-        min_game_final_observations=args.min_game_final_observations,
-        order_validation=not args.no_order_validation,
+        detection=_detection_config_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
@@ -564,12 +583,7 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         chapter_intro_label=args.chapter_intro_label,
         include_inning_score=not args.no_inning_score,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
-        batting_half=_parse_batting_half(args.batting_half),
-        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
-        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
-        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
-        min_game_final_observations=args.min_game_final_observations,
-        order_validation=not args.no_order_validation,
+        detection=_detection_config_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
@@ -631,12 +645,7 @@ def _cmd_run_playlist(args: argparse.Namespace) -> int:
         chapter_intro_label=args.chapter_intro_label,
         include_inning_score=not args.no_inning_score,
         include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
-        batting_half=_parse_batting_half(args.batting_half),
-        auto_detect_batting_half=_is_auto_batting_half(args.batting_half),
-        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
-        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
-        min_game_final_observations=args.min_game_final_observations,
-        order_validation=not args.no_order_validation,
+        detection=_detection_config_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
@@ -674,11 +683,7 @@ def _cmd_detect_events(args: argparse.Namespace) -> int:
         input_path,
         output_path=args.output,
         roster=roster,
-        batting_half=_parse_batting_half(args.batting_half),
-        min_at_bat_spacing_seconds=args.min_at_bat_spacing,
-        min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
-        min_game_final_observations=args.min_game_final_observations,
-        order_validation=not args.no_order_validation,
+        config=_detection_config_from_args(args),
     )
     print(_to_json(result))
     return 0
@@ -1010,13 +1015,13 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--min-at-bat-spacing",
         type=float,
-        default=45.0,
+        default=_DETECTION_DEFAULTS.min_at_bat_spacing_seconds,
         help="Minimum seconds between emitted at-bat starts.",
     )
     parser.add_argument(
         "--min-at-bat-spacing-roster-confirmed",
         type=float,
-        default=20.0,
+        default=_DETECTION_DEFAULTS.min_at_bat_spacing_roster_confirmed_seconds,
         dest="min_at_bat_spacing_roster_confirmed",
         metavar="SECONDS",
         help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
@@ -1024,7 +1029,7 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--min-game-final-observations",
         type=int,
-        default=3,
+        default=_DETECTION_DEFAULTS.min_game_final_observations,
         help="Minimum consecutive FINAL scorebug OCR reads before emitting a Final chapter.",
     )
     parser.add_argument(
@@ -1307,13 +1312,13 @@ def build_parser() -> argparse.ArgumentParser:
     detect_events.add_argument(
         "--min-at-bat-spacing",
         type=float,
-        default=45.0,
+        default=_DETECTION_DEFAULTS.min_at_bat_spacing_seconds,
         help="Minimum seconds between emitted at-bat starts.",
     )
     detect_events.add_argument(
         "--min-at-bat-spacing-roster-confirmed",
         type=float,
-        default=20.0,
+        default=_DETECTION_DEFAULTS.min_at_bat_spacing_roster_confirmed_seconds,
         dest="min_at_bat_spacing_roster_confirmed",
         metavar="SECONDS",
         help="Minimum seconds between at-bats when the new batter is roster-confirmed.",
@@ -1321,7 +1326,7 @@ def build_parser() -> argparse.ArgumentParser:
     detect_events.add_argument(
         "--min-game-final-observations",
         type=int,
-        default=3,
+        default=_DETECTION_DEFAULTS.min_game_final_observations,
         help="Minimum consecutive FINAL scorebug OCR reads before emitting a Final chapter.",
     )
     detect_events.add_argument(

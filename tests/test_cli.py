@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import os
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 from sidelinehd_extractor.cli import (
     _apply_config_defaults,
     _default_run_fields,
+    _detection_config_from_args,
     _format_roster_next_command,
     _next_commands,
     _offer_config_update,
@@ -19,6 +21,8 @@ from sidelinehd_extractor.cli import (
     main,
 )
 from sidelinehd_extractor.config import load_project_config, load_roster
+from sidelinehd_extractor.events import DetectionConfig
+from sidelinehd_extractor.models import HalfInning
 
 
 @contextmanager
@@ -237,6 +241,83 @@ class CLITests(unittest.TestCase):
         self.assertFalse(run_youtube.save_crops)
         self.assertFalse(run_playlist.save_crops)
         self.assertIsNone(run_game.ocr_workers)
+
+    def test_detection_config_from_argv_matches_the_dataclass_defaults(self):
+        # M4: the parsers advertise DetectionConfig's defaults rather than
+        # their own literals, so a tuning change lands in one place. The run
+        # commands' only difference is --batting-half auto (the CLI surface,
+        # unchanged); detect-events has no auto choice because inference runs
+        # a layer above it.
+        parser = build_parser()
+        run_argvs = (
+            ["run-game", "game.mp4"],
+            ["run-youtube", "https://youtu.be/example"],
+            ["run-playlist", "https://youtube.com/playlist"],
+        )
+
+        for argv in run_argvs:
+            with self.subTest(command=argv[0]):
+                config = _detection_config_from_args(parser.parse_args(argv))
+                self.assertEqual(config, DetectionConfig(auto_detect_batting_half=True))
+                # Everything but the half is straight off the dataclass.
+                self.assertEqual(
+                    dataclasses.replace(config, auto_detect_batting_half=False),
+                    DetectionConfig(),
+                )
+
+        for argv in run_argvs:
+            with self.subTest(command=argv[0], batting_half="both"):
+                config = _detection_config_from_args(
+                    parser.parse_args([*argv, "--batting-half", "both"])
+                )
+                self.assertEqual(config, DetectionConfig())
+
+        detect_events = _detection_config_from_args(parser.parse_args(["detect-events", "runs/g"]))
+        self.assertEqual(detect_events, DetectionConfig())
+
+    def test_detection_config_from_argv_carries_explicit_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run-game",
+                "game.mp4",
+                "--batting-half",
+                "top",
+                "--min-at-bat-spacing",
+                "30",
+                "--min-at-bat-spacing-roster-confirmed",
+                "15",
+                "--min-game-final-observations",
+                "5",
+                "--no-order-validation",
+            ]
+        )
+
+        self.assertEqual(
+            _detection_config_from_args(args),
+            DetectionConfig(
+                batting_half=HalfInning.TOP,
+                min_at_bat_spacing_seconds=30.0,
+                min_at_bat_spacing_roster_confirmed_seconds=15.0,
+                min_game_final_observations=5,
+                order_validation=False,
+            ),
+        )
+
+    def test_negative_spacing_is_rejected_with_an_error_not_a_disabled_gate(self):
+        # Before M4 this ran and silently disabled the spacing gate.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with _working_directory(root):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    with redirect_stdout(io.StringIO()):
+                        exit_code = main(
+                            ["detect-events", "states.jsonl", "--min-at-bat-spacing", "-5"]
+                        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("min_at_bat_spacing_seconds must be >= 0", stderr.getvalue())
 
     def test_run_commands_accept_legacy_no_crops_flag(self):
         parser = build_parser()

@@ -25,6 +25,94 @@ MIN_BATTING_ORDER_SEED = 3
 
 
 @dataclass(frozen=True)
+class DetectionConfig:
+    """Tuning knobs for event detection — the single source of their defaults.
+
+    Function signatures, the CLI's argparse defaults, and the web app all
+    *reference* this dataclass rather than repeating literals, so the batch
+    path cannot silently drift from the single-game path on the same video
+    (M4 / CR-47). Adding a knob is a one-line edit here.
+
+    Values only: no collaborators, no callbacks, and nothing mutable — the
+    shared ``DetectionConfig()`` default instance depends on that, and so does
+    ``to_manifest``.
+    """
+
+    batting_half: Optional[HalfInning] = None  # None = both halves
+    auto_detect_batting_half: bool = False
+    min_at_bat_spacing_seconds: float = 45.0
+    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0
+    batter_confirmation_window: int = 4
+    min_batter_observations: int = 2
+    half_inning_confirmation_window: int = 12
+    min_half_inning_observations: int = 4
+    min_game_final_observations: int = 3
+    order_validation: bool = True
+
+    def __post_init__(self) -> None:
+        for name in (
+            "min_at_bat_spacing_seconds",
+            "min_at_bat_spacing_roster_confirmed_seconds",
+            "batter_confirmation_window",
+            "min_batter_observations",
+            "half_inning_confirmation_window",
+            "min_half_inning_observations",
+            "min_game_final_observations",
+        ):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be >= 0")
+
+    def initial_batting_half(self) -> Optional[HalfInning]:
+        """The half filter for the first detection pass.
+
+        ``None`` while auto-detecting: inference compares roster-name match
+        counts across *both* halves, so the first pass must run unfiltered and
+        the filtering happens afterwards.
+        """
+
+        return None if self.auto_detect_batting_half else self.batting_half
+
+    def initial_order_validation(self) -> bool:
+        """Whether the first detection pass validates batting order.
+
+        Skipped while auto-detecting: validation re-runs in ``run_game`` after
+        inference has filtered the events down to the inferred half.
+        """
+
+        return self.order_validation and not self.auto_detect_batting_half
+
+    def to_manifest(self) -> dict:
+        """The run manifest's ``detection`` section.
+
+        Existing keys keep their names and value formats; the four window
+        knobs are additive. ``order_validation_ran`` is runtime information,
+        not configuration, and is merged in by ``run_game``.
+        """
+
+        return {
+            "min_at_bat_spacing_seconds": self.min_at_bat_spacing_seconds,
+            "min_at_bat_spacing_roster_confirmed_seconds": (
+                self.min_at_bat_spacing_roster_confirmed_seconds
+            ),
+            "min_game_final_observations": self.min_game_final_observations,
+            "batting_half": _manifest_batting_half(
+                self.batting_half, self.auto_detect_batting_half
+            ),
+            "order_validation_requested": self.order_validation,
+            "batter_confirmation_window": self.batter_confirmation_window,
+            "min_batter_observations": self.min_batter_observations,
+            "half_inning_confirmation_window": self.half_inning_confirmation_window,
+            "min_half_inning_observations": self.min_half_inning_observations,
+        }
+
+
+def _manifest_batting_half(half: Optional[HalfInning], auto_detect: bool) -> str:
+    if auto_detect:
+        return "auto"
+    return half.value if half is not None else "both"
+
+
+@dataclass(frozen=True)
 class EventDetectionResult:
     """Summary of an event detection run."""
 
@@ -116,17 +204,11 @@ def load_events(path: Path) -> List[Event]:
 def detect_events(
     states: Iterable[OverlayState],
     roster: Optional[Roster] = None,
-    batting_half: Optional[HalfInning] = None,
-    min_at_bat_spacing_seconds: float = 45.0,
-    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
-    batter_confirmation_window: int = 4,
-    min_batter_observations: int = 2,
-    half_inning_confirmation_window: int = 12,
-    min_half_inning_observations: int = 4,
-    min_game_final_observations: int = 3,
+    config: DetectionConfig = DetectionConfig(),
 ) -> List[Event]:
     """Detect half-inning and at-bat starts from parsed overlay states."""
 
+    batting_half = config.initial_batting_half()
     ordered_states = sorted(states, key=lambda item: item.timestamp_seconds)
     if roster is not None:
         ordered_states = _enrich_states_digit_runs(ordered_states, roster)
@@ -148,8 +230,8 @@ def detect_events(
                 ordered_states,
                 index,
                 half_key,
-                half_inning_confirmation_window,
-                min_half_inning_observations,
+                config.half_inning_confirmation_window,
+                config.min_half_inning_observations,
                 require_activity_signal=last_half_key is None and starts_at_zero,
             )
         ):
@@ -158,7 +240,7 @@ def detect_events(
             away_score, home_score = _score_snapshot(
                 ordered_states,
                 index,
-                half_inning_confirmation_window,
+                config.half_inning_confirmation_window,
                 half_key=half_key,
             )
             if last_half_key is None and starts_at_zero:
@@ -166,7 +248,7 @@ def detect_events(
                     ordered_states,
                     index,
                     half_key,
-                    half_inning_confirmation_window,
+                    config.half_inning_confirmation_window,
                 )
                 if active_timestamp_seconds is not None:
                     chapter_timestamp_seconds = active_timestamp_seconds
@@ -204,8 +286,8 @@ def detect_events(
         )
         at_bat_spacing_seconds = _at_bat_spacing_for_roster_match(
             roster_match_source,
-            min_at_bat_spacing_seconds,
-            min_at_bat_spacing_roster_confirmed_seconds,
+            config.min_at_bat_spacing_seconds,
+            config.min_at_bat_spacing_roster_confirmed_seconds,
         )
 
         if (
@@ -226,8 +308,8 @@ def detect_events(
                 player_name,
                 roster,
                 name_to_number,
-                batter_confirmation_window,
-                min_batter_observations,
+                config.batter_confirmation_window,
+                config.min_batter_observations,
             )
         ):
             events.append(
@@ -262,7 +344,7 @@ def detect_events(
             if player_name and effective_batter_number:
                 name_to_number[_normalize_name(player_name)] = effective_batter_number
 
-    final_event = _detect_game_final(ordered_states, min_game_final_observations)
+    final_event = _detect_game_final(ordered_states, config.min_game_final_observations)
     if final_event is not None:
         events.append(final_event)
     _apply_half_inning_end_scores(events)
@@ -274,25 +356,14 @@ def detect_events_file(
     states_path: Path,
     output_path: Optional[Path] = None,
     roster: Optional[Roster] = None,
-    batting_half: Optional[HalfInning] = None,
-    min_at_bat_spacing_seconds: float = 45.0,
-    min_at_bat_spacing_roster_confirmed_seconds: float = 20.0,
-    min_game_final_observations: int = 3,
-    order_validation: bool = True,
+    config: DetectionConfig = DetectionConfig(),
 ) -> EventDetectionResult:
     """Detect events from a states JSONL file and write events JSONL."""
 
     source = states_path.expanduser()
     destination = output_path.expanduser() if output_path else source.parent / "events.jsonl"
-    events = detect_events(
-        load_states(source),
-        roster=roster,
-        batting_half=batting_half,
-        min_at_bat_spacing_seconds=min_at_bat_spacing_seconds,
-        min_at_bat_spacing_roster_confirmed_seconds=min_at_bat_spacing_roster_confirmed_seconds,
-        min_game_final_observations=min_game_final_observations,
-    )
-    if roster is not None and order_validation:
+    events = detect_events(load_states(source), roster=roster, config=config)
+    if roster is not None and config.initial_order_validation():
         events = validate_batting_order(events, roster=roster)
     write_jsonl(destination, events)
     return EventDetectionResult(input_path=source, output_path=destination, event_count=len(events))
