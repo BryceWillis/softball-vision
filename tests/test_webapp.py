@@ -369,6 +369,26 @@ def test_create_app_builds_without_binding_a_socket():
     } <= routes
 
 
+def test_create_app_warms_tesserocr_import_on_the_main_thread(monkeypatch):
+    """``create_app`` must first-import tesserocr from the main thread.
+
+    The tesserocr wheel installs cysignals signal handlers on import, which
+    Python allows only in the main thread; request handlers and job threads
+    would otherwise race to be that first import and crash a submitted job
+    with ``ValueError: signal only works in main thread``. The guard is the
+    ``warm_tesserocr_import()`` call in ``create_app``. No CI leg installs the
+    ``[ocr]`` extra, so nothing else exercises it — this asserts the call
+    survives, independent of whether tesserocr is actually installed.
+    """
+
+    from sidelinehd_extractor.webapp import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module, "warm_tesserocr_import", lambda: calls.append(True))
+    create_app(runs_dir=Path("no-such-runs-dir"))
+    assert calls == [True]
+
+
 CHAPTERS_TEXT = "0:00 Pregame\n12:34 Top 1\n"
 AT_BATS_TEXT = "1st Inning\n12:34 #22\n14:05 #7\n"
 REVIEW_REPORT_TEXT = (
