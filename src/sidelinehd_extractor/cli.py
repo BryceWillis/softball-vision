@@ -42,7 +42,7 @@ from sidelinehd_extractor.ocr import (
 )
 from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import write_publish_kit
-from sidelinehd_extractor.processing import process_video
+from sidelinehd_extractor.processing import SamplingOptions, process_video
 from sidelinehd_extractor.review import render_event_review
 from sidelinehd_extractor.review_report import write_review_report
 from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
@@ -50,7 +50,7 @@ from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.video import probe_video, read_frame_at
 from sidelinehd_extractor.workflow import export_paths as workflow_export_paths
-from sidelinehd_extractor.workflow import run_game, run_youtube_game
+from sidelinehd_extractor.workflow import ExportOptions, run_game, run_youtube_game
 from sidelinehd_extractor.webapp.lifecycle import (
     ServerStateRegistration,
     git_short_sha,
@@ -60,8 +60,7 @@ from sidelinehd_extractor.webapp.lifecycle import (
     version_display,
 )
 from sidelinehd_extractor.youtube import (
-    DEFAULT_FORMAT_SELECTOR,
-    DEFAULT_YOUTUBE_CLIENT,
+    DownloadOptions,
     YTDLPError,
     download_youtube_video,
 )
@@ -159,10 +158,13 @@ def _default_run_fields(args: argparse.Namespace) -> List[str]:
     ]
 
 
-#: The one source of the detection defaults the parsers advertise. Every
-#: ``default=`` below reads a field off this instead of repeating a literal,
-#: so a tuning change lands in ``DetectionConfig`` alone (M4 / CR-47).
+#: The one source of the pipeline defaults the parsers advertise. Every
+#: ``default=`` below reads a field off one of these instead of repeating a
+#: literal, so a tuning change lands in the dataclass alone (M4 / CR-47).
 _DETECTION_DEFAULTS = DetectionConfig()
+_EXPORT_DEFAULTS = ExportOptions()
+_SAMPLING_DEFAULTS = SamplingOptions()
+_DOWNLOAD_DEFAULTS = DownloadOptions()
 
 
 def _parse_batting_half(value: str) -> Optional[HalfInning]:
@@ -192,6 +194,52 @@ def _detection_config_from_args(args: argparse.Namespace) -> DetectionConfig:
         min_at_bat_spacing_roster_confirmed_seconds=args.min_at_bat_spacing_roster_confirmed,
         min_game_final_observations=args.min_game_final_observations,
         order_validation=not args.no_order_validation,
+    )
+
+
+def _export_options_from_args(args: argparse.Namespace) -> ExportOptions:
+    """Build the export formatting options the run commands share."""
+
+    return ExportOptions(
+        include_chapter_intro=not args.no_chapter_intro,
+        chapter_intro_label=args.chapter_intro_label,
+        include_inning_score=not args.no_inning_score,
+        include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
+    )
+
+
+def _sampling_options_from_args(args: argparse.Namespace) -> SamplingOptions:
+    """Build the sampling options every run command shares."""
+
+    return SamplingOptions(
+        sample_every_seconds=args.sample_every,
+        start_seconds=parse_timestamp_value(args.start),
+        end_seconds=parse_timestamp_value(args.end) if args.end else None,
+        fields=tuple(_default_run_fields(args)),
+        save_crops=args.save_crops,
+        compute_video_hash=args.hash_video,
+        ocr_workers=args.ocr_workers,
+    )
+
+
+def _download_options_from_args(args: argparse.Namespace) -> DownloadOptions:
+    """Build the yt-dlp download options every downloading command shares.
+
+    ``--youtube-client ''`` disables the player-client override; that empty
+    sentinel is a CLI convention, so it is mapped to ``None`` here rather than
+    stored in the dataclass.
+
+    ``run-playlist`` deliberately has no ``--playlist`` flag — it walks the
+    playlist itself and downloads one video per entry — so it falls back to
+    the single-video default here, which the batch path then enforces anyway.
+    """
+
+    return DownloadOptions(
+        format_selector=args.format,
+        merge_output_format=args.merge_output_format,
+        write_info_json=not args.no_info_json,
+        no_playlist=not getattr(args, "playlist", False),
+        youtube_client=args.youtube_client or None,
     )
 
 
@@ -240,11 +288,7 @@ def _cmd_download(args: argparse.Namespace) -> int:
     result = download_youtube_video(
         url=args.url,
         output_dir=args.output_dir,
-        format_selector=args.format,
-        merge_output_format=args.merge_output_format,
-        write_info_json=not args.no_info_json,
-        no_playlist=not args.playlist,
-        youtube_client=args.youtube_client,
+        download_options=_download_options_from_args(args),
     )
     print(_to_json(result))
     return 0
@@ -268,11 +312,7 @@ def _cmd_prepare_youtube(args: argparse.Namespace) -> int:
     download = download_youtube_video(
         url=args.url,
         output_dir=args.video_dir,
-        format_selector=args.format,
-        merge_output_format=args.merge_output_format,
-        write_info_json=not args.no_info_json,
-        no_playlist=not args.playlist,
-        youtube_client=args.youtube_client,
+        download_options=_download_options_from_args(args),
     )
     if download.video_path is None:
         raise ValueError("yt-dlp did not report a downloaded video path")
@@ -324,15 +364,19 @@ def _cmd_process(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         template=template,
         roster=roster,
-        sample_every_seconds=args.sample_every,
-        start_seconds=parse_timestamp_value(args.start),
-        end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=not args.no_crops,
         ocr=ocr_backend,
-        fields=_parse_field_list(args.field),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
-        compute_video_hash=args.hash_video,
-        ocr_workers=args.ocr_workers,
+        sampling=SamplingOptions(
+            sample_every_seconds=args.sample_every,
+            start_seconds=parse_timestamp_value(args.start),
+            end_seconds=parse_timestamp_value(args.end) if args.end else None,
+            # The audit command keeps crops on by default and defaults to every
+            # template field; the run commands do neither.
+            fields=_parse_field_list(args.field),
+            save_crops=not args.no_crops,
+            compute_video_hash=args.hash_video,
+            ocr_workers=args.ocr_workers,
+        ),
     )
     print(_to_json(result))
     return 0
@@ -512,22 +556,13 @@ def _cmd_run_game(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         template=template,
         roster=roster,
-        sample_every_seconds=args.sample_every,
-        start_seconds=parse_timestamp_value(args.start),
-        end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=args.save_crops,
         ocr=ocr_backend,
-        fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
-        compute_video_hash=args.hash_video,
-        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
-        include_chapter_intro=not args.no_chapter_intro,
-        chapter_intro_label=args.chapter_intro_label,
-        include_inning_score=not args.no_inning_score,
-        include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
+        sampling=_sampling_options_from_args(args),
+        export_options=_export_options_from_args(args),
         detection=_detection_config_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
@@ -567,32 +602,19 @@ def _cmd_run_youtube(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         template=template,
         roster=roster,
-        sample_every_seconds=args.sample_every,
-        start_seconds=parse_timestamp_value(args.start),
-        end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=args.save_crops,
         ocr=ocr_backend,
-        fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
-        compute_video_hash=args.hash_video,
-        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
-        include_chapter_intro=not args.no_chapter_intro,
-        chapter_intro_label=args.chapter_intro_label,
-        include_inning_score=not args.no_inning_score,
-        include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
+        sampling=_sampling_options_from_args(args),
+        export_options=_export_options_from_args(args),
         detection=_detection_config_from_args(args),
+        download_options=_download_options_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
-        format_selector=args.format,
-        merge_output_format=args.merge_output_format,
-        write_info_json=not args.no_info_json,
-        no_playlist=not args.playlist,
-        youtube_client=args.youtube_client,
     )
     run = result.run
     print(
@@ -629,31 +651,19 @@ def _cmd_run_playlist(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         template=template,
         roster=roster,
-        sample_every_seconds=args.sample_every,
-        start_seconds=parse_timestamp_value(args.start),
-        end_seconds=parse_timestamp_value(args.end) if args.end else None,
-        save_crops=args.save_crops,
         ocr=ocr_backend,
-        fields=_default_run_fields(args),
         progress=None if args.quiet else _build_progress_callback(args.progress_every),
-        compute_video_hash=args.hash_video,
-        ocr_workers=args.ocr_workers,
         output_prefix=args.output_prefix,
         corrections=corrections,
         stage_progress=None if args.quiet else _build_stage_callback(),
-        include_chapter_intro=not args.no_chapter_intro,
-        chapter_intro_label=args.chapter_intro_label,
-        include_inning_score=not args.no_inning_score,
-        include_at_bat_inning_headers=not args.no_at_bat_inning_headers,
+        sampling=_sampling_options_from_args(args),
+        export_options=_export_options_from_args(args),
         detection=_detection_config_from_args(args),
+        download_options=_download_options_from_args(args),
         auto_detect_template=not args.no_auto_template,
         batting_half_inference_progress=(
             None if args.quiet else _build_batting_half_inference_callback()
         ),
-        format_selector=args.format,
-        merge_output_format=args.merge_output_format,
-        write_info_json=not args.no_info_json,
-        youtube_client=args.youtube_client,
         force=args.force,
         limit=args.limit,
         start_index=args.start_index,
@@ -927,11 +937,15 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sample-every",
         type=float,
-        default=5.0,
+        default=_SAMPLING_DEFAULTS.sample_every_seconds,
         help="Seconds between sampled frames.",
     )
     parser.add_argument(
-        "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
+        "--start",
+        # A timestamp string, parsed back to seconds — but its default is the
+        # dataclass's, not a literal of its own.
+        default=str(_SAMPLING_DEFAULTS.start_seconds),
+        help="Start timestamp as seconds, M:SS, or H:MM:SS.",
     )
     parser.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
     parser.add_argument("--ocr", choices=("none", "tesseract", "tesserocr"), default="tesseract")
@@ -945,7 +959,7 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ocr-workers",
         type=int,
-        default=None,
+        default=_SAMPLING_DEFAULTS.ocr_workers,
         metavar="N",
         help="OCR worker threads. Defaults to the detected CPU count; use 1 for serial OCR.",
     )
@@ -985,7 +999,7 @@ def _add_run_processing_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--chapter-intro-label",
-        default="Pregame",
+        default=_EXPORT_DEFAULTS.chapter_intro_label,
         help="Label for the automatic 0:00 chapter when the first chapter starts later.",
     )
     parser.add_argument(
@@ -1050,12 +1064,12 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("url")
     download.add_argument("--output-dir", "-o", type=Path, default=Path("videos"))
     download.add_argument(
-        "--format", default=DEFAULT_FORMAT_SELECTOR, help="yt-dlp format selector."
+        "--format", default=_DOWNLOAD_DEFAULTS.format_selector, help="yt-dlp format selector."
     )
-    download.add_argument("--merge-output-format", default="mp4")
+    download.add_argument("--merge-output-format", default=_DOWNLOAD_DEFAULTS.merge_output_format)
     download.add_argument(
         "--youtube-client",
-        default=DEFAULT_YOUTUBE_CLIENT,
+        default=_DOWNLOAD_DEFAULTS.youtube_client,
         help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
     )
     download.add_argument("--no-info-json", action="store_true")
@@ -1072,13 +1086,13 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_youtube.add_argument("--timestamp", "-t", action="append", default=[])
     prepare_youtube.add_argument(
         "--format",
-        default=DEFAULT_FORMAT_SELECTOR,
+        default=_DOWNLOAD_DEFAULTS.format_selector,
         help="yt-dlp format selector.",
     )
-    prepare_youtube.add_argument("--merge-output-format", default="mp4")
+    prepare_youtube.add_argument("--merge-output-format", default=_DOWNLOAD_DEFAULTS.merge_output_format)
     prepare_youtube.add_argument(
         "--youtube-client",
-        default=DEFAULT_YOUTUBE_CLIENT,
+        default=_DOWNLOAD_DEFAULTS.youtube_client,
         help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
     )
     prepare_youtube.add_argument("--no-info-json", action="store_true")
@@ -1156,11 +1170,13 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument(
         "--sample-every",
         type=float,
-        default=5.0,
+        default=_SAMPLING_DEFAULTS.sample_every_seconds,
         help="Seconds between sampled frames.",
     )
     process.add_argument(
-        "--start", default="0", help="Start timestamp as seconds, M:SS, or H:MM:SS."
+        "--start",
+        default=str(_SAMPLING_DEFAULTS.start_seconds),
+        help="Start timestamp as seconds, M:SS, or H:MM:SS.",
     )
     process.add_argument("--end", help="Optional end timestamp as seconds, M:SS, or H:MM:SS.")
     process.add_argument("--ocr", choices=("none", "tesseract", "tesserocr"), default="none")
@@ -1174,7 +1190,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument(
         "--ocr-workers",
         type=int,
-        default=None,
+        default=_SAMPLING_DEFAULTS.ocr_workers,
         metavar="N",
         help="OCR worker threads. Defaults to the detected CPU count; use 1 for serial OCR.",
     )
@@ -1235,13 +1251,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_processing_arguments(run_youtube)
     run_youtube.add_argument(
         "--format",
-        default=DEFAULT_FORMAT_SELECTOR,
+        default=_DOWNLOAD_DEFAULTS.format_selector,
         help="yt-dlp format selector.",
     )
-    run_youtube.add_argument("--merge-output-format", default="mp4")
+    run_youtube.add_argument("--merge-output-format", default=_DOWNLOAD_DEFAULTS.merge_output_format)
     run_youtube.add_argument(
         "--youtube-client",
-        default=DEFAULT_YOUTUBE_CLIENT,
+        default=_DOWNLOAD_DEFAULTS.youtube_client,
         help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
     )
     run_youtube.add_argument("--no-info-json", action="store_true")
@@ -1257,13 +1273,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_processing_arguments(run_playlist)
     run_playlist.add_argument(
         "--format",
-        default=DEFAULT_FORMAT_SELECTOR,
+        default=_DOWNLOAD_DEFAULTS.format_selector,
         help="yt-dlp format selector.",
     )
-    run_playlist.add_argument("--merge-output-format", default="mp4")
+    run_playlist.add_argument("--merge-output-format", default=_DOWNLOAD_DEFAULTS.merge_output_format)
     run_playlist.add_argument(
         "--youtube-client",
-        default=DEFAULT_YOUTUBE_CLIENT,
+        default=_DOWNLOAD_DEFAULTS.youtube_client,
         help="YouTube player client for yt-dlp extractor args. Use '' to disable.",
     )
     run_playlist.add_argument("--no-info-json", action="store_true")
@@ -1377,7 +1393,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export.add_argument(
         "--chapter-intro-label",
-        default="Pregame",
+        default=_EXPORT_DEFAULTS.chapter_intro_label,
         help="Label for the automatic 0:00 chapter when exporting chapters.",
     )
     export.add_argument(

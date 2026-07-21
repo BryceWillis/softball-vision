@@ -8,6 +8,7 @@ from unittest.mock import patch
 from sidelinehd_extractor.models import OCRSample, OverlayTemplate, RegionFraction, Video
 from sidelinehd_extractor.ocr import OCRBackendResult
 from sidelinehd_extractor.processing import (
+    SamplingOptions,
     field_read_warnings,
     process_video,
     sample_timestamps,
@@ -92,7 +93,7 @@ class ProcessingTests(unittest.TestCase):
                             video_path=Path("game.mp4"),
                             output_dir=Path(directory),
                             template=template,
-                            save_crops=False,
+                            sampling=SamplingOptions(),
                         )
 
             probe.assert_called_once_with(Path("game.mp4"), compute_hash=False)
@@ -120,13 +121,42 @@ class ProcessingTests(unittest.TestCase):
                             video_path=Path("game.mp4"),
                             output_dir=Path(directory),
                             template=template,
-                            save_crops=False,
-                            compute_video_hash=True,
+                            sampling=SamplingOptions(compute_video_hash=True),
                         )
 
             probe.assert_called_once_with(Path("game.mp4"), compute_hash=True)
             self.assertIn('"sha256": "abc123"', result.manifest_path.read_text())
             self.assertIn('"compute_video_hash": true', result.manifest_path.read_text())
+
+    def test_process_video_honors_the_sampling_field_selection(self):
+        # 22b: ``fields`` travels inside SamplingOptions. If process_video read
+        # its own default instead, every region would be OCR'd — slower, and a
+        # different samples file than the caller asked for.
+        with tempfile.TemporaryDirectory() as directory:
+            template = OverlayTemplate(
+                name="test",
+                regions={
+                    "count": RegionFraction(0, 0, 0.1, 0.1),
+                    "inning": RegionFraction(0.1, 0, 0.1, 0.1),
+                },
+            )
+
+            with patch(
+                "sidelinehd_extractor.processing.probe_video",
+                return_value=Video(Path("game.mp4"), duration_seconds=0.0, width=10, height=10, fps=30),
+            ):
+                with patch("sidelinehd_extractor.processing.read_frames_at", return_value=[(0.0, object())]):
+                    with patch("sidelinehd_extractor.processing.crop_frame", return_value=object()):
+                        result = process_video(
+                            video_path=Path("game.mp4"),
+                            output_dir=Path(directory),
+                            template=template,
+                            sampling=SamplingOptions(fields=["inning"]),
+                        )
+
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["fields"], ["inning"])
+            self.assertEqual(result.sample_count, 1)
 
     def test_process_video_persists_ocr_source_detail(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -154,8 +184,8 @@ class ProcessingTests(unittest.TestCase):
                             video_path=Path("game.mp4"),
                             output_dir=Path(directory),
                             template=template,
-                            save_crops=False,
                             ocr=ocr,
+                            sampling=SamplingOptions(),
                         )
 
             self.assertIn(
@@ -206,8 +236,8 @@ class ProcessingTests(unittest.TestCase):
                             video_path=Path("game.mp4"),
                             output_dir=Path(directory),
                             template=template,
-                            save_crops=False,
                             ocr=ocr,
+                            sampling=SamplingOptions(),
                         )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
@@ -257,9 +287,8 @@ class ProcessingTests(unittest.TestCase):
                                 video_path=Path("game.mp4"),
                                 output_dir=Path(directory),
                                 template=template,
-                                save_crops=False,
                                 ocr=ocr,
-                                ocr_workers=workers,
+                                sampling=SamplingOptions(ocr_workers=workers),
                             )
                 rows = [
                     json.loads(line)
@@ -292,13 +321,14 @@ class ProcessingTests(unittest.TestCase):
                 regions={"count": RegionFraction(0, 0, 0.1, 0.1)},
             )
 
+            # M4 22b: an impossible worker count is now rejected when the
+            # options are built, before a video is ever opened.
             with self.assertRaises(ValueError):
                 process_video(
                     video_path=Path("game.mp4"),
                     output_dir=Path(directory),
                     template=template,
-                    save_crops=False,
-                    ocr_workers=0,
+                    sampling=SamplingOptions(ocr_workers=0),
                 )
 
     def test_process_video_does_not_warn_for_no_ocr_debug_runs(self):
@@ -318,7 +348,7 @@ class ProcessingTests(unittest.TestCase):
                             video_path=Path("game.mp4"),
                             output_dir=Path(directory),
                             template=template,
-                            save_crops=False,
+                            sampling=SamplingOptions(),
                         )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))

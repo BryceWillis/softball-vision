@@ -20,6 +20,41 @@ from sidelinehd_extractor.video import probe_video, read_frames_at
 
 
 @dataclass(frozen=True)
+class SamplingOptions:
+    """How a video is sampled and OCR'd — the single source of these defaults.
+
+    The sibling of ``DetectionConfig`` for the sampling layer (M4 / CR-47):
+    ``run_game`` / ``run_youtube_game`` / ``run_playlist_batch`` forward one of
+    these to ``process_video`` untouched instead of re-declaring seven knobs at
+    every hop, and the CLI's ``default=`` values reference it.
+
+    Values only: no collaborators, no callbacks, nothing mutable. ``fields`` is
+    normalized to a tuple because a caller-supplied generator stored here would
+    be consumed once and silently read as empty the second time.
+    """
+
+    sample_every_seconds: float = 5.0
+    start_seconds: float = 0.0
+    end_seconds: Optional[float] = None
+    fields: Optional[tuple] = None
+    save_crops: bool = False
+    compute_video_hash: bool = False
+    ocr_workers: Optional[int] = None  # None = detected CPU count
+
+    def __post_init__(self) -> None:
+        if self.fields is not None and not isinstance(self.fields, tuple):
+            object.__setattr__(self, "fields", tuple(self.fields))
+        if self.sample_every_seconds <= 0:
+            raise ValueError("sample_every_seconds must be > 0")
+        if self.start_seconds < 0:
+            raise ValueError("start_seconds must be >= 0")
+        if self.end_seconds is not None and self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be > start_seconds")
+        if self.ocr_workers is not None and self.ocr_workers < 1:
+            raise ValueError("ocr_workers must be >= 1")
+
+
+@dataclass(frozen=True)
 class ProcessResult:
     """Summary of a process run."""
 
@@ -224,21 +259,15 @@ def process_video(
     output_dir: Path,
     template: Optional[OverlayTemplate] = None,
     roster: Optional[Roster] = None,
-    sample_every_seconds: float = 5.0,
-    start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    save_crops: bool = True,
     ocr: OCRCallable = no_ocr,
-    fields: Optional[Iterable[str]] = None,
     progress: Optional[Callable[[int, int, float, int, int], None]] = None,
-    compute_video_hash: bool = False,
-    ocr_workers: Optional[int] = None,
+    sampling: SamplingOptions = SamplingOptions(),
 ) -> ProcessResult:
     """Sample a local video, crop configured overlay regions, and persist OCR samples."""
 
-    worker_count = _normalize_ocr_workers(ocr_workers)
+    worker_count = _normalize_ocr_workers(sampling.ocr_workers)
     overlay_template = template or default_overlay_template()
-    video = probe_video(video_path, compute_hash=compute_video_hash)
+    video = probe_video(video_path, compute_hash=sampling.compute_video_hash)
     if video.duration_seconds is None:
         raise ValueError("video duration is unavailable")
 
@@ -246,15 +275,15 @@ def process_video(
     crops_dir = run_dir / "crops"
     samples_path = run_dir / "samples.jsonl"
     manifest_path = run_dir / "manifest.json"
-    selected_regions = select_template_regions(overlay_template, fields)
+    selected_regions = select_template_regions(overlay_template, sampling.fields)
 
     samples = []
     crop_count = 0
     timestamps = sample_timestamps(
         video.duration_seconds,
-        sample_every_seconds,
-        start_seconds=start_seconds,
-        end_seconds=end_seconds,
+        sampling.sample_every_seconds,
+        start_seconds=sampling.start_seconds,
+        end_seconds=sampling.end_seconds,
     )
     total_timestamps = len(timestamps)
     total_expected_samples = total_timestamps * len(selected_regions)
@@ -268,7 +297,7 @@ def process_video(
             for field_index, (field_name, region) in enumerate(selected_regions.items()):
                 crop = crop_frame(frame, region)
                 crop_path = None
-                if save_crops:
+                if sampling.save_crops:
                     crop_path = _crop_path(timestamp_seconds, field_name)
                     save_crop(crop, run_dir / crop_path)
                     crop_count += 1
@@ -318,14 +347,14 @@ def process_video(
             "video": video,
             "template": overlay_template,
             "roster": roster,
-            "sample_every_seconds": sample_every_seconds,
-            "start_seconds": start_seconds,
-            "end_seconds": end_seconds,
-            "save_crops": save_crops,
+            "sample_every_seconds": sampling.sample_every_seconds,
+            "start_seconds": sampling.start_seconds,
+            "end_seconds": sampling.end_seconds,
+            "save_crops": sampling.save_crops,
             "ocr_backend": getattr(ocr, "__name__", ocr.__class__.__name__),
             "ocr_workers": worker_count,
             "tesseract_version": getattr(ocr, "tesseract_version", None),
-            "compute_video_hash": compute_video_hash,
+            "compute_video_hash": sampling.compute_video_hash,
             "fields": list(selected_regions.keys()),
             "field_read_stats": field_read_stats,
             "warnings": warnings,

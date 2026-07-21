@@ -13,16 +13,31 @@ from sidelinehd_extractor.cli import (
     _apply_config_defaults,
     _default_run_fields,
     _detection_config_from_args,
+    _download_options_from_args,
+    _export_options_from_args,
     _format_roster_next_command,
     _next_commands,
     _offer_config_update,
     _read_roster_lines_interactive,
+    _sampling_options_from_args,
     build_parser,
     main,
 )
 from sidelinehd_extractor.config import load_project_config, load_roster
 from sidelinehd_extractor.events import DetectionConfig
 from sidelinehd_extractor.models import HalfInning
+from sidelinehd_extractor.processing import SamplingOptions
+from sidelinehd_extractor.workflow import ExportOptions
+from sidelinehd_extractor.youtube import DownloadOptions
+
+#: A minimal argv for each command that runs the whole pipeline. Every config
+#: bundle's defaults are asserted against all three, so the batch path cannot
+#: advertise a different default from the single-game path (M4 / CR-47).
+_RUN_ARGVS = (
+    ["run-game", "game.mp4"],
+    ["run-youtube", "https://youtu.be/example"],
+    ["run-playlist", "https://youtube.com/playlist"],
+)
 
 
 @contextmanager
@@ -249,13 +264,8 @@ class CLITests(unittest.TestCase):
         # unchanged); detect-events has no auto choice because inference runs
         # a layer above it.
         parser = build_parser()
-        run_argvs = (
-            ["run-game", "game.mp4"],
-            ["run-youtube", "https://youtu.be/example"],
-            ["run-playlist", "https://youtube.com/playlist"],
-        )
 
-        for argv in run_argvs:
+        for argv in _RUN_ARGVS:
             with self.subTest(command=argv[0]):
                 config = _detection_config_from_args(parser.parse_args(argv))
                 self.assertEqual(config, DetectionConfig(auto_detect_batting_half=True))
@@ -265,7 +275,7 @@ class CLITests(unittest.TestCase):
                     DetectionConfig(),
                 )
 
-        for argv in run_argvs:
+        for argv in _RUN_ARGVS:
             with self.subTest(command=argv[0], batting_half="both"):
                 config = _detection_config_from_args(
                     parser.parse_args([*argv, "--batting-half", "both"])
@@ -303,6 +313,164 @@ class CLITests(unittest.TestCase):
                 order_validation=False,
             ),
         )
+
+    def test_export_options_from_argv_match_the_dataclass_defaults(self):
+        parser = build_parser()
+
+        for argv in _RUN_ARGVS:
+            with self.subTest(command=argv[0]):
+                self.assertEqual(
+                    _export_options_from_args(parser.parse_args(argv)),
+                    ExportOptions(),
+                )
+
+    def test_export_options_from_argv_carry_explicit_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run-game",
+                "game.mp4",
+                "--chapter-intro-label",
+                "Warmups",
+                "--no-chapter-intro",
+                "--no-inning-score",
+                "--no-at-bat-inning-headers",
+            ]
+        )
+
+        self.assertEqual(
+            _export_options_from_args(args),
+            ExportOptions(
+                include_chapter_intro=False,
+                chapter_intro_label="Warmups",
+                include_inning_score=False,
+                include_at_bat_inning_headers=False,
+            ),
+        )
+
+    def test_sampling_options_from_argv_match_the_dataclass_defaults(self):
+        # The run commands' one departure is ``fields``: they OCR a fixed
+        # subset rather than every template region (the CLI surface, unchanged).
+        # Everything numeric comes straight off SamplingOptions.
+        parser = build_parser()
+
+        for argv in _RUN_ARGVS:
+            with self.subTest(command=argv[0]):
+                sampling = _sampling_options_from_args(parser.parse_args(argv))
+                self.assertEqual(
+                    dataclasses.replace(sampling, fields=None), SamplingOptions()
+                )
+                self.assertEqual(sampling.fields, tuple(_default_run_fields(parser.parse_args(argv))))
+
+    def test_process_command_advertises_the_sampling_defaults(self):
+        # The `process` audit command declares --sample-every and --ocr-workers
+        # separately from the run parsers; both read the same dataclass.
+        args = build_parser().parse_args(["process", "game.mp4"])
+
+        self.assertEqual(args.sample_every, SamplingOptions().sample_every_seconds)
+        self.assertEqual(args.ocr_workers, SamplingOptions().ocr_workers)
+
+    def test_sampling_options_from_argv_carry_explicit_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run-game",
+                "game.mp4",
+                "--sample-every",
+                "2.5",
+                "--start",
+                "1:00",
+                "--end",
+                "2:00",
+                "--field",
+                "inning,count",
+                "--save-crops",
+                "--hash-video",
+                "--ocr-workers",
+                "2",
+            ]
+        )
+
+        self.assertEqual(
+            _sampling_options_from_args(args),
+            SamplingOptions(
+                sample_every_seconds=2.5,
+                start_seconds=60.0,
+                end_seconds=120.0,
+                fields=("inning", "count"),
+                save_crops=True,
+                compute_video_hash=True,
+                ocr_workers=2,
+            ),
+        )
+
+    def test_download_options_from_argv_match_the_dataclass_defaults(self):
+        parser = build_parser()
+        argvs = (
+            ["download", "https://youtu.be/example"],
+            ["prepare-youtube", "https://youtu.be/example"],
+            ["run-youtube", "https://youtu.be/example"],
+            # run-playlist has no --playlist flag: it walks the playlist itself
+            # and downloads one video per entry.
+            ["run-playlist", "https://youtube.com/playlist"],
+        )
+
+        for argv in argvs:
+            with self.subTest(command=argv[0]):
+                self.assertEqual(
+                    _download_options_from_args(parser.parse_args(argv)),
+                    DownloadOptions(),
+                )
+
+    def test_download_options_from_argv_carry_explicit_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "download",
+                "https://youtu.be/example",
+                "--format",
+                "worst",
+                "--merge-output-format",
+                "mkv",
+                "--no-info-json",
+                "--playlist",
+            ]
+        )
+
+        self.assertEqual(
+            _download_options_from_args(args),
+            DownloadOptions(
+                format_selector="worst",
+                merge_output_format="mkv",
+                write_info_json=False,
+                no_playlist=False,
+            ),
+        )
+
+    def test_empty_youtube_client_disables_the_player_client_override(self):
+        # '' is the CLI's "off" sentinel; the dataclass stores None so nothing
+        # downstream has to know about the empty-string convention.
+        args = build_parser().parse_args(
+            ["download", "https://youtu.be/example", "--youtube-client", ""]
+        )
+
+        self.assertIsNone(_download_options_from_args(args).youtube_client)
+
+    def test_zero_sample_interval_is_rejected_with_an_error(self):
+        # Sampling every 0 seconds cannot terminate; reject it up front rather
+        # than in the middle of a long run.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with _working_directory(root):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    with redirect_stdout(io.StringIO()):
+                        exit_code = main(
+                            ["run-game", "game.mp4", "--sample-every", "0", "--ocr", "none"]
+                        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("sample_every_seconds must be > 0", stderr.getvalue())
 
     def test_negative_spacing_is_rejected_with_an_error_not_a_disabled_gate(self):
         # Before M4 this ran and silently disabled the spacing gate.

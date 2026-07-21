@@ -43,6 +43,27 @@ KNOWN_GOOD_YTDLP_VERSION = "2025.10.14"
 
 
 @dataclass(frozen=True)
+class DownloadOptions:
+    """yt-dlp download knobs — the single source of their defaults.
+
+    The download-layer sibling of ``DetectionConfig`` and ``SamplingOptions``
+    (M4 / CR-47): the run entry points forward one of these untouched instead
+    of re-declaring five knobs at every hop, and the CLI's ``default=`` values
+    reference it.
+
+    ``youtube_client`` is ``None`` when the yt-dlp player-client override is
+    disabled; the CLI maps its ``''`` sentinel to ``None`` on the way in, so
+    the emptiness convention stays at the CLI boundary.
+    """
+
+    format_selector: str = DEFAULT_FORMAT_SELECTOR
+    merge_output_format: str = "mp4"
+    write_info_json: bool = True
+    no_playlist: bool = True
+    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT
+
+
+@dataclass(frozen=True)
 class DownloadResult:
     """Summary of a yt-dlp download."""
 
@@ -143,12 +164,8 @@ def installed_ytdlp_version(ydl_module=None) -> Optional[str]:
 
 def build_ytdlp_options(
     output_dir: Path,
-    format_selector: str = DEFAULT_FORMAT_SELECTOR,
+    download_options: DownloadOptions = DownloadOptions(),
     output_template: str = DEFAULT_OUTPUT_TEMPLATE,
-    merge_output_format: str = "mp4",
-    write_info_json: bool = True,
-    no_playlist: bool = True,
-    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
     ffmpeg_location: object = _AUTO_FFMPEG,
 ) -> Dict[str, object]:
     """Build the ``YoutubeDL`` download options used by the CLI and web app.
@@ -160,18 +177,20 @@ def build_ytdlp_options(
     options: Dict[str, object] = {
         "paths": {"home": str(output_dir.expanduser())},
         "outtmpl": output_template,
-        "format": format_selector,
-        "merge_output_format": merge_output_format,
+        "format": download_options.format_selector,
+        "merge_output_format": download_options.merge_output_format,
         "restrictfilenames": True,
         "overwrites": False,
-        "noplaylist": no_playlist,
-        "writeinfojson": write_info_json,
+        "noplaylist": download_options.no_playlist,
+        "writeinfojson": download_options.write_info_json,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
     }
-    if youtube_client:
-        options["extractor_args"] = {"youtube": {"player_client": [youtube_client]}}
+    if download_options.youtube_client:
+        options["extractor_args"] = {
+            "youtube": {"player_client": [download_options.youtube_client]}
+        }
     if ffmpeg_location is _AUTO_FFMPEG:
         ffmpeg_location = resolve_ffmpeg_location()
     if ffmpeg_location:
@@ -236,12 +255,8 @@ def downloaded_video_path(info: object) -> Optional[Path]:
 def download_youtube_video(
     url: str,
     output_dir: Path,
-    format_selector: str = DEFAULT_FORMAT_SELECTOR,
+    download_options: DownloadOptions = DownloadOptions(),
     output_template: str = DEFAULT_OUTPUT_TEMPLATE,
-    merge_output_format: str = "mp4",
-    write_info_json: bool = True,
-    no_playlist: bool = True,
-    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
     ydl_module=None,
 ) -> DownloadResult:
     """Download a YouTube URL in-process and return the resulting local path."""
@@ -250,12 +265,8 @@ def download_youtube_video(
     destination.mkdir(parents=True, exist_ok=True)
     options = build_ytdlp_options(
         output_dir=destination,
-        format_selector=format_selector,
+        download_options=download_options,
         output_template=output_template,
-        merge_output_format=merge_output_format,
-        write_info_json=write_info_json,
-        no_playlist=no_playlist,
-        youtube_client=youtube_client,
     )
     module = ydl_module if ydl_module is not None else load_ytdlp_module()
     try:
@@ -263,7 +274,10 @@ def download_youtube_video(
             info = ydl.extract_info(url, download=True)
     except module.utils.DownloadError as exc:
         raise _download_failure_error(
-            url, exc, youtube_client=youtube_client, ydl_module=module
+            url,
+            exc,
+            youtube_client=download_options.youtube_client,
+            ydl_module=module,
         ) from exc
 
     return DownloadResult(

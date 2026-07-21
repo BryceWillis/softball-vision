@@ -11,6 +11,7 @@ from sidelinehd_extractor.youtube import (
     KNOWN_GOOD_YTDLP_VERSION,
     YTDLP_BUNDLE_DAMAGED_MESSAGE,
     YTDLP_REINSTALL_MESSAGE,
+    DownloadOptions,
     LiveStreamNotReadyError,
     YTDLPError,
     build_ytdlp_options,
@@ -86,7 +87,9 @@ class YoutubeTests(unittest.TestCase):
             "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
             return_value=None,
         ):
-            options = build_ytdlp_options(Path("videos"), write_info_json=False)
+            options = build_ytdlp_options(
+                Path("videos"), DownloadOptions(write_info_json=False)
+            )
 
         self.assertEqual(options["paths"], {"home": "videos"})
         self.assertEqual(options["format"], DEFAULT_FORMAT_SELECTOR)
@@ -106,7 +109,7 @@ class YoutubeTests(unittest.TestCase):
             "sidelinehd_extractor.youtube.resolve_ffmpeg_location",
             return_value=None,
         ):
-            options = build_ytdlp_options(Path("videos"), youtube_client=None)
+            options = build_ytdlp_options(Path("videos"), DownloadOptions(youtube_client=None))
 
         self.assertNotIn("extractor_args", options)
 

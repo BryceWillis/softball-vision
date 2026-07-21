@@ -6,8 +6,14 @@ from pathlib import Path
 from sidelinehd_extractor.batch import run_playlist_batch
 from sidelinehd_extractor.events import DetectionConfig
 from sidelinehd_extractor.models import HalfInning
-from sidelinehd_extractor.workflow import RunGameResult, RunYoutubeGameResult
-from sidelinehd_extractor.youtube import DownloadResult, PlaylistEntry, YTDLPError
+from sidelinehd_extractor.processing import SamplingOptions
+from sidelinehd_extractor.workflow import ExportOptions, RunGameResult, RunYoutubeGameResult
+from sidelinehd_extractor.youtube import (
+    DownloadOptions,
+    DownloadResult,
+    PlaylistEntry,
+    YTDLPError,
+)
 
 
 class PlaylistBatchTests(unittest.TestCase):
@@ -65,6 +71,94 @@ class PlaylistBatchTests(unittest.TestCase):
             )
 
         self.assertEqual(forwarded, [DetectionConfig()])
+
+    def test_run_playlist_batch_forwards_the_other_config_bundles_untouched(self):
+        # 22b: sampling and export knobs travel as objects too, so one
+        # equality check per bundle covers every knob it carries.
+        entries = [PlaylistEntry("one", "https://youtu.be/one", "Game One", 1)]
+        sampling = SamplingOptions(sample_every_seconds=2.5, fields=["inning"], save_crops=True)
+        export_options = ExportOptions(include_chapter_intro=False, chapter_intro_label="Warmups")
+        forwarded = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def run_youtube(**kwargs):
+                forwarded.append((kwargs["sampling"], kwargs["export_options"]))
+                return _run_result(root, "one")
+
+            run_playlist_batch(
+                "playlist",
+                video_dir=root / "videos",
+                output_dir=root / "runs",
+                sampling=sampling,
+                export_options=export_options,
+                list_videos=lambda *_args, **_kwargs: entries,
+                run_youtube=run_youtube,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(forwarded, [(sampling, export_options)])
+
+    def test_run_playlist_batch_forces_single_video_downloads_per_entry(self):
+        # The batch already walked the playlist; letting no_playlist=False
+        # through would re-download the whole list once per entry. Every other
+        # download knob must still arrive as the caller set it.
+        entries = [PlaylistEntry("one", "https://youtu.be/one", "Game One", 1)]
+        forwarded = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def run_youtube(**kwargs):
+                forwarded.append(kwargs["download_options"])
+                return _run_result(root, "one")
+
+            run_playlist_batch(
+                "playlist",
+                video_dir=root / "videos",
+                output_dir=root / "runs",
+                download_options=DownloadOptions(
+                    no_playlist=False,
+                    merge_output_format="mkv",
+                    youtube_client="web",
+                ),
+                list_videos=lambda *_args, **_kwargs: entries,
+                run_youtube=run_youtube,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(
+            forwarded,
+            [
+                DownloadOptions(
+                    no_playlist=True,
+                    merge_output_format="mkv",
+                    youtube_client="web",
+                )
+            ],
+        )
+
+    def test_run_playlist_batch_lists_the_playlist_with_the_configured_client(self):
+        listed = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def list_videos(playlist_url, youtube_client=None):
+                listed.append(youtube_client)
+                return []
+
+            run_playlist_batch(
+                "playlist",
+                video_dir=root / "videos",
+                output_dir=root / "runs",
+                download_options=DownloadOptions(youtube_client="web"),
+                list_videos=list_videos,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(listed, ["web"])
 
     def test_run_playlist_batch_processes_entries_in_order_and_writes_state(self):
         entries = [

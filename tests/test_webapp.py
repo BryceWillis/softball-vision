@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 import html
+import inspect
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -19,7 +20,11 @@ import uvicorn  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from sidelinehd_extractor import cli as cli_module  # noqa: E402
-from sidelinehd_extractor.batch import PlaylistBatchItemResult, PlaylistBatchResult  # noqa: E402
+from sidelinehd_extractor.batch import (  # noqa: E402
+    PlaylistBatchItemResult,
+    PlaylistBatchResult,
+    run_playlist_batch,
+)
 from sidelinehd_extractor.cli import main  # noqa: E402
 from sidelinehd_extractor.events import DetectionConfig  # noqa: E402
 from sidelinehd_extractor.webapp import lifecycle as lifecycle_module  # noqa: E402
@@ -30,7 +35,11 @@ from sidelinehd_extractor.webapp.jobs import (  # noqa: E402
     JobStore,
     summarize_result,
 )
-from sidelinehd_extractor.workflow import RunGameResult, RunYoutubeGameResult  # noqa: E402
+from sidelinehd_extractor.workflow import (  # noqa: E402
+    RunGameResult,
+    RunYoutubeGameResult,
+    run_youtube_game,
+)
 from sidelinehd_extractor.youtube import DownloadResult  # noqa: E402
 
 FAKE_STAGES = ("download", "process", "warning field-never-read: right_score", "export")
@@ -116,6 +125,33 @@ def test_submitted_job_reaches_the_pipeline_with_the_default_detection_config(
     assert store.list()[0].status == "done"
     assert forwarded["detection"] == DetectionConfig(auto_detect_batting_half=True)
     assert "auto_detect_batting_half" not in forwarded
+
+
+def test_default_pipeline_kwargs_still_bind_to_the_real_run_signatures(monkeypatch, tmp_path):
+    """M4 22b: the job runner stubs the pipeline in every other test, so bind
+    its kwargs against the real signatures — otherwise a bundle rename lands as
+    a runtime TypeError in a background worker rather than a failing test."""
+
+    monkeypatch.setattr(jobs_module, "create_ocr_backend", lambda name: object())
+    monkeypatch.chdir(tmp_path)  # no sidelinehd.cfg -> template/roster None
+    kwargs = jobs_module.default_pipeline_kwargs()
+
+    inspect.signature(run_youtube_game).bind(
+        url="https://youtu.be/abc123",
+        video_dir=tmp_path / "videos",
+        output_dir=tmp_path / "runs",
+        stage_progress=None,
+        progress=None,
+        **kwargs,
+    )
+    inspect.signature(run_playlist_batch).bind(
+        playlist_url="https://youtube.com/playlist",
+        video_dir=tmp_path / "videos",
+        output_dir=tmp_path / "runs",
+        stage_progress=None,
+        progress=None,
+        **kwargs,
+    )
 
 
 def test_submit_playlist_dispatches_to_batch(monkeypatch):

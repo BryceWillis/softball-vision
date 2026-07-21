@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
@@ -14,17 +14,18 @@ from sidelinehd_extractor.models import OverlayTemplate, Roster
 from sidelinehd_extractor.naming import slugify
 from sidelinehd_extractor.ocr import OCRCallable, no_ocr
 from sidelinehd_extractor.processing import (
+    SamplingOptions,
     read_jsonl,
     write_jsonl_atomic,
 )
 from sidelinehd_extractor.workflow import (
+    ExportOptions,
     RunYoutubeGameResult,
     record_youtube_source,
     run_youtube_game,
 )
 from sidelinehd_extractor.youtube import (
-    DEFAULT_FORMAT_SELECTOR,
-    DEFAULT_YOUTUBE_CLIENT,
+    DownloadOptions,
     PlaylistEntry,
     YTDLPError,
     list_playlist_videos,
@@ -68,29 +69,17 @@ def run_playlist_batch(
     output_dir: Path,
     template: Optional[OverlayTemplate] = None,
     roster: Optional[Roster] = None,
-    sample_every_seconds: float = 5.0,
-    start_seconds: float = 0.0,
-    end_seconds: Optional[float] = None,
-    save_crops: bool = False,
     ocr: OCRCallable = no_ocr,
-    fields: Optional[Iterable[str]] = None,
     progress: Optional[Callable[[int, int, float, int, int], None]] = None,
-    compute_video_hash: bool = False,
-    ocr_workers: Optional[int] = None,
     output_prefix: Optional[Path] = None,
     corrections: Optional[Iterable[EventCorrection]] = None,
     stage_progress: Optional[Callable[[str], None]] = None,
-    include_chapter_intro: bool = True,
-    chapter_intro_label: str = "Pregame",
-    include_inning_score: bool = True,
-    include_at_bat_inning_headers: bool = True,
+    sampling: SamplingOptions = SamplingOptions(),
+    export_options: ExportOptions = ExportOptions(),
     detection: DetectionConfig = DetectionConfig(),
+    download_options: DownloadOptions = DownloadOptions(),
     batting_half_inference_progress: Optional[Callable[[object], None]] = None,
     auto_detect_template: bool = True,
-    format_selector: str = DEFAULT_FORMAT_SELECTOR,
-    merge_output_format: str = "mp4",
-    write_info_json: bool = True,
-    youtube_client: Optional[str] = DEFAULT_YOUTUBE_CLIENT,
     force: bool = False,
     limit: Optional[int] = None,
     start_index: int = 0,
@@ -118,7 +107,7 @@ def run_playlist_batch(
     previous = _load_playlist_state(state)
     state_snapshot = dict(previous)
     entries = _slice_entries(
-        list_videos(playlist_url, youtube_client=youtube_client),
+        list_videos(playlist_url, youtube_client=download_options.youtube_client),
         start_index=start_index,
         limit=limit,
     )
@@ -140,29 +129,17 @@ def run_playlist_batch(
             output_dir=output_dir,
             template=template,
             roster=roster,
-            sample_every_seconds=sample_every_seconds,
-            start_seconds=start_seconds,
-            end_seconds=end_seconds,
-            save_crops=save_crops,
             ocr=ocr,
-            fields=fields,
             progress=progress,
-            compute_video_hash=compute_video_hash,
-            ocr_workers=ocr_workers,
             output_prefix=_entry_output_prefix(output_prefix, entry),
             corrections=corrections,
             stage_progress=stage_progress,
-            include_chapter_intro=include_chapter_intro,
-            chapter_intro_label=chapter_intro_label,
-            include_inning_score=include_inning_score,
-            include_at_bat_inning_headers=include_at_bat_inning_headers,
+            sampling=sampling,
+            export_options=export_options,
             detection=detection,
+            download_options=download_options,
             batting_half_inference_progress=batting_half_inference_progress,
             auto_detect_template=auto_detect_template,
-            format_selector=format_selector,
-            merge_output_format=merge_output_format,
-            write_info_json=write_info_json,
-            youtube_client=youtube_client,
             retries=retries,
             run_youtube=run_youtube,
             sleep=sleep,
@@ -204,33 +181,25 @@ def _run_playlist_entry(
     output_dir: Path,
     template: Optional[OverlayTemplate],
     roster: Optional[Roster],
-    sample_every_seconds: float,
-    start_seconds: float,
-    end_seconds: Optional[float],
-    save_crops: bool,
     ocr: OCRCallable,
-    fields: Optional[Iterable[str]],
     progress: Optional[Callable[[int, int, float, int, int], None]],
-    compute_video_hash: bool,
-    ocr_workers: Optional[int],
     output_prefix: Optional[Path],
     corrections: Optional[Iterable[EventCorrection]],
     stage_progress: Optional[Callable[[str], None]],
-    include_chapter_intro: bool,
-    chapter_intro_label: str,
-    include_inning_score: bool,
-    include_at_bat_inning_headers: bool,
+    sampling: SamplingOptions,
+    export_options: ExportOptions,
     detection: DetectionConfig,
+    download_options: DownloadOptions,
     batting_half_inference_progress: Optional[Callable[[object], None]],
     auto_detect_template: bool,
-    format_selector: str,
-    merge_output_format: str,
-    write_info_json: bool,
-    youtube_client: Optional[str],
     retries: int,
     run_youtube: Callable[..., RunYoutubeGameResult],
     sleep: Callable[[float], None],
 ) -> PlaylistBatchItemResult:
+    # Each playlist entry is downloaded as a single video, whatever the caller
+    # asked for: the batch already walked the playlist, so letting
+    # ``no_playlist=False`` through would re-download the whole list per entry.
+    entry_download_options = replace(download_options, no_playlist=True)
     for attempt in range(1, retries + 2):
         try:
             result = run_youtube(
@@ -239,30 +208,17 @@ def _run_playlist_entry(
                 output_dir=output_dir,
                 template=template,
                 roster=roster,
-                sample_every_seconds=sample_every_seconds,
-                start_seconds=start_seconds,
-                end_seconds=end_seconds,
-                save_crops=save_crops,
                 ocr=ocr,
-                fields=fields,
                 progress=progress,
-                compute_video_hash=compute_video_hash,
-                ocr_workers=ocr_workers,
                 output_prefix=output_prefix,
                 corrections=corrections,
                 stage_progress=stage_progress,
-                include_chapter_intro=include_chapter_intro,
-                chapter_intro_label=chapter_intro_label,
-                include_inning_score=include_inning_score,
-                include_at_bat_inning_headers=include_at_bat_inning_headers,
+                sampling=sampling,
+                export_options=export_options,
                 detection=detection,
+                download_options=entry_download_options,
                 batting_half_inference_progress=batting_half_inference_progress,
                 auto_detect_template=auto_detect_template,
-                format_selector=format_selector,
-                merge_output_format=merge_output_format,
-                write_info_json=write_info_json,
-                no_playlist=True,
-                youtube_client=youtube_client,
             )
             record_youtube_source(
                 result.run.manifest_path,

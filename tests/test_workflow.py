@@ -7,10 +7,16 @@ from unittest.mock import patch
 from sidelinehd_extractor.events import DetectionConfig, EventDetectionResult
 from sidelinehd_extractor.exports import PROJECT_CREDIT
 from sidelinehd_extractor.models import Event, EventType, HalfInning
-from sidelinehd_extractor.processing import ProcessResult, write_json, write_jsonl
+from sidelinehd_extractor.processing import (
+    ProcessResult,
+    SamplingOptions,
+    write_json,
+    write_jsonl,
+)
 from sidelinehd_extractor.state import StateParseResult
 from sidelinehd_extractor.workflow import (
     NO_SCOREBOARD_WARNING,
+    ExportOptions,
     RunGameResult,
     export_paths,
     finalize_run_exports,
@@ -18,7 +24,7 @@ from sidelinehd_extractor.workflow import (
     run_youtube_game,
     scoreboard_health_warning,
 )
-from sidelinehd_extractor.youtube import DownloadResult
+from sidelinehd_extractor.youtube import DownloadOptions, DownloadResult
 
 
 class WorkflowTests(unittest.TestCase):
@@ -112,12 +118,15 @@ class WorkflowTests(unittest.TestCase):
                                 video_path=Path("game.mp4"),
                                 output_dir=root / "runs",
                                 output_prefix=output_prefix,
-                                compute_video_hash=True,
+                                sampling=SamplingOptions(compute_video_hash=True),
                                 stage_progress=stages.append,
                             )
 
             process.assert_called_once()
-            self.assertTrue(process.call_args.kwargs["compute_video_hash"])
+            self.assertEqual(
+                process.call_args.kwargs["sampling"],
+                SamplingOptions(compute_video_hash=True),
+            )
             parse.assert_called_once_with(process_result.samples_path)
             detect.assert_called_once_with(
                 state_result.output_path,
@@ -315,6 +324,39 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn('"include_at_bat_inning_headers": true', manifest)
             self.assertIn('"output_prefix"', manifest)
 
+    def test_run_game_accepts_export_options_instead_of_rebuilding_them(self):
+        # 22b: the caller's ExportOptions reaches finalize_run_exports intact.
+        # If run_game rebuilt a default instance the intro line would come back
+        # and the manifest would record the wrong formatting for re-exports.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            _, run_dir = self._run_game_with_stubbed_pipeline(
+                root,
+                [],
+                export_options=ExportOptions(
+                    include_chapter_intro=False,
+                    chapter_intro_label="Warmups",
+                    include_inning_score=False,
+                    include_at_bat_inning_headers=False,
+                ),
+            )
+
+            chapters_text = (root / "scratch" / "full_chapters.txt").read_text(encoding="utf-8")
+            self.assertNotIn("Pregame", chapters_text)
+            self.assertNotIn("Warmups", chapters_text)
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["export"],
+                {
+                    "include_chapter_intro": False,
+                    "chapter_intro_label": "Warmups",
+                    "include_inning_score": False,
+                    "include_at_bat_inning_headers": False,
+                    "output_prefix": str(root / "scratch" / "full"),
+                },
+            )
+
     def test_finalize_run_exports_reuses_manifest_persisted_options(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -393,7 +435,7 @@ class WorkflowTests(unittest.TestCase):
                     video_dir=Path("videos"),
                     output_dir=Path("runs"),
                     output_prefix=Path("scratch/full"),
-                    compute_video_hash=True,
+                    sampling=SamplingOptions(compute_video_hash=True),
                     stage_progress=stages.append,
                 )
 
@@ -401,8 +443,13 @@ class WorkflowTests(unittest.TestCase):
         run.assert_called_once()
         self.assertEqual(run.call_args.kwargs["video_path"], Path("videos/game.mp4"))
         self.assertEqual(run.call_args.kwargs["output_prefix"], Path("scratch/full"))
-        self.assertTrue(run.call_args.kwargs["compute_video_hash"])
+        # Every config object reaches run_game untouched (M4 / CR-47).
+        self.assertEqual(
+            run.call_args.kwargs["sampling"], SamplingOptions(compute_video_hash=True)
+        )
+        self.assertEqual(run.call_args.kwargs["export_options"], ExportOptions())
         self.assertEqual(run.call_args.kwargs["detection"], DetectionConfig())
+        self.assertEqual(dl.call_args.kwargs["download_options"], DownloadOptions())
         self.assertTrue(run.call_args.kwargs["generate_review_report"])
         self.assertEqual(result.download, download)
         self.assertEqual(result.run, run_result)
