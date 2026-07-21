@@ -30,10 +30,11 @@ ocr = [
     "tesserocr>=2.7",
     "Pillow>=10",
 ]
-# Item 54d: the macOS menubar launcher (python -m sidelinehd_extractor.desktop
-# and the PyInstaller .app bundle). Needs the web extra too.
+# Items 54d + 68b: the macOS Dock-app launcher (python -m
+# sidelinehd_extractor.desktop and the PyInstaller .app bundle). Needs the
+# web extra too.
 desktop = [
-    "rumps>=0.4",
+    "pyobjc-framework-Cocoa",
 ]
 
 [project.scripts]

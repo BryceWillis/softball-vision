@@ -1,11 +1,13 @@
-"""Tests for the desktop menubar launcher plumbing (item 54d, phase 1).
+"""Tests for the desktop Dock-app launcher plumbing (items 54d, 68b).
 
-The rumps UI itself is not tested (it needs a macOS GUI session); everything
-around it — data dir, port picking, the uvicorn server thread — is.
+The AppKit UI itself is not tested (it needs a macOS GUI session); everything
+below the GUI line — data dir, port picking, the uvicorn server thread, the
+menu models the GUI renders — is.
 """
 
 from __future__ import annotations
 
+import ast
 import os
 import socket
 import urllib.request
@@ -15,13 +17,18 @@ import pytest
 
 from sidelinehd_extractor import desktop
 from sidelinehd_extractor.desktop import (
+    ENTRY_ACTION,
+    ENTRY_DISPLAY_ONLY,
     ServerController,
+    app_menu_entries,
     default_data_dir,
     desktop_pipeline_kwargs,
+    dock_menu_entries,
     find_open_port,
     prepare_data_dir,
 )
 from sidelinehd_extractor.events import DetectionConfig
+from sidelinehd_extractor.updates import update_menu_title
 
 pytest.importorskip("uvicorn")
 
@@ -288,15 +295,15 @@ def test_main_selftest_flag_dispatches_without_starting_the_gui(monkeypatch):
         raise AssertionError("--selftest must not reach the launch path")
 
     monkeypatch.setattr(desktop, "prepare_data_dir", _must_not_run)
-    monkeypatch.setattr(desktop, "run_menubar_app", _must_not_run)
+    monkeypatch.setattr(desktop, "run_dock_app", _must_not_run)
     assert desktop.main(["--selftest"]) == 7
 
 
-def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_menubar(
+def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_app(
     monkeypatch,
 ):
     """Item 67d: the check starts only once the server is up (it must never
-    block launch) and the menubar app receives it to poll."""
+    block launch) and the Dock app receives it to poll."""
 
     events = []
 
@@ -317,21 +324,21 @@ def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_menub
     check = _Check()
     captured = {}
 
-    def fake_menubar(controller, update_check=None):
+    def fake_dock_app(controller, update_check=None):
         captured["update_check"] = update_check
-        events.append("menubar")
+        events.append("dock-app")
 
     monkeypatch.setattr(desktop, "prepare_data_dir", lambda: events.append("data-dir"))
     monkeypatch.setattr(desktop, "find_open_port", lambda: 8000)
     monkeypatch.setattr(desktop, "ServerController", _Controller)
     monkeypatch.setattr(desktop, "UpdateCheck", lambda: check)
     monkeypatch.setattr(desktop.webbrowser, "open", lambda url: events.append("browser"))
-    monkeypatch.setattr(desktop, "run_menubar_app", fake_menubar)
+    monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
 
     assert desktop.main([]) == 0
     assert captured["update_check"] is check
     assert events.index("server-start") < events.index("update-check-start")
-    assert events.index("update-check-start") < events.index("menubar")
+    assert events.index("update-check-start") < events.index("dock-app")
 
 
 def test_server_controller_start_raises_when_port_is_taken():
@@ -343,3 +350,90 @@ def test_server_controller_start_raises_when_port_is_taken():
         with pytest.raises(RuntimeError, match="failed to start"):
             controller.start()
         controller.stop()
+
+
+# --- Menu models (item 68b) --------------------------------------------------
+#
+# The AppKit layer renders these verbatim, so the models are where the menu
+# contract is enforced: what exists, in what order, and what is clickable.
+
+_URL = "http://127.0.0.1:8000"
+_STAMP = "v0.4.1 (a1b2c3d) · built 2026-07-21"
+
+
+def test_app_menu_base_entries_and_order():
+    assert app_menu_entries(_URL, _STAMP) == [
+        ("About SidelineHD Extractor", ENTRY_ACTION),
+        ("", "separator"),
+        ("Open SidelineHD Extractor", ENTRY_ACTION),
+        (f"Running on {_URL}", ENTRY_DISPLAY_ONLY),
+        (_STAMP, ENTRY_DISPLAY_ONLY),
+        ("", "separator"),
+        ("Quit SidelineHD Extractor", ENTRY_ACTION),
+    ]
+
+
+def test_app_menu_update_entry_exists_exactly_when_a_tag_does():
+    without = app_menu_entries(_URL, _STAMP)
+    assert not any("Update available" in title for title, _ in without)
+    entries = app_menu_entries(_URL, _STAMP, update_tag="v9.9.9")
+    update_entry = (update_menu_title("v9.9.9"), ENTRY_ACTION)
+    assert update_entry in entries
+    # In the informational block: right after the stamp, before Quit.
+    assert entries.index(update_entry) == entries.index((_STAMP, ENTRY_DISPLAY_ONLY)) + 1
+    assert entries[-1] == ("Quit SidelineHD Extractor", ENTRY_ACTION)
+
+
+def test_dock_menu_entries_and_update_item():
+    assert dock_menu_entries(_URL) == [
+        ("Open SidelineHD Extractor", ENTRY_ACTION),
+        (f"Running on {_URL}", ENTRY_DISPLAY_ONLY),
+    ]
+    with_update = dock_menu_entries(_URL, update_tag="v1.2.3")
+    assert with_update[-1] == (update_menu_title("v1.2.3"), ENTRY_ACTION)
+
+
+def test_dock_menu_never_carries_its_own_quit():
+    # macOS appends Quit to Dock menus itself; a model Quit would double it.
+    for tag in (None, "v9.9.9"):
+        assert not any(
+            "Quit" in title for title, _ in dock_menu_entries(_URL, update_tag=tag)
+        )
+
+
+def test_status_and_stamp_lines_are_display_only():
+    app_kinds = dict(app_menu_entries(_URL, _STAMP, update_tag="v9.9.9"))
+    assert app_kinds[f"Running on {_URL}"] == ENTRY_DISPLAY_ONLY
+    assert app_kinds[_STAMP] == ENTRY_DISPLAY_ONLY
+    dock_kinds = dict(dock_menu_entries(_URL, update_tag="v9.9.9"))
+    assert dock_kinds[f"Running on {_URL}"] == ENTRY_DISPLAY_ONLY
+
+
+# --- Dock-first packaging and dependency guards (item 68b) -------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_spec_no_longer_marks_the_app_menubar_only():
+    text = (_REPO_ROOT / "packaging" / "sidelinehd.spec").read_text(encoding="utf-8")
+    assert "LSUIElement" not in text
+
+
+def test_desktop_extra_swapped_rumps_for_pyobjc():
+    text = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "rumps" not in text
+    assert "pyobjc-framework-Cocoa" in text
+
+
+def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
+    """The module must stay importable headless (CI, --selftest, this suite):
+    AppKit may only be imported inside run_dock_app."""
+
+    tree = ast.parse(Path(desktop.__file__).read_text(encoding="utf-8"))
+    top_level = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            top_level.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            top_level.add((node.module or "").split(".")[0])
+    assert top_level.isdisjoint({"AppKit", "Cocoa", "objc", "rumps"})

@@ -36,7 +36,7 @@ def _git_short_sha():
 
 # Item 67a: bake build provenance into the bundle so a frozen app — which has
 # no git checkout — can still say when it was built (read back by
-# sidelinehd_extractor/build_info.py, shown in the menubar and web footer).
+# sidelinehd_extractor/build_info.py, shown in the app's menus and web footer).
 _build_info_dir = tempfile.mkdtemp(prefix="sidelinehd-build-info-")
 _build_info_path = os.path.join(_build_info_dir, "build_info.json")
 with open(_build_info_path, "w", encoding="utf-8") as _fh:
@@ -134,8 +134,8 @@ app = BUNDLE(
     icon=ICON_PATH,
     bundle_identifier="dev.sidelinehd.extractor",
     info_plist={
-        # Menubar-only: no Dock icon, no app switcher entry.
-        "LSUIElement": True,
+        # Item 68b: a normal Dock app — no agent/menubar-only plist key, so
+        # the icon shows in the Dock and the app switcher.
         "NSHighResolutionCapable": True,
         "CFBundleShortVersionString": APP_VERSION,
     },

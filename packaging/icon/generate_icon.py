@@ -7,7 +7,7 @@ artwork is reproducible and the swap procedure is self-documenting: replace
 ``make-icns.sh``, rebuild. See packaging/build-macos.md.
 
 The artwork is deliberately modest — a rounded square in the web app's button
-blue carrying the "SHD" monogram the menubar item has carried all along. It is
+blue carrying the "SHD" monogram the app has carried all along. It is
 expected to be replaced whenever real artwork exists. Never player names,
 photographs, or SidelineHD-owned artwork.
 

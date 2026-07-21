@@ -42,13 +42,15 @@ one-time right-click → Open again.)
    button at all** — it looks like a dead end, but it isn't. Close the
    dialog, then right-click the app and choose **Open**.
 
-**5. That's it.** **SHD** appears in your menu bar and your browser opens the
-app on its own. The first page explains the rest: add your team's roster,
+**5. That's it.** The app's icon appears in your Dock and your browser opens
+the app on its own. The first page explains the rest: add your team's roster,
 paste the YouTube link to your game, and wait — a full game takes roughly
 30–45 minutes to read. When it's done, copy the timestamps into your video's
-YouTube description.
+YouTube description. (Closed the browser tab? Click the Dock icon to open it
+again.)
 
-To stop the app, click **SHD** in the menu bar and choose **Quit**.
+To stop the app, quit it like any Mac app: right-click its Dock icon and
+choose **Quit**, or press `Cmd+Q` while it's active.
 
 If something doesn't work, use the app's **Send feedback** button (player
 names are removed automatically) or open a GitHub issue.
@@ -66,8 +68,10 @@ and right-click → **Open** once.
 Each time it launches, the app asks GitHub **once** whether a newer release
 exists — a single anonymous request to `api.github.com` that carries nothing
 about you or your games, gives up after 3 seconds, and does nothing at all
-when you're offline. If a newer version exists, the **SHD** menu shows an
-**Update available … Download…** item that opens the Releases page; download
+when you're offline. If a newer version exists, an
+**Update available … Download…** item appears in the app's menus — the
+**SidelineHD Extractor** menu at the top of the screen, and the Dock icon's
+right-click menu — and opens the Releases page; download
 the new zip and replace the app yourself (the app never replaces itself).
 The fresh download needs the same one-time right-click → **Open** described
 in step 4 above. When you're up to date, no update item appears.

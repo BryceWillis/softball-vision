@@ -59,7 +59,7 @@ pyinstaller --noconfirm packaging/sidelinehd.spec
 The app lands at `dist/SidelineHD Extractor.app`.
 
 The spec bakes a `build_info.json` (package version, git short SHA, build
-date) into the bundle — item 67a's build stamp, shown in the menubar and
+date) into the bundle — item 67a's build stamp, shown in the app menu and
 the web footer so a stale bundle is self-evident. It also sets the bundle's
 `CFBundleShortVersionString` from the installed package version; the version
 macOS reports (Get Info) should match `pyproject.toml`. Building from a
@@ -89,7 +89,7 @@ SIDELINEHD_CHECK_FOR_UPDATES=0 \
   "dist/SidelineHD Extractor.app/Contents/MacOS/SidelineHD Extractor" --selftest
 ```
 
-`--selftest` (item 67b) runs the full startup path minus the menubar — data
+`--selftest` (item 67b) runs the full startup path minus the GUI — data
 dir, dependency self-containment, port pick, server thread, one `GET /`
 that must return 200 — and exits non-zero on any failure. It asserts every
 dependency resolves *inside the bundle*: `missing_dependencies()` empty,
@@ -126,15 +126,20 @@ because the bundle is single-arch.
 ## 7. Verify on a clean account
 
 1. Copy the `.app` to a user account (or machine) with no brew/python setup.
-2. Double-click (first time: right-click → Open). The **SHD** menubar item
-   appears and the browser opens `http://127.0.0.1:8000`.
-   The menubar and the web footer both show the build stamp, e.g.
+2. Double-click (first time: right-click → Open). The app's icon (the
+   item 68a artwork) appears in the Dock and in ⌘Tab — and **no** "SHD" item
+   appears in the menu bar — and the browser opens `http://127.0.0.1:8000`.
+   The app menu and the web footer both show the build stamp, e.g.
    `v0.2.0 (a1b2c3d) · built 2026-07-20` — check the date is today's.
-3. Data lives in `~/Library/Application Support/SidelineHD Extractor/`
+3. Click the Dock icon: the browser opens the app's URL. Right-click it:
+   **Open SidelineHD Extractor**, a non-clickable *Running on …* line, and
+   **Quit**.
+4. Data lives in `~/Library/Application Support/SidelineHD Extractor/`
    (`runs/`, `videos/`, `rosters/`, `sidelinehd.cfg`).
-4. Run a short game video end-to-end: OCR must work with no Tesseract
+5. Run a short game video end-to-end: OCR must work with no Tesseract
    installed (embedded tesserocr + bundled `eng.traineddata`).
-5. Menubar → Quit stops the server and exits.
+6. Quit — Dock right-click → **Quit**, or ⌘Q — stops the server and exits:
+   the port is freed (`lsof -i :8000` clean) and no process survives.
 
 ## App icon
 

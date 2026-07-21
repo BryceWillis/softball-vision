@@ -1,14 +1,17 @@
-"""Menubar desktop launcher for the local web app (item 54d, phase 1).
+"""Dock-first desktop launcher for the local web app (items 54d, 68b).
 
-Runs the same FastAPI app as ``sidelinehd-extractor start`` but as a macOS
-menubar app (via ``rumps``) instead of a terminal process: Open / Status /
-Quit, no terminal required. This module is the entrypoint the PyInstaller
-``.app`` bundle wraps (see ``packaging/``), and it also works from source:
+Runs the same FastAPI app as ``sidelinehd-extractor start`` but as a normal
+macOS Dock app (AppKit, via PyObjC) instead of a terminal process: clicking
+the Dock icon opens the browser, the Dock right-click menu and the app menu
+carry Open / status / Quit, and every standard quit path (⌘Q, the app menu,
+the Dock, logout) stops the server gracefully. No terminal required. This
+module is the entrypoint the PyInstaller ``.app`` bundle wraps (see
+``packaging/``), and it also works from source:
 
     python -m sidelinehd_extractor.desktop
 
-Everything except ``run_menubar_app`` is import-safe headless (no ``rumps``,
-no GUI) so the server-thread and data-dir logic stay unit-testable.
+Everything except ``run_dock_app`` is import-safe headless (no AppKit, no
+GUI) so the server-thread, data-dir, and menu-model logic stay unit-testable.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import threading
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
@@ -33,7 +36,7 @@ APP_NAME = "SidelineHD Extractor"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 #: How many consecutive ports to try when the default is taken (a second
-#: launch or another local app); the menubar app has no terminal to print a
+#: launch or another local app); the desktop app has no terminal to print a
 #: "pick another port" error to, so it must find one itself.
 PORT_ATTEMPTS = 10
 
@@ -135,7 +138,7 @@ class ServerController:
     """Runs uvicorn on a daemon thread so a GUI can start/stop it.
 
     ``uvicorn.run`` (what the CLI uses) installs signal handlers and blocks
-    the main thread; a menubar app needs the main thread for the GUI, so
+    the main thread; a GUI app needs the main thread for AppKit, so
     this drives ``uvicorn.Server`` directly and stops it by setting
     ``should_exit`` — the graceful path uvicorn's own signal handler uses.
     """
@@ -221,60 +224,177 @@ class ServerController:
         self._thread = None
 
 
-def run_menubar_app(
+# --- Menu models (item 68b) --------------------------------------------------
+#
+# The menus' *content* lives here as pure functions returning ordered
+# ``(title, kind)`` tuples, so the unit tests exercise it with no GUI; the
+# AppKit layer in ``run_dock_app`` merely renders them. Item 67d's rule holds
+# in both models: the update entry exists exactly when the check produced a
+# tag — never a "you're up to date" line.
+
+ENTRY_ACTION = "action"
+ENTRY_DISPLAY_ONLY = "display-only"
+ENTRY_SEPARATOR = "separator"
+
+ABOUT_MENU_TITLE = f"About {APP_NAME}"
+OPEN_MENU_TITLE = f"Open {APP_NAME}"
+QUIT_MENU_TITLE = f"Quit {APP_NAME}"
+
+MenuEntry = Tuple[str, str]
+
+
+def _status_line(url: str) -> str:
+    return f"Running on {url}"
+
+
+def app_menu_entries(
+    url: str, stamp: str, update_tag: Optional[str] = None
+) -> List[MenuEntry]:
+    """The app menu: About, Open (⌘O), status + build stamp, update, Quit (⌘Q)."""
+
+    entries: List[MenuEntry] = [
+        (ABOUT_MENU_TITLE, ENTRY_ACTION),
+        ("", ENTRY_SEPARATOR),
+        (OPEN_MENU_TITLE, ENTRY_ACTION),
+        (_status_line(url), ENTRY_DISPLAY_ONLY),
+        # Item 67a: build provenance, so a stale bundle is self-evident from
+        # the menu (a frozen app has no git checkout to ask).
+        (stamp, ENTRY_DISPLAY_ONLY),
+    ]
+    if update_tag is not None:
+        entries.append((update_menu_title(update_tag), ENTRY_ACTION))
+    entries.append(("", ENTRY_SEPARATOR))
+    entries.append((QUIT_MENU_TITLE, ENTRY_ACTION))
+    return entries
+
+
+def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEntry]:
+    """The Dock right-click menu: Open, status, update when one exists.
+
+    Never a Quit entry — macOS appends its own Quit to every Dock menu, and
+    a second one would double it.
+    """
+
+    entries: List[MenuEntry] = [
+        (OPEN_MENU_TITLE, ENTRY_ACTION),
+        (_status_line(url), ENTRY_DISPLAY_ONLY),
+    ]
+    if update_tag is not None:
+        entries.append((update_menu_title(update_tag), ENTRY_ACTION))
+    return entries
+
+
+def run_dock_app(
     controller: ServerController, update_check: Optional[UpdateCheck] = None
 ) -> None:
-    """The rumps menubar UI: Open / Status / Quit. Blocks until Quit."""
+    """The AppKit Dock app (item 68b): renders the menu models above. Blocks
+    until quit.
 
-    import rumps
+    AppKit is imported here, never at module scope, so the module stays
+    importable headless (CI, ``--selftest``, the test suite). Menus are only
+    ever touched from the main thread: the update poll is an ``NSTimer`` on
+    the main run loop, and the Dock menu is rebuilt fresh on every show.
+    """
 
-    class _MenubarApp(rumps.App):
-        def __init__(self) -> None:
-            open_item = rumps.MenuItem(f"Open {APP_NAME}", callback=self._open)
-            status_item = rumps.MenuItem(f"Running on {controller.url}")
-            status_item.set_callback(None)  # display-only
-            # Item 67a: build provenance, so a stale bundle is self-evident
-            # from the menubar (a frozen app has no git checkout to ask).
-            self._stamp_title = stamp_label(build_stamp())
-            stamp_item = rumps.MenuItem(self._stamp_title)
-            stamp_item.set_callback(None)  # display-only
-            super().__init__(
-                APP_NAME,
-                title="SHD",
-                menu=[open_item, status_item, stamp_item],
-                quit_button=rumps.MenuItem("Quit", callback=self._quit),
+    import AppKit
+
+    app = AppKit.NSApplication.sharedApplication()
+    # The bundle's plist yields a Regular (Dock) app now that LSUIElement is
+    # gone; setting the policy here too makes a source run
+    # (python -m sidelinehd_extractor.desktop) behave the same way, with the
+    # generic Python Dock icon accepted for that path.
+    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+
+    stamp = stamp_label(build_stamp())
+    key_equivalents = {OPEN_MENU_TITLE: "o", QUIT_MENU_TITLE: "q"}
+
+    def action_for(title: str):
+        # About and Quit use the standard Cocoa selectors, so Quit funnels
+        # through applicationShouldTerminate_ like every other quit path.
+        if title == ABOUT_MENU_TITLE:
+            return "orderFrontStandardAboutPanel:", app
+        if title == QUIT_MENU_TITLE:
+            return "terminate:", app
+        if title == OPEN_MENU_TITLE:
+            return "openBrowser:", delegate
+        return "openReleases:", delegate  # the update item is the only other action
+
+    def render_menu(entries: List[MenuEntry]):
+        menu = AppKit.NSMenu.alloc().initWithTitle_(APP_NAME)
+        # Autoenable would manage enabled-state on its own schedule; explicit
+        # control keeps the display-only lines (status, stamp) inert.
+        menu.setAutoenablesItems_(False)
+        for title, kind in entries:
+            if kind == ENTRY_SEPARATOR:
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
+                continue
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, None, key_equivalents.get(title, "")
             )
-            # Item 67d: the check runs on its own daemon thread, but rumps
-            # menus are AppKit and must only be touched from the main thread
-            # — which is where rumps.Timer callbacks run. Poll until the
-            # check finishes, then stop; the item appears only when an
-            # update actually exists (never a "you're up to date" item).
-            self._update_timer = None
-            if update_check is not None:
-                self._update_timer = rumps.Timer(self._poll_update_check, 1)
-                self._update_timer.start()
+            if kind == ENTRY_ACTION:
+                selector, target = action_for(title)
+                item.setAction_(selector)
+                item.setTarget_(target)
+                item.setEnabled_(True)
+            else:
+                item.setEnabled_(False)
+            menu.addItem_(item)
+        return menu
 
-        def _poll_update_check(self, _timer) -> None:
-            if update_check is None or not update_check.done:
-                return
-            self._update_timer.stop()
-            tag = update_check.result
-            if tag is None:
-                return
-            item = rumps.MenuItem(update_menu_title(tag), callback=self._open_releases)
-            self.menu.insert_after(self._stamp_title, item)
+    def install_app_menu(update_tag: Optional[str] = None) -> None:
+        main_menu = AppKit.NSMenu.alloc().initWithTitle_("MainMenu")
+        app_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            APP_NAME, None, ""
+        )
+        main_menu.addItem_(app_item)
+        main_menu.setSubmenu_forItem_(
+            render_menu(app_menu_entries(controller.url, stamp, update_tag)), app_item
+        )
+        app.setMainMenu_(main_menu)
 
-        def _open(self, _sender) -> None:
+    class _DockDelegate(AppKit.NSObject):
+        def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _has_windows):
+            # "Click the Dock icon opens the app" — the browser is the UI.
+            webbrowser.open(controller.url)
+            return False
+
+        def applicationDockMenu_(self, _app):
+            # Rebuilt per show, so the update item needs no mutation path.
+            tag = update_check.result if update_check is not None else None
+            return render_menu(dock_menu_entries(controller.url, tag))
+
+        def applicationShouldTerminate_(self, _app):
+            # The single hook that makes ⌘Q, app menu → Quit, Dock → Quit,
+            # and logout all stop the server gracefully. stop() bounds its
+            # thread join, so quit — including logout — can never wedge.
+            controller.stop()
+            return AppKit.NSTerminateNow
+
+        def openBrowser_(self, _sender):
             webbrowser.open(controller.url)
 
-        def _open_releases(self, _sender) -> None:
+        def openReleases_(self, _sender):
             webbrowser.open(RELEASES_PAGE_URL)
 
-        def _quit(self, _sender) -> None:
-            controller.stop()
-            rumps.quit_application()
+        def pollUpdateCheck_(self, timer):
+            # Item 67d: the check runs on its own daemon thread, but menus
+            # must only be touched from the main thread — where this timer
+            # fires. Poll until the check finishes, then stop; the menu is
+            # rebuilt from the model only when an update actually exists.
+            if update_check is None or not update_check.done:
+                return
+            timer.invalidate()
+            if update_check.result is not None:
+                install_app_menu(update_check.result)
 
-    _MenubarApp().run()
+    delegate = _DockDelegate.alloc().init()
+    app.setDelegate_(delegate)
+    install_app_menu()
+    if update_check is not None:
+        AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0, delegate, "pollUpdateCheck:", None, True
+        )
+    app.run()
 
 
 def bundle_dependency_failures() -> List[str]:
@@ -312,8 +432,8 @@ def bundle_dependency_failures() -> List[str]:
 def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
     """Headless smoke test of the startup path (item 67b): exit 0 iff healthy.
 
-    CI runners have no login GUI, so ``rumps`` cannot start there — this is
-    the full ``main()`` path minus the menubar: data dir, dependency
+    CI runners have no login GUI, so the Dock app cannot start there — this
+    is the full ``main()`` path minus the GUI: data dir, dependency
     self-containment (``bundle_dependency_failures``), port pick, server
     thread, one real request to ``/`` asserting 200. CI runs it against the
     *built* bundle binary with a scrubbed PATH so a bundle that leans on the
@@ -347,7 +467,7 @@ def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Bundle entrypoint: chdir to the data dir, start the server, show the menubar."""
+    """Bundle entrypoint: chdir to the data dir, start the server, run the Dock app."""
 
     args = sys.argv[1:] if argv is None else argv
     # Membership test rather than argparse: macOS passes legacy `-psn_...`
@@ -368,7 +488,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # browser so a double-click visibly does something.
     webbrowser.open(controller.url)
     try:
-        run_menubar_app(controller, update_check)
+        run_dock_app(controller, update_check)
     finally:
         controller.stop()
     return 0

@@ -197,7 +197,7 @@ def test_env_var_zero_wins_over_everything(monkeypatch, tmp_path):
 
 
 def test_env_var_one_forces_the_check_from_source(monkeypatch, tmp_path):
-    """The manual-testing path: the source tree can demo the menubar item."""
+    """The manual-testing path: the source tree can demo the update item."""
 
     _clear_gates(monkeypatch, tmp_path, frozen=False)
     monkeypatch.setenv(updates.UPDATE_CHECK_ENV_VAR, "1")
@@ -292,7 +292,7 @@ def test_available_update_swallows_an_unexpected_raise(monkeypatch, tmp_path):
     assert available_update() is None
 
 
-# --- UpdateCheck / menubar label -------------------------------------------
+# --- UpdateCheck / menu label ----------------------------------------------
 
 
 def _wait_for(predicate, timeout=5.0):

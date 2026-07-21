@@ -2,7 +2,7 @@
 
 Item 67a made staleness *visible* to someone who thinks to look at the build
 stamp; this module makes it *arrive*: after the server is up, a daemon thread
-asks GitHub whether a newer release exists, and the menubar offers a
+asks GitHub whether a newer release exists, and the app's menus offer a
 Download item only when one does.
 
 The whole module is built around one rule: a failed update check must be
@@ -148,7 +148,7 @@ def available_update(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Optional[str]:
 
 
 def update_menu_title(tag: str) -> str:
-    """The menubar item's label for an available update."""
+    """The menu item's label for an available update."""
 
     return f"Update available: {tag} — Download…"
 
@@ -157,8 +157,9 @@ class UpdateCheck:
     """Runs ``available_update`` once, on a daemon thread, and holds the result.
 
     The GUI never joins the thread: it polls ``done``/``result`` from a
-    ``rumps.Timer`` (main-thread) callback, which is how the background
-    result reaches the menu without touching AppKit from a worker thread.
+    main-thread timer callback (an ``NSTimer`` on the main run loop), which
+    is how the background result reaches the menu without touching AppKit
+    from a worker thread.
     A daemon thread cannot block Quit, and the timeout above bounds it
     anyway.
     """
