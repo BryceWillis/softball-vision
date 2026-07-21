@@ -421,6 +421,126 @@ class StateParsingTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             state.inning = 2
 
+    def test_smooth_states_rejects_an_isolated_half_flip(self):
+        """One flipped sample inside a settled half-inning is OCR noise.
+
+        Left in, it splits the half-inning chapter in two and — with the
+        batting-half filter on — deletes whichever at-bats landed on it.
+        """
+
+        states = [
+            OverlayState(600.0 + 5.0 * index, inning=3, half=HalfInning.TOP)
+            for index in range(7)
+        ]
+        states[3] = OverlayState(615.0, inning=3, half=HalfInning.BOTTOM)
+
+        smoothed = smooth_states(states)
+
+        self.assertEqual([state.half for state in smoothed], [HalfInning.TOP] * 7)
+
+    def test_smooth_states_keeps_a_real_half_inning_change(self):
+        """The genuine top-to-bottom change inside one inning must survive."""
+
+        halves = [HalfInning.TOP] * 6 + [HalfInning.BOTTOM] * 6
+        states = [
+            OverlayState(600.0 + 5.0 * index, inning=3, half=half)
+            for index, half in enumerate(halves)
+        ]
+
+        smoothed = smooth_states(states)
+
+        self.assertEqual([state.half for state in smoothed], halves)
+
+    def test_smooth_states_does_not_vote_across_an_inning_change(self):
+        """A short trailing half is not outvoted by the next inning's samples.
+
+        The window is wide enough to straddle an inning boundary, so without
+        the same-inning restriction the incoming inning's leadoff reads join
+        the vote and flip the tail of the outgoing one — erasing a
+        half-inning, and every at-bat in it, which is the loss the half vote
+        exists to prevent. Both ``Bottom 3`` samples here sit inside a window
+        that holds three ``TOP`` reads, so the assertion only holds while the
+        restriction does.
+        """
+
+        sequence = [
+            (3, HalfInning.TOP),
+            (3, HalfInning.TOP),
+            (3, HalfInning.BOTTOM),
+            (3, HalfInning.BOTTOM),
+            (4, HalfInning.TOP),
+            (4, HalfInning.TOP),
+            (4, HalfInning.TOP),
+        ]
+        states = [
+            OverlayState(600.0 + 5.0 * index, inning=inning, half=half)
+            for index, (inning, half) in enumerate(sequence)
+        ]
+
+        smoothed = smooth_states(states)
+
+        self.assertEqual([(state.inning, state.half) for state in smoothed], sequence)
+
+    def test_smooth_states_does_not_vote_across_a_capture_gap(self):
+        """Samples on the far side of a capture hole do not join the vote.
+
+        A stream interruption puts unrelated samples inside the window's
+        sample radius while they are minutes away in time. Here the lone
+        ``Bottom 5`` read is the only sample in its own time window, so
+        without the gap filter the two post-gap ``Top 5`` reads outvote it
+        2-to-1 and the half-inning disappears across the interruption.
+        """
+
+        states = [
+            OverlayState(600.0, inning=5, half=HalfInning.BOTTOM),
+            OverlayState(1000.0, inning=5, half=HalfInning.TOP),
+            OverlayState(1005.0, inning=5, half=HalfInning.TOP),
+        ]
+
+        smoothed = smooth_states(states)
+
+        self.assertEqual(
+            [state.half for state in smoothed],
+            [HalfInning.BOTTOM, HalfInning.TOP, HalfInning.TOP],
+        )
+
+    def test_smooth_states_never_invents_a_half(self):
+        """Unknown stays unknown through the majority pass.
+
+        Gap filling may still supply a neighbouring value afterwards, but the
+        vote itself must not manufacture one where nothing was read — here
+        there is no neighbouring inning to fill from either.
+        """
+
+        states = [
+            OverlayState(600.0, inning=None, half=None),
+            OverlayState(605.0, inning=None, half=None),
+        ]
+
+        smoothed = smooth_states(states)
+
+        self.assertEqual([state.half for state in smoothed], [None, None])
+
+    def test_smooth_states_leaves_an_even_split_alone(self):
+        """A tie keeps the observed read, so the pass stays deterministic.
+
+        A window that ties is a window straddling a real boundary; picking a
+        winner there would move the boundary, and picking it by set-iteration
+        order would make the pipeline non-reproducible.
+        """
+
+        halves = [HalfInning.TOP, HalfInning.TOP, HalfInning.BOTTOM, HalfInning.BOTTOM]
+        states = [
+            OverlayState(600.0 + 5.0 * index, inning=3, half=half)
+            for index, half in enumerate(halves)
+        ]
+
+        first = smooth_states(states)
+        second = smooth_states(states)
+
+        self.assertEqual([state.half for state in first], halves)
+        self.assertEqual([state.half for state in first], [state.half for state in second])
+
     def test_smooth_states_fills_short_middle_gap_from_previous_state(self):
         original_states = [
             OverlayState(600.0, inning=1, half=HalfInning.TOP),

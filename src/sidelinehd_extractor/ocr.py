@@ -1121,47 +1121,137 @@ def _extract_highlighted_lineup_crop(image: object):
     return image[top:bottom, left:right]
 
 
-#: HSV bounds for the green-yellow inning arrow (same hue band as the lineup
-#: highlight chip) and the minimum blob size to count as the arrow.
-_ARROW_HSV_LOWER = (25, 60, 120)
-_ARROW_HSV_UPPER = (95, 255, 255)
-_ARROW_MIN_AREA_FRACTION = 0.01
+#: Green-ness weighting for the inning arrow. The arrow renders about ten
+#: pixels tall at the template's native 640x360, so most of the triangle is
+#: anti-aliased edge: a hard ``inRange`` mask keeps only the saturated core and
+#: throws the shape away with it. Measured against hand-labelled frames, the
+#: binary mask classified 62% of reads correctly (a coin flip) while these
+#: continuous weights score 99.9%. Hue is scored by distance from the arrow's
+#: centre hue rather than by membership in a band, so a compression-dulled edge
+#: pixel still contributes in proportion to how green it is.
+_ARROW_HUE_CENTER = 45.0
+_ARROW_HUE_SIGMA = 18.0
+_ARROW_SATURATION_REFERENCE = 120.0
+_ARROW_VALUE_REFERENCE = 150.0
+#: Total green mass below which the crop is taken to hold no arrow at all
+#: (pregame overlay, FINAL banner). Guards against reading a direction out of
+#: stray specks.
+_ARROW_MIN_TOTAL_MASS = 6.0
+#: The arrow sits left of the inning digit. Columns carrying at least this
+#: share of the peak column mass start the arrow; the run is then extended
+#: rightwards so the digit's own anti-aliasing cannot join it.
+_ARROW_COLUMN_MASS_FRACTION = 0.35
+#: Rows below this share of the peak row mass are anti-aliased fringe, not
+#: triangle. Trimming them matters: on real footage the up-arrow carries a
+#: two-pixel shadow stub under its base that, left in, drags the bounding box
+#: down far enough to invert the direction.
+_ARROW_ROW_MASS_FRACTION = 0.30
+_ARROW_MIN_ROWS = 3
+#: The arrow is a roughly equilateral triangle, so what survives isolation must
+#: be about as wide as it is tall and must occupy only its own corner of the
+#: crop. Both guards reject green that is not an arrow at all: the FINAL
+#: banner's green lettering fills the full crop width, the pregame overlay's
+#: green text is two-and-a-half times wider than tall, and a compression-thinned
+#: read can collapse to a single column. Measured on real frames, a genuine
+#: arrow is 6x6 in a 28-wide crop — aspect 1.0, spanning 21% of the width.
+_ARROW_MIN_ASPECT = 0.5
+_ARROW_MAX_ASPECT = 2.0
+_ARROW_MAX_WIDTH_FRACTION = 0.5
+
+
+def _arrow_greenness(image: object) -> object:
+    """Per-pixel green-ness of the inning crop, 0.0-1.0, without thresholding."""
+
+    import cv2
+    import numpy as np
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    hue_score = np.exp(-((hue - _ARROW_HUE_CENTER) ** 2) / (2 * _ARROW_HUE_SIGMA**2))
+    return (
+        hue_score
+        * np.clip(saturation / _ARROW_SATURATION_REFERENCE, 0.0, 1.0)
+        * np.clip(value / _ARROW_VALUE_REFERENCE, 0.0, 1.0)
+    )
+
+
+def _arrow_row_mass(greenness: object) -> object:
+    """Return the arrow triangle's per-row green mass, or ``None``.
+
+    Isolates the arrow from the inning digit by column mass, trims anti-aliased
+    fringe rows so the remaining rows are triangle only, then rejects anything
+    whose proportions are not an arrow's.
+    """
+
+    import numpy as np
+
+    column_mass = greenness.sum(axis=0)
+    if not column_mass.size or column_mass.max() <= 0:
+        return None
+    strong = column_mass >= _ARROW_COLUMN_MASS_FRACTION * column_mass.max()
+    columns = np.flatnonzero(strong)
+    if not columns.size:
+        return None
+    first = int(columns[0])
+    last = first
+    while last + 1 < strong.size and strong[last + 1]:
+        last += 1
+    width = last - first + 1
+    if width > _ARROW_MAX_WIDTH_FRACTION * column_mass.size:
+        return None
+    arrow = greenness[:, first : last + 1]
+    row_mass = arrow.sum(axis=1)
+    if row_mass.max() <= 0:
+        return None
+    rows = np.flatnonzero(row_mass >= _ARROW_ROW_MASS_FRACTION * row_mass.max())
+    if not rows.size:
+        return None
+    height = int(rows[-1]) - int(rows[0]) + 1
+    if not _ARROW_MIN_ASPECT <= width / height <= _ARROW_MAX_ASPECT:
+        return None
+    return row_mass[int(rows[0]) : int(rows[-1]) + 1]
 
 
 def detect_inning_arrow(image: object) -> Optional[str]:
     """Detect the inning arrow direction from the color inning crop.
 
-    Returns ``INNING_ARROW_UP``, ``INNING_ARROW_DOWN``, or ``None``. The
-    up-arrow triangle is widest at its base (bottom); the down-arrow at its
-    top. This pixel test replaces trusting the arrow's OCR rendering, which
-    fuses into the inning digit as a bogus leading "4" (up) or "7" (down).
-    """
+    Returns ``INNING_ARROW_UP``, ``INNING_ARROW_DOWN``, or ``None``. A triangle
+    carries most of its area on the base side, so the half of the arrow with
+    the greater green mass is the base: base low means an up arrow, base high a
+    down arrow. This pixel test replaces trusting the arrow's OCR rendering,
+    which fuses into the inning digit as a bogus leading "4" (up) or "7" (down).
 
-    import cv2
-    import numpy as np
+    What actually fixed this, measured by ablation against 693 hand-labelled
+    frames (the previous version scored 62% — a coin flip that flipped the half
+    on 21% of samples and silently discarded half of one game's at-bats):
+
+    * **Trimming the fringe rows is the whole ballgame** — 692/693 with it,
+      407/693 without. The up arrow carries a two-pixel shadow stub beneath its
+      base; left in, it extends the bounding box downward far enough to put the
+      real base in the *upper* half and invert every up arrow.
+    * **The continuous green-ness mask** is a smaller, real gain: it turns nine
+      or ten no-reads per game into confident ones, because a hard threshold on
+      a ten-pixel anti-aliased glyph keeps only the saturated core.
+    * **Half-mass versus third-width is not load-bearing.** Both score
+      identically once the fringe is trimmed. The halves form is kept only
+      because it reads the whole triangle rather than two rows; do not expect a
+      test to distinguish them.
+    """
 
     if image is None or not hasattr(image, "shape") or len(image.shape) != 3:
         return None
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(
-        hsv,
-        np.array(_ARROW_HSV_LOWER, dtype=np.uint8),
-        np.array(_ARROW_HSV_UPPER, dtype=np.uint8),
-    )
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-    if count < 2:
+    greenness = _arrow_greenness(image)
+    if greenness.sum() < _ARROW_MIN_TOTAL_MASS:
         return None
-    largest = max(range(1, count), key=lambda index: stats[index][4])
-    x, y, w, h, area = stats[largest]
-    if area < _ARROW_MIN_AREA_FRACTION * mask.size or h < 3:
+    row_mass = _arrow_row_mass(greenness)
+    if row_mass is None or len(row_mass) < _ARROW_MIN_ROWS:
         return None
-    component = labels[y : y + h, x : x + w] == largest
-    third = max(1, h // 3)
-    top_width = component[:third].sum(axis=1).max()
-    bottom_width = component[-third:].sum(axis=1).max()
-    if top_width == bottom_width:
+    half = len(row_mass) // 2
+    top_mass = float(row_mass[:half].mean())
+    bottom_mass = float(row_mass[-half:].mean())
+    if top_mass == bottom_mass:
         return None
-    return INNING_ARROW_UP if bottom_width > top_width else INNING_ARROW_DOWN
+    return INNING_ARROW_UP if bottom_mass > top_mass else INNING_ARROW_DOWN
 
 
 def _with_inning_arrow(result: OCRBackendResult, image: object) -> OCRBackendResult:

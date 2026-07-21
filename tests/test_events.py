@@ -13,6 +13,7 @@ from sidelinehd_extractor.events import (
     _score_snapshot,
     _window_has_game_active_signal,
     detect_events,
+    count_at_bats,
     detect_events_file,
     filter_at_bats_to_half,
     infer_batting_cycle,
@@ -241,6 +242,105 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(at_bat.metadata["roster_match_source"], "lineup_number")
         self.assertEqual(at_bat.metadata["batter_number_source"], "lineup_strip")
         self.assertEqual(at_bat.metadata["lineup_strip_confidence"], "lineup_highlight")
+
+    def _strip_state(self, timestamp: float, number: str) -> OverlayState:
+        return OverlayState(
+            timestamp_seconds=timestamp,
+            inning=7,
+            half=HalfInning.TOP,
+            batter_number=number,
+            metadata={
+                "batter_number_source": "lineup_strip",
+                "lineup_strip_confidence": "lineup_highlight",
+            },
+        )
+
+    def _card_state(self, timestamp: float, number: str, name: str) -> OverlayState:
+        return OverlayState(
+            timestamp_seconds=timestamp,
+            inning=7,
+            half=HalfInning.TOP,
+            batter_number=number,
+            metadata={
+                "batter_name": name,
+                "batter_number_source": "batter_card",
+            },
+        )
+
+    def test_detect_events_drops_a_strip_batter_the_card_replaces(self):
+        """A batter announced and then substituted for never bats.
+
+        The lineup strip highlights whoever is *due up*. Observed live: the
+        strip highlighted #14, the scorekeeper entered a substitution, and the
+        batter card went straight from the previous batter to #13 — but #14 was
+        published as an at-bat anyway.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="14", full_name="Ava T.", display_name="Ava T."),
+                RosterPlayer(number="13", full_name="Zoe H.", display_name="Zoe H."),
+            ],
+        )
+
+        events = detect_events(
+            [self._strip_state(5270 + 5 * index, "14") for index in range(8)]
+            + [self._card_state(5315 + 5 * index, "13", "Zoe H.") for index in range(6)],
+            roster=roster,
+        )
+
+        batters = [
+            event.player_number
+            for event in events
+            if event.event_type == EventType.AT_BAT_START
+        ]
+        self.assertEqual(batters, ["13"])
+
+    def test_detect_events_keeps_a_strip_batter_the_card_later_confirms(self):
+        """The card slides in a beat late; that is not a contradiction."""
+
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="14", full_name="Ava T.", display_name="Ava T.")],
+        )
+
+        events = detect_events(
+            [self._strip_state(5270 + 5 * index, "14") for index in range(4)]
+            + [self._card_state(5290 + 5 * index, "14", "Ava T.") for index in range(4)],
+            roster=roster,
+        )
+
+        batters = [
+            event.player_number
+            for event in events
+            if event.event_type == EventType.AT_BAT_START
+        ]
+        self.assertEqual(batters, ["14"])
+
+    def test_detect_events_keeps_a_strip_batter_when_the_card_stays_unreadable(self):
+        """Silence from the card is not contradiction — this recovery is the point.
+
+        Reading the batter off the lineup strip when the card cannot be read is
+        deliberate behaviour (item 61), and must survive the substitution guard.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[RosterPlayer(number="14", full_name="Ava T.", display_name="Ava T.")],
+        )
+
+        events = detect_events(
+            [self._strip_state(5270 + 5 * index, "14") for index in range(8)],
+            roster=roster,
+        )
+
+        batters = [
+            event.player_number
+            for event in events
+            if event.event_type == EventType.AT_BAT_START
+        ]
+        self.assertEqual(batters, ["14"])
 
     def test_detect_events_keeps_old_lineup_number_source_usable(self):
         roster = Roster(
@@ -564,7 +664,7 @@ class EventDetectionTests(unittest.TestCase):
                 strikes=0,
                 batter_number="10",
                 metadata={
-                    "batter_name": "Teagan L.",
+                    "batter_name": "Mia K.",
                     "batter_number_source": "batter_card",
                 },
             )
@@ -580,7 +680,7 @@ class EventDetectionTests(unittest.TestCase):
                 half=HalfInning.TOP,
                 batter_number="10",
                 metadata={
-                    "batter_name": "Teagan L.",
+                    "batter_name": "Mia K.",
                     "batter_number_source": "batter_card",
                 },
             ),
@@ -590,7 +690,7 @@ class EventDetectionTests(unittest.TestCase):
                 half=HalfInning.TOP,
                 batter_number="12",
                 metadata={
-                    "batter_name": "Eliana D.",
+                    "batter_name": "Chloe W.",
                     "batter_number_source": "batter_card",
                 },
             ),
@@ -1832,7 +1932,7 @@ class EventDetectionTests(unittest.TestCase):
                 strikes=0,
                 batter_number="10",
                 metadata={
-                    "batter_name": "Teagan L.",
+                    "batter_name": "Mia K.",
                     "batter_number_source": "batter_card",
                 },
             ),
@@ -2356,7 +2456,7 @@ class EventDetectionTests(unittest.TestCase):
     def test_validate_batting_order_inferred_event_prefers_observed_name(self):
         roster = Roster(
             team_name="Stars",
-            players=[RosterPlayer(number="2", full_name="Savanah P.", display_name="Savanah P.")],
+            players=[RosterPlayer(number="2", full_name="Emma B.", display_name="Emma B.")],
         )
         events = [
             self._at_bat("26", 100),
@@ -2379,7 +2479,7 @@ class EventDetectionTests(unittest.TestCase):
     def test_validate_batting_order_inferred_event_uses_roster_name_as_fallback(self):
         roster = Roster(
             team_name="Stars",
-            players=[RosterPlayer(number="2", full_name="Savanah P.", display_name="Savanah P.")],
+            players=[RosterPlayer(number="2", full_name="Emma B.", display_name="Emma B.")],
         )
         events = [
             self._at_bat("26", 100),
@@ -2404,8 +2504,8 @@ class EventDetectionTests(unittest.TestCase):
             if event.metadata.get("order_flags") == ["inferred-missing"]
         ][0]
 
-        self.assertEqual(inferred.player_name, "Savanah P.")
-        self.assertEqual(inferred.label, "Savanah P. (#2)")
+        self.assertEqual(inferred.player_name, "Emma B.")
+        self.assertEqual(inferred.label, "Emma B. (#2)")
 
     def test_validate_batting_order_does_not_infer_missing_events_across_inning_boundary(self):
         events = [
@@ -2482,6 +2582,108 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(inference.bottom_at_bats, 2)
         self.assertEqual(inference.bottom_roster_matches, 2)
         self.assertIn("Inferred batting half: bottom", inference.message)
+
+    def _named_at_bat(self, timestamp: float, half: HalfInning, number: str, name: str) -> Event:
+        return Event(
+            EventType.AT_BAT_START,
+            timestamp,
+            f"{name} (#{number})",
+            half=half,
+            player_number=number,
+            player_name=name,
+            metadata={"roster_match_source": "name"},
+        )
+
+    def test_infer_batting_half_keeps_both_halves_on_a_near_tie(self):
+        """A near-even split means the half reads are noise, not two batting halves.
+
+        The rostered team bats in one half, so correct half reads make the
+        match counts lopsided. Acting on 14-vs-12 is what deleted 24 of a
+        game's 46 at-bats: the filter is the one step that removes correct
+        at-bats outright, so it must decline rather than guess.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+        events = [
+            self._named_at_bat(600 + 60 * index, HalfInning.TOP, "22", "Maya R.")
+            for index in range(7)
+        ] + [
+            self._named_at_bat(2000 + 60 * index, HalfInning.BOTTOM, "26", "Amelia V.")
+            for index in range(6)
+        ]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertIsNone(inference.inferred_half)
+        self.assertEqual(inference.warning, "ambiguous roster-name match counts")
+        self.assertEqual(inference.top_roster_matches, 7)
+        self.assertEqual(inference.bottom_roster_matches, 6)
+        self.assertEqual(filter_at_bats_to_half(events, inference.inferred_half), events)
+
+    def test_infer_batting_half_still_picks_a_lopsided_split(self):
+        """A real batting half is decisive, and must not be refused."""
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+        events = [
+            self._named_at_bat(600 + 60 * index, HalfInning.TOP, "22", "Maya R.")
+            for index in range(9)
+        ] + [self._named_at_bat(2000, HalfInning.BOTTOM, "26", "Amelia V.")]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertEqual(inference.inferred_half, HalfInning.TOP)
+        self.assertIsNone(inference.warning)
+
+    def test_infer_batting_half_tolerates_batter_cards_lingering_past_the_change(self):
+        """The correct answer is not a clean sweep, and the guard must allow that.
+
+        The batter card stays up a few samples into the next half, so the last
+        batter of each half also scores a roster-name match in the wrong one.
+        On real footage that produced a genuine 14-to-6 split; refusing to
+        filter there would leave the stale-card duplicates in the export.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+        events = [
+            self._named_at_bat(600 + 60 * index, HalfInning.TOP, "22", "Maya R.")
+            for index in range(14)
+        ] + [
+            self._named_at_bat(3000 + 60 * index, HalfInning.BOTTOM, "26", "Amelia V.")
+            for index in range(6)
+        ]
+
+        inference = infer_batting_half(events, roster)
+
+        self.assertEqual(inference.inferred_half, HalfInning.TOP)
+        self.assertIsNone(inference.warning)
+
+    def test_count_at_bats_counts_only_at_bats(self):
+        events = [
+            self._chapter(600, inning=1, half=HalfInning.TOP),
+            self._named_at_bat(610, HalfInning.TOP, "22", "Maya R."),
+            self._named_at_bat(700, HalfInning.TOP, "26", "Amelia V."),
+            Event(EventType.GAME_FINAL, 900, "Final"),
+        ]
+
+        self.assertEqual(count_at_bats(events), 2)
 
     def test_infer_batting_half_falls_back_to_both_without_roster_matches(self):
         roster = Roster(

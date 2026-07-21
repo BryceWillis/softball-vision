@@ -138,9 +138,9 @@ class ReviewTests(unittest.TestCase):
             Event(
                 event_type=EventType.AT_BAT_START,
                 timestamp_seconds=600,
-                label="Savanah P. (#2)",
+                label="Emma B. (#2)",
                 player_number="2",
-                player_name="Savanah P.",
+                player_name="Emma B.",
                 metadata={"order_flags": ["inferred-missing"]},
             ),
         ]

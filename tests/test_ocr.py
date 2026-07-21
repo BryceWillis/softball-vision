@@ -563,6 +563,83 @@ class InningArrowDetectionTests(unittest.TestCase):
         self.assertIsNone(detect_inning_arrow(np.full((21, 28), 50, dtype=np.uint8)))
 
 
+class RealFrameInningArrowTests(unittest.TestCase):
+    """Arrow direction on real captured frames, not drawn triangles.
+
+    The synthetic triangles above passed throughout the period when the shipped
+    detector was reading real footage at 62% accuracy — a coin flip that flipped
+    the half-inning 21% of samples and, through the batting-half filter, silently
+    deleted 24 of one game's 46 at-bats. A clean isoceles triangle on a flat
+    background is not the thing being classified: the real glyph is about ten
+    pixels tall, anti-aliased, h.264-compressed, and carries a shadow stub under
+    its base that inverted the old width comparison.
+
+    Fixtures are 28x21 scoreboard crops from two games — no player names appear
+    in the inning region. Six of the ten arrows below were misread by the
+    shipped heuristic; those are marked, and they are the point of this class.
+    """
+
+    FIXTURES = Path(__file__).parent / "fixtures" / "inning_arrows"
+
+    UP_FIXTURES = (
+        "up_hailstorm_t900",  # old heuristic: DOWN
+        "up_hailstorm_t1200",  # old heuristic: DOWN
+        "up_hailstorm_t4800",  # old heuristic: DOWN
+        "up_rochester_t600",
+        "up_rochester_t3750",
+    )
+    DOWN_FIXTURES = (
+        "down_hailstorm_t1500",  # old heuristic: no direction at all
+        "down_hailstorm_t1600",  # old heuristic: UP
+        "down_hailstorm_t5150",
+        "down_rochester_t1200",  # old heuristic: UP
+        "down_rochester_t2850",  # old heuristic: UP
+    )
+    NO_ARROW_FIXTURES = (
+        "none_final_banner_t5500",  # FINAL banner: green lettering, no arrow
+        "none_pregame_t60",  # pregame overlay: green "GAME..." text
+        "none_thin_read_t4930",  # compression thinned the arrow to one column
+    )
+
+    def _load(self, name):
+        import cv2
+
+        path = self.FIXTURES / f"{name}.png"
+        self.assertTrue(path.exists(), f"missing fixture {path}")
+        image = cv2.imread(str(path))
+        self.assertIsNotNone(image, f"unreadable fixture {path}")
+        return image
+
+    def test_up_arrows(self):
+        from sidelinehd_extractor.constants import INNING_ARROW_UP
+
+        for name in self.UP_FIXTURES:
+            with self.subTest(fixture=name):
+                self.assertEqual(detect_inning_arrow(self._load(name)), INNING_ARROW_UP)
+
+    def test_down_arrows(self):
+        from sidelinehd_extractor.constants import INNING_ARROW_DOWN
+
+        for name in self.DOWN_FIXTURES:
+            with self.subTest(fixture=name):
+                self.assertEqual(detect_inning_arrow(self._load(name)), INNING_ARROW_DOWN)
+
+    def test_overlay_states_without_an_arrow_report_no_direction(self):
+        """Green that is not an arrow must not become a half-inning.
+
+        The FINAL banner and the pregame overlay both put green in the inning
+        region; reporting a direction there invents a half-inning out of
+        lettering. The third fixture is a real arrow that compression thinned
+        to a single column — too degraded to read, and reported as unknown
+        rather than guessed, which is the one case where the shipped detector
+        returned a confidently wrong direction.
+        """
+
+        for name in self.NO_ARROW_FIXTURES:
+            with self.subTest(fixture=name):
+                self.assertIsNone(detect_inning_arrow(self._load(name)))
+
+
 class MultiPsmVotingTests(unittest.TestCase):
     def _run_field(self, field_name, results_by_psm, recorded_configs):
         def fake_run(processed_image, config, name):

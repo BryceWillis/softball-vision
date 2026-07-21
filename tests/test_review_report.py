@@ -211,6 +211,85 @@ class ReviewReportTests(unittest.TestCase):
             self.assertIn("field-never-read", text)
             self.assertIn("right_score", text)
 
+    def test_write_review_report_reports_at_bats_the_half_filter_dropped(self):
+        """Dropped at-bats must be visible where someone looks for missing batters.
+
+        They leave no other mark — an at-bat the filter removes is simply
+        absent from the exports, which reads as "she did not bat".
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            write_json(
+                run_dir / "manifest.json",
+                {
+                    "detection": {
+                        "inferred_batting_half": "top",
+                        "top_roster_matches": 14,
+                        "bottom_roster_matches": 6,
+                        "at_bats_before_half_filter": 46,
+                        "at_bats_dropped_by_half_filter": 24,
+                        "batting_half_warning": None,
+                    }
+                },
+            )
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertIn("batting-half-filter", text)
+            self.assertIn("24 of 46", text)
+
+    def test_write_review_report_reports_an_ambiguous_batting_half(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            write_json(
+                run_dir / "manifest.json",
+                {
+                    "detection": {
+                        "inferred_batting_half": None,
+                        "top_roster_matches": 14,
+                        "bottom_roster_matches": 12,
+                        "at_bats_before_half_filter": 46,
+                        "at_bats_dropped_by_half_filter": 0,
+                        "batting_half_warning": "ambiguous roster-name match counts",
+                    }
+                },
+            )
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertIn("batting-half-ambiguous", text)
+            self.assertIn("may appear twice", text)
+            self.assertNotIn("batting-half-filter", text)
+
+    def test_write_review_report_stays_quiet_when_nothing_was_dropped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            write_json(
+                run_dir / "manifest.json",
+                {
+                    "detection": {
+                        "inferred_batting_half": "top",
+                        "at_bats_before_half_filter": 22,
+                        "at_bats_dropped_by_half_filter": 0,
+                        "batting_half_warning": None,
+                    }
+                },
+            )
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertNotIn("batting-half", text)
+
     def test_write_review_report_ignores_corrupt_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"

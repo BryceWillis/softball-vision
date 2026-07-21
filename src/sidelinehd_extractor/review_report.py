@@ -83,7 +83,7 @@ def write_review_report(
     events = load_events(events_path)
     states = load_states(states_path) if states_path.exists() else []
     samples = load_ocr_samples(samples_path) if samples_path.exists() else []
-    warnings = _manifest_warnings(manifest_path)
+    warnings = _manifest_warnings(manifest_path) + _batting_half_warnings(manifest_path)
     text = render_review_report(
         events=events,
         states=states,
@@ -191,6 +191,55 @@ def _manifest_warnings(manifest_path: Path) -> List[dict]:
     if not isinstance(warnings, list):
         return []
     return [warning for warning in warnings if isinstance(warning, dict)]
+
+
+def _batting_half_warnings(manifest_path: Path) -> List[dict]:
+    """Surface what the batting-half filter removed, or why it declined to.
+
+    Dropped at-bats leave no other mark: they are simply absent from the
+    exports, which reads as "the team did not bat" rather than as a detection
+    failure. This report is where someone looks when the output disagrees with
+    the game, so the count belongs here and not only in the manifest.
+    """
+
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    detection = manifest.get("detection")
+    if not isinstance(detection, dict):
+        return []
+
+    warnings: List[dict] = []
+    dropped = detection.get("at_bats_dropped_by_half_filter")
+    if isinstance(dropped, int) and dropped > 0:
+        total = detection.get("at_bats_before_half_filter")
+        half = detection.get("inferred_batting_half")
+        warnings.append(
+            {
+                "code": "batting-half-filter",
+                "message": (
+                    f"{dropped} of {total} detected at-bats were dropped as not in the "
+                    f"inferred batting half ({half}). If batters are missing from the "
+                    f"exports, check the half-inning reads first."
+                ),
+            }
+        )
+    if detection.get("batting_half_warning"):
+        warnings.append(
+            {
+                "code": "batting-half-ambiguous",
+                "message": (
+                    f"Batting half not inferred ({detection['batting_half_warning']}): "
+                    f"{detection.get('top_roster_matches')} roster-name matches in top, "
+                    f"{detection.get('bottom_roster_matches')} in bottom. Both halves were "
+                    f"kept, so at-bats may appear twice."
+                ),
+            }
+        )
+    return warnings
 
 
 def _render_warnings(warnings: List[dict]) -> List[str]:

@@ -44,6 +44,7 @@ class DetectionConfig:
     min_at_bat_spacing_roster_confirmed_seconds: float = 20.0
     batter_confirmation_window: int = 4
     min_batter_observations: int = 2
+    batter_card_confirmation_window: int = 12
     half_inning_confirmation_window: int = 12
     min_half_inning_observations: int = 4
     min_game_final_observations: int = 3
@@ -55,6 +56,7 @@ class DetectionConfig:
             "min_at_bat_spacing_roster_confirmed_seconds",
             "batter_confirmation_window",
             "min_batter_observations",
+            "batter_card_confirmation_window",
             "half_inning_confirmation_window",
             "min_half_inning_observations",
             "min_game_final_observations",
@@ -101,6 +103,7 @@ class DetectionConfig:
             "order_validation_requested": self.order_validation,
             "batter_confirmation_window": self.batter_confirmation_window,
             "min_batter_observations": self.min_batter_observations,
+            "batter_card_confirmation_window": self.batter_card_confirmation_window,
             "half_inning_confirmation_window": self.half_inning_confirmation_window,
             "min_half_inning_observations": self.min_half_inning_observations,
         }
@@ -310,6 +313,18 @@ def detect_events(
                 name_to_number,
                 config.batter_confirmation_window,
                 config.min_batter_observations,
+            )
+            and not (
+                state.metadata.get("batter_number_source") == BATTER_SOURCE_LINEUP_STRIP
+                and _contradicted_by_batter_card(
+                    ordered_states,
+                    index,
+                    effective_batter_number,
+                    player_name,
+                    roster,
+                    name_to_number,
+                    config.batter_card_confirmation_window,
+                )
             )
         ):
             events.append(
@@ -580,7 +595,7 @@ def infer_batting_half(
     elif top_matches == 0 and bottom_matches == 0:
         warning = "no roster-name matches found"
         inferred_half = None
-    elif top_matches == bottom_matches:
+    elif not _batting_half_margin_is_decisive(top_matches, bottom_matches):
         warning = "ambiguous roster-name match counts"
         inferred_half = None
     else:
@@ -597,6 +612,37 @@ def infer_batting_half(
     )
 
 
+#: The winning half must carry at least twice the other half's roster-name
+#: matches before the filter will act on it.
+#:
+#: The rostered team bats in one half, so a working half read makes the split
+#: lopsided; a broken one drives it toward even. Acting on an even split is what
+#: this guard is for — a 14-vs-12 split, which is a coin flip, once deleted 24
+#: of a game's 46 at-bats with no warning anywhere in the run.
+#:
+#: Two-to-one rather than anything stricter because the *correct* answer is not
+#: 100-vs-0: the batter card lingers a few samples past a half-inning change, so
+#: the last batter of each half also scores a match in the wrong one. Measured on
+#: a fixed run of the game above, the true split was 14-vs-6 (70%) — a threshold
+#: tighter than 2:1 would refuse to filter perfectly good data. This is a
+#: guardrail, not a test: on pure noise a 2:1 split still comes up by chance
+#: about 5% of the time. What makes that acceptable is that it is the second
+#: line of defence, behind an arrow read that is no longer a coin flip.
+_MIN_DECISIVE_BATTING_HALF_RATIO = 2.0
+
+
+def _batting_half_margin_is_decisive(top_matches: int, bottom_matches: int) -> bool:
+    """Whether one half's roster-name matches outweigh the other's decisively."""
+
+    winner = max(top_matches, bottom_matches)
+    loser = min(top_matches, bottom_matches)
+    if winner <= 0:
+        return False
+    if loser <= 0:
+        return True
+    return winner / loser >= _MIN_DECISIVE_BATTING_HALF_RATIO
+
+
 def filter_at_bats_to_half(events: Iterable[Event], half: Optional[HalfInning]) -> List[Event]:
     """Return all chapter events and only at-bats from ``half`` when provided."""
 
@@ -607,6 +653,12 @@ def filter_at_bats_to_half(events: Iterable[Event], half: Optional[HalfInning]) 
         for event in events
         if event.event_type != EventType.AT_BAT_START or event.half == half
     ]
+
+
+def count_at_bats(events: Iterable[Event]) -> int:
+    """Number of at-bat events, for reporting what a filter pass discarded."""
+
+    return sum(1 for event in events if event.event_type == EventType.AT_BAT_START)
 
 
 def format_half_inning_label(inning: int, half: HalfInning) -> str:
@@ -1122,6 +1174,50 @@ def _confirmed_batter_identity(
         ):
             observations += 1
     return observations >= minimum
+
+
+def _contradicted_by_batter_card(
+    states: List[OverlayState],
+    start_index: int,
+    effective_batter_number: str,
+    player_name: Optional[str],
+    roster: Optional[Roster],
+    name_to_number: dict,
+    window: int,
+) -> bool:
+    """Whether the batter card names someone else instead of this strip batter.
+
+    The lineup strip highlights whoever the scorekeeper has *due up*, which is
+    not the same as who bats: a batter announced and then substituted for is
+    highlighted and never takes a pitch (observed live — a strip-only #14 was
+    published for a player who was subbed out before batting, and the card went
+    straight from the previous batter to #13).
+
+    Only a positive contradiction suppresses the at-bat: the card must identify
+    a *different* batter within the window and never this one. Silence is not
+    contradiction, because reading a batter off the strip when the card is
+    unreadable is the recovery this pipeline deliberately performs (item 61).
+    The card is also allowed to arrive late — it slides in over a second or two,
+    so the state that emits the at-bat usually carries no card at all.
+    """
+
+    contradicted = False
+    for state in states[start_index : start_index + window]:
+        if state.metadata.get("batter_number_source") != BATTER_SOURCE_BATTER_CARD:
+            continue
+        observed_name = player_name_for_state(state, roster)
+        observed_number = _effective_batter_number(
+            player_number_for_state(state, observed_name, roster),
+            observed_name,
+            name_to_number,
+        )
+        if observed_number == effective_batter_number:
+            return False
+        if player_name and observed_name and _same_batter_name(observed_name, player_name):
+            return False
+        if observed_number:
+            contradicted = True
+    return contradicted
 
 
 def _confirmed_half_key(

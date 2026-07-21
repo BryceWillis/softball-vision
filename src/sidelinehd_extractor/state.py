@@ -269,6 +269,9 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
     smoothed = []
     away_scores = _smooth_score_sequence([state.away_score for state in states])
     home_scores = _smooth_score_sequence([state.home_score for state in states])
+    # Reject isolated half flips before anything reads the half, so gap filling
+    # propagates a settled value rather than a stray one.
+    states = _smooth_half_sequence(states)
 
     for index, state in enumerate(states):
         inning = state.inning
@@ -297,6 +300,53 @@ def smooth_states(states: List[OverlayState]) -> List[OverlayState]:
         )
 
     return smoothed
+
+
+#: Centred majority window, in samples, for the half-inning read. The half comes
+#: from a ~10px arrow glyph, so even a good detector misreads the occasional
+#: frame, and a lone flip is expensive: it splits a half-inning chapter in two
+#: and, when the batting-half filter is on, deletes the at-bats that landed on
+#: the flipped sample. A half-inning lasts minutes, so voting over the nearest
+#: samples on each side removes the isolated flip while moving a genuine
+#: boundary by at most one sample.
+_HALF_MAJORITY_WINDOW = 5
+
+
+def _smooth_half_sequence(states: List[OverlayState]) -> List[OverlayState]:
+    """Replace isolated half reads with the local majority.
+
+    Votes come only from samples sharing the same inning and close enough in
+    time to be smoothable, so a real top-to-bottom change inside one inning
+    survives — near the boundary the window straddles it and the vote ties.
+    A tie keeps the observed read, which both preserves the boundary and keeps
+    the pass deterministic. Like the score guard, this never invents a value:
+    ``None`` stays ``None``.
+    """
+
+    halves = [state.half for state in states]
+    result = list(halves)
+    radius = _HALF_MAJORITY_WINDOW // 2
+
+    for index, observed in enumerate(halves):
+        if observed is None:
+            continue
+        counts = {HalfInning.TOP: 0, HalfInning.BOTTOM: 0}
+        for cursor in range(max(0, index - radius), min(len(halves), index + radius + 1)):
+            candidate = halves[cursor]
+            if candidate is None or states[cursor].inning != states[index].inning:
+                continue
+            gap_seconds = abs(
+                states[cursor].timestamp_seconds - states[index].timestamp_seconds
+            )
+            if gap_seconds > _MAX_STATE_SMOOTH_GAP_SECONDS:
+                continue
+            counts[candidate] += 1
+        if counts[HalfInning.TOP] > counts[HalfInning.BOTTOM]:
+            result[index] = HalfInning.TOP
+        elif counts[HalfInning.BOTTOM] > counts[HalfInning.TOP]:
+            result[index] = HalfInning.BOTTOM
+
+    return [replace(state, half=result[index]) for index, state in enumerate(states)]
 
 
 # Scores are cumulative, so a read below the established score is OCR noise

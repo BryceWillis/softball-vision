@@ -13,6 +13,7 @@ from sidelinehd_extractor.events import (
     BattingHalfInference,
     DetectionConfig,
     detect_events_file,
+    count_at_bats,
     filter_at_bats_to_half,
     infer_batting_half,
     load_events,
@@ -201,11 +202,31 @@ def run_game(
     _stage(stage_progress, "export")
     events = load_events(event_result.output_path)
     batting_half_inference = None
+    batting_half_audit: dict = {}
     if detection.auto_detect_batting_half:
         batting_half_inference = infer_batting_half(events, roster)
         if batting_half_inference_progress is not None:
             batting_half_inference_progress(batting_half_inference)
+        at_bats_before_half_filter = count_at_bats(events)
         events = filter_at_bats_to_half(events, batting_half_inference.inferred_half)
+        # The filter is the one step that deletes correct at-bats outright when
+        # the half reads are wrong, so what it removed is recorded rather than
+        # left for someone to notice missing from the export (CR: 24 of 46
+        # at-bats dropped on a near-tie inference, with no trace in the run).
+        batting_half_audit = {
+            "inferred_batting_half": (
+                batting_half_inference.inferred_half.value
+                if batting_half_inference.inferred_half is not None
+                else None
+            ),
+            "top_roster_matches": batting_half_inference.top_roster_matches,
+            "bottom_roster_matches": batting_half_inference.bottom_roster_matches,
+            "at_bats_before_half_filter": at_bats_before_half_filter,
+            "at_bats_dropped_by_half_filter": (
+                at_bats_before_half_filter - count_at_bats(events)
+            ),
+            "batting_half_warning": batting_half_inference.warning,
+        }
         if (
             roster is not None
             and detection.order_validation
@@ -219,6 +240,7 @@ def run_game(
         {
             **detection.to_manifest(),
             "order_validation_ran": order_validation_ran,
+            **batting_half_audit,
         },
     )
     event_count = len(events)
