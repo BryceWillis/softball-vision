@@ -65,6 +65,17 @@ datas += [(_build_info_path, ".")]
 # The tesserocr wheel embeds libtesseract + libleptonica as bundled dylibs.
 binaries = collect_dynamic_libs("tesserocr")
 
+# Item 68a: the app icon is committed artwork (see packaging/icon/), so the
+# build needs no generation step. Fail fast if it is missing — a build must
+# never silently produce a blank-Dock-tile bundle.
+ICON_PATH = os.path.join(SPECPATH, "icon", "sidelinehd.icns")
+if not os.path.isfile(ICON_PATH):
+    raise SystemExit(
+        f"App icon missing: {ICON_PATH}\n"
+        "packaging/icon/sidelinehd.icns is committed artwork; restore it or "
+        "regenerate it per packaging/build-macos.md (make-icns.sh)."
+    )
+
 a = Analysis(
     [os.path.join(SPECPATH, "sidelinehd_desktop.py")],
     pathex=[],
@@ -120,7 +131,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name=f"{APP_NAME}.app",
-    icon=None,
+    icon=ICON_PATH,
     bundle_identifier="dev.sidelinehd.extractor",
     info_plist={
         # Menubar-only: no Dock icon, no app switcher entry.

@@ -136,6 +136,21 @@ because the bundle is single-arch.
    installed (embedded tesserocr + bundled `eng.traineddata`).
 5. Menubar → Quit stops the server and exits.
 
+## App icon
+
+The artwork lives in `packaging/icon/` (item 68a). Both the source
+`icon-1024.png` and the rendered `sidelinehd.icns` are **committed**, so
+neither this recipe nor `.github/workflows/package-macos.yml` has an icon
+step — the spec consumes the checked-in `.icns` directly, and fails fast
+if it is missing (like a missing traineddata).
+
+To swap the artwork: replace `icon-1024.png` (the default monogram is
+reproducible via `python packaging/icon/generate_icon.py`), re-run
+`sh packaging/icon/make-icns.sh`, rebuild. No code changes. The default
+"SHD" monogram may blur at the smallest (16px) sizes — acceptable for a
+placeholder; real artwork replaces the PNG, not the pipeline. Icon rules:
+no player names, no photographs, no SidelineHD-owned artwork.
+
 ## Troubleshooting
 
 - **"tesserocr failed to load"** — the venv installed tesserocr from
@@ -145,3 +160,8 @@ because the bundle is single-arch.
   fast if `packaging/tessdata/eng.traineddata` is missing.
 - **App won't open ("damaged")** — signing step skipped, or the zip was
   transferred without preserving the bundle; re-sign per step 4.
+- **Rebuilt app still shows the old (or generic) icon** — Finder and the
+  Dock cache icons aggressively, so after replacing an existing `.app` the
+  old artwork can persist and look like a failed build. Move or rename the
+  copy, or restart the Dock (`killall Dock`), before concluding the icon
+  didn't take.
