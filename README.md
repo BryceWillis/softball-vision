@@ -282,12 +282,14 @@ sidelinehd-extractor --help
 
 If you do not want to install the package, you can run from the repo with
 `PYTHONPATH=src python3 -m sidelinehd_extractor.cli ...` after installing runtime
-dependencies (see [Development Checks](#development-checks) for the Windows
-`PYTHONPATH` syntax):
+dependencies:
 
 ```sh
 python -m pip install -r requirements.txt
 ```
+
+On Windows the `PYTHONPATH` prefix is `$env:PYTHONPATH = "src";` in PowerShell,
+or `set PYTHONPATH=src &&` in cmd.exe.
 
 ## CLI Quick Start
 
@@ -729,31 +731,25 @@ are preserved under [docs/archive/](docs/archive/) for reference; see
 
 ## Development Checks
 
-Run the local test suite.
-
-macOS / Linux:
-
-```sh
-PYTHONPATH=src python -m unittest discover -s tests
-```
-
-Windows (PowerShell):
-
-```powershell
-$env:PYTHONPATH = "src"; python -m unittest discover -s tests
-```
-
-Windows (cmd.exe):
-
-```bat
-set PYTHONPATH=src && python -m unittest discover -s tests
-```
-
-Run lint checks after installing the development dependencies:
+Install the development and web extras, then run the two checks. These commands
+are identical on macOS, Linux, and Windows:
 
 ```sh
-ruff check .
+python -m pip install -e ".[dev,web]"
+python -m pytest tests/
+python -m ruff check .
 ```
+
+Both must be clean before a change is ready.
+
+Run the suite under `pytest`, not `unittest discover`. The suite mixes
+`unittest.TestCase` classes with pytest fixture and function-style tests, so
+`unittest discover` silently collects only part of it and skips the entire
+web-app surface — it reports green on a web-app regression. The web extra is
+installed alongside dev for the same reason: the web-app test modules import
+`fastapi` and `uvicorn` at module scope.
+
+Installing the package with `-e` also removes the need for `PYTHONPATH=src`.
 
 Continuous integration (`.github/workflows/ci.yml`) runs the same test suite
 and ruff on Ubuntu, macOS, and Windows for every push and pull request.
