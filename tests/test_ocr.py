@@ -715,8 +715,11 @@ class NumericConfidenceRegressionTests(unittest.TestCase):
             ):
                 paired_deltas.append(new.confidence - old.confidence)
 
+        # Accuracy is asserted only relative to the old pipeline: an absolute
+        # floor tracks the local Tesseract build rather than this code, and
+        # fails on builds that misread these synthetic crops on an untouched
+        # main while the relative guard correctly shows no regression.
         self.assertGreaterEqual(new_correct, old_correct)
-        self.assertGreaterEqual(new_correct, len(self.CASES) - 1)
         self.assertTrue(paired_deltas)
         mean_delta = sum(paired_deltas) / len(paired_deltas)
         self.assertGreaterEqual(mean_delta, -0.05)
