@@ -372,6 +372,27 @@ def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_
     assert events.index("update-check-start") < events.index("dock-app")
 
 
+def test_launch_no_longer_opens_a_browser(monkeypatch, tmp_path):
+    """Item 70b (D4): launch presents the app's own window. Opening a browser
+    tab from the Dock app is the invention this milestone exists to retire —
+    *"I've never used an app that when I click the icon in the Dock it opens a
+    browser window."*
+
+    ``_patch_main_launch`` records every ``webbrowser.open`` as ``"browser"``,
+    so this asserts over the whole launch path rather than one call site.
+    """
+
+    events = []
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(
+        desktop, "run_dock_app", lambda *a, **k: events.append("dock-app")
+    )
+
+    assert desktop.main([]) == 0
+    assert "dock-app" in events
+    assert "browser" not in events
+
+
 # --- Lifecycle registration (item 70a) ---------------------------------------
 
 
@@ -600,6 +621,7 @@ def test_app_menu_base_entries_and_order():
         ("About SidelineHD Extractor", ENTRY_ACTION),
         ("", "separator"),
         ("Open SidelineHD Extractor", ENTRY_ACTION),
+        ("Open in Browser", ENTRY_ACTION),
         (f"Running on {_URL}", ENTRY_DISPLAY_ONLY),
         (_STAMP, ENTRY_DISPLAY_ONLY),
         ("", "separator"),
@@ -621,6 +643,7 @@ def test_app_menu_update_entry_exists_exactly_when_a_tag_does():
 def test_dock_menu_entries_and_update_item():
     assert dock_menu_entries(_URL) == [
         ("Open SidelineHD Extractor", ENTRY_ACTION),
+        ("Open in Browser", ENTRY_ACTION),
         (f"Running on {_URL}", ENTRY_DISPLAY_ONLY),
     ]
     with_update = dock_menu_entries(_URL, update_tag="v1.2.3")
@@ -643,6 +666,140 @@ def test_status_and_stamp_lines_are_display_only():
     assert dock_kinds[f"Running on {_URL}"] == ENTRY_DISPLAY_ONLY
 
 
+def test_open_in_browser_sits_beside_open_in_both_menus():
+    """D4: the window replaces the browser auto-open, so the browser has to be
+    reachable in one click — and from the same place in both menus."""
+
+    app_titles = [title for title, _ in app_menu_entries(_URL, _STAMP)]
+    dock_titles = [title for title, _ in dock_menu_entries(_URL)]
+    for titles in (app_titles, dock_titles):
+        assert titles.index("Open in Browser") == titles.index(
+            "Open SidelineHD Extractor"
+        ) + 1
+    # Both are clickable — a display-only "Open in Browser" would be a
+    # convincing-looking no-op.
+    assert dict(app_menu_entries(_URL, _STAMP))["Open in Browser"] == ENTRY_ACTION
+    assert dict(dock_menu_entries(_URL))["Open in Browser"] == ENTRY_ACTION
+
+
+# --- The Edit and Window menus (item 70b) ------------------------------------
+
+
+def test_edit_menu_wires_the_clipboard_selectors():
+    """The Edit menu is what makes ⌘C work inside a WKWebView: in AppKit the
+    key equivalents come from the menu, so without it manual copy is dead — in
+    a tool whose entire output is copy-paste kits."""
+
+    entries = desktop.edit_menu_entries()
+    by_selector = {selector: (title, key) for title, selector, key in entries}
+    assert by_selector["copy:"] == ("Copy", "c")
+    assert by_selector["paste:"] == ("Paste", "v")
+    assert by_selector["cut:"] == ("Cut", "x")
+    assert by_selector["selectAll:"] == ("Select All", "a")
+    # ⇧⌘Z, the standard Redo equivalent — an uppercase key equivalent is how
+    # AppKit spells the shift.
+    assert by_selector["redo:"] == ("Redo", "Z")
+
+
+def test_window_menu_closes_the_window_on_command_w():
+    entries = desktop.window_menu_entries()
+    by_selector = {selector: (title, key) for title, selector, key in entries}
+    # performClose: closes the window; D3 is what stops that quitting the app.
+    assert by_selector["performClose:"] == ("Close", "w")
+    assert by_selector["performMiniaturize:"] == ("Minimize", "m")
+
+
+def test_standard_menu_entries_are_all_first_responder_selectors():
+    """These carry no target: they travel the responder chain to the web view,
+    which is the whole mechanism. A selector that is not a real AppKit action
+    would silently grey out instead."""
+
+    for entries in (desktop.edit_menu_entries(), desktop.window_menu_entries()):
+        for title, selector, _key in entries:
+            if selector == desktop.ENTRY_SEPARATOR:
+                assert title == ""
+                continue
+            assert selector.endswith(":"), selector
+            assert title
+
+
+# --- Navigation policy (item 70b, D4) ----------------------------------------
+#
+# The classifier that keeps our page in the window and sends everything else to
+# the real browser, where the user's YouTube and GitHub logins are.
+
+_APP_URL = "http://127.0.0.1:8123"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8123",
+        "http://127.0.0.1:8123/",
+        "http://127.0.0.1:8123/jobs/abc/review",
+        "http://127.0.0.1:8123/feedback?sent=1",
+        "http://127.0.0.1:8123/rosters#anchor",
+    ],
+)
+def test_our_own_pages_stay_in_the_window(url):
+    assert desktop.navigation_opens_in_window(url, _APP_URL)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # Item 63's review-row deep links: the flow that most needs the user's
+        # real browser, logged in, with a back button.
+        "https://www.youtube.com/watch?v=abc123&t=95s",
+        "https://github.com/BryceWillis/softball-vision/issues/new",
+        "mailto:someone@example.com?subject=feedback",
+        "https://127.0.0.1:8123/",  # same host and port, different scheme
+        "http://127.0.0.1:8124/",  # a different local server
+        "http://localhost:8123/",  # a different host string is a different origin
+        "file:///etc/passwd",
+    ],
+)
+def test_everything_else_goes_to_the_browser(url):
+    assert not desktop.navigation_opens_in_window(url, _APP_URL)
+
+
+@pytest.mark.parametrize(
+    "url", ["", "about:blank", "data:text/html,<p>hi", "blob:null/abc", "javascript:void(0)"]
+)
+def test_view_internal_schemes_are_never_handed_to_the_browser(url):
+    """These are loads the view performs on itself. Handing one off would open
+    a browser tab on nothing."""
+
+    assert desktop.navigation_opens_in_window(url, _APP_URL)
+
+
+def test_default_ports_make_one_origin_not_two():
+    assert desktop.navigation_opens_in_window("http://example.test/", "http://example.test:80")
+    assert desktop.navigation_opens_in_window("https://example.test:443/a", "https://example.test")
+
+
+def test_a_malformed_port_does_not_raise():
+    """A launcher must never fail over metadata — and urlsplit raises on
+    `.port` for a non-numeric port rather than returning None."""
+
+    assert not desktop.navigation_opens_in_window("http://127.0.0.1:notaport/", _APP_URL)
+
+
+def test_navigation_action_url_survives_an_action_with_no_url():
+    class _NoURL:
+        def request(self):
+            return self
+
+        def URL(self):
+            return None
+
+    assert desktop._navigation_action_url(_NoURL()) == ""
+    assert desktop._navigation_action_url(object()) == ""
+    # And "" classifies as in-view, so an unreadable action allows the load
+    # rather than opening the browser on an empty string.
+    assert desktop.navigation_opens_in_window("", _APP_URL)
+
+
 # --- Dock-first packaging and dependency guards (item 68b) -------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -657,11 +814,15 @@ def test_desktop_extra_swapped_rumps_for_pyobjc():
     text = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "rumps" not in text
     assert "pyobjc-framework-Cocoa" in text
+    # Item 70b: the window is a system WKWebView, so the extra must carry it —
+    # otherwise run_dock_app raises ImportError on the first launch after a
+    # source install and the app never appears at all.
+    assert "pyobjc-framework-WebKit" in text
 
 
 def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
     """The module must stay importable headless (CI, --selftest, this suite):
-    AppKit may only be imported inside run_dock_app."""
+    AppKit and WebKit may only be imported inside run_dock_app."""
 
     tree = ast.parse(Path(desktop.__file__).read_text(encoding="utf-8"))
     top_level = set()
@@ -670,4 +831,4 @@ def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
             top_level.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             top_level.add((node.module or "").split(".")[0])
-    assert top_level.isdisjoint({"AppKit", "Cocoa", "objc", "rumps"})
+    assert top_level.isdisjoint({"AppKit", "Cocoa", "WebKit", "objc", "rumps"})

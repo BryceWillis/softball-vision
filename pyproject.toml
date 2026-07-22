@@ -30,11 +30,14 @@ ocr = [
     "tesserocr>=2.7",
     "Pillow>=10",
 ]
-# Items 54d + 68b: the macOS Dock-app launcher (python -m
+# Items 54d + 68b + 70b: the macOS Dock-app launcher (python -m
 # sidelinehd_extractor.desktop and the PyInstaller .app bundle). Needs the
-# web extra too.
+# web extra too. WebKit is the app's native window (item 70b): the system
+# WKWebView renders the same page the browser does, so there is no bundled
+# runtime to ship and nothing new to sign.
 desktop = [
     "pyobjc-framework-Cocoa",
+    "pyobjc-framework-WebKit",
 ]
 
 [project.scripts]

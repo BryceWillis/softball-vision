@@ -28,7 +28,9 @@ the setup below.
 - [ ] Install the tool: `python -m pip install -e .`
 - [ ] Confirm the CLI works: `sidelinehd-extractor --help`
 - [ ] If you use the local web app: the packaged Mac app (README Quickstart)
-      starts and stops it from the Dock with no commands. From a source
+      starts and stops it from the Dock with no commands, and opens the app's
+      own window on launch (**Open in Browser** in its menus if you would
+      rather work in a browser tab). From a source
       checkout, launch it with `sidelinehd-extractor start` and use
       `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
       `sidelinehd-extractor restart` to manage it. After updating the code, run

@@ -128,12 +128,26 @@ because the bundle is single-arch.
 1. Copy the `.app` to a user account (or machine) with no brew/python setup.
 2. Double-click (first time: right-click → Open). The app's icon (the
    item 68a artwork) appears in the Dock and in ⌘Tab — and **no** "SHD" item
-   appears in the menu bar — and the browser opens `http://127.0.0.1:8000`.
-   The app menu and the web footer both show the build stamp, e.g.
-   `v0.2.0 (a1b2c3d) · built 2026-07-20` — check the date is today's.
-3. Click the Dock icon: the browser opens the app's URL. Right-click it:
-   **Open SidelineHD Extractor**, a non-clickable *Running on …* line, and
-   **Quit**.
+   appears in the menu bar — and **the app's own window opens** on the home
+   page, titled *SidelineHD Extractor*. **No browser tab opens** (item 70b
+   retired the launch-time browser open). The app menu and the web footer
+   both show the build stamp, e.g. `v0.2.0 (a1b2c3d) · built 2026-07-20` —
+   check the date is today's.
+3. Press ⌘W, then click the Dock icon: the same window comes back, and the
+   server never stopped. Right-click the Dock icon: **Open SidelineHD
+   Extractor**, **Open in Browser**, a non-clickable *Running on …* line, and
+   **Quit**. *Open in Browser* opens the same page in the default browser.
+   - **Select some text in the window and press ⌘C, then paste it
+     elsewhere.** This is what the Edit menu exists for — in AppKit the ⌘C
+     key equivalent comes from that menu, and this product's entire output is
+     copy-paste kits. Check both **Copy** buttons on a finished game too: if
+     one falls back to "Select the text and copy manually", manual copy must
+     actually work.
+   - **Click a review row's timestamp link.** It must open YouTube in the
+     **default browser**, not inside the app's window. Same for the feedback
+     page's GitHub hand-off.
+   - Resize and move the window, quit, and relaunch: the size and position
+     come back.
 4. Data lives in `~/Library/Application Support/SidelineHD Extractor/`
    (`runs/`, `videos/`, `rosters/`, `sidelinehd.cfg`).
 5. Run a short game video end-to-end: OCR must work with no Tesseract

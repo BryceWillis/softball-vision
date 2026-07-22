@@ -42,12 +42,17 @@ one-time right-click → Open again.)
    button at all** — it looks like a dead end, but it isn't. Close the
    dialog, then right-click the app and choose **Open**.
 
-**5. That's it.** The app's icon appears in your Dock and your browser opens
-the app on its own. The first page explains the rest: add your team's roster,
+**5. That's it.** The app's icon appears in your Dock and the app's own window
+opens on the first page. That page explains the rest: add your team's roster,
 paste the YouTube link to your game, and wait — a full game takes roughly
 30–45 minutes to read. When it's done, copy the timestamps into your video's
-YouTube description. (Closed the browser tab? Click the Dock icon to open it
-again.)
+YouTube description.
+
+Closed the window? Click the Dock icon to bring it back. **Closing the window
+does not stop the app** — if it was part-way through reading a game, it keeps
+reading. You can also work in your normal browser instead at any time: choose
+**Open in Browser** from the app menu, or right-click the Dock icon and choose
+it there.
 
 To stop the app, quit it like any Mac app: right-click its Dock icon and
 choose **Quit**, or press `Cmd+Q` while it's active.

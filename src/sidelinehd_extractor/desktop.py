@@ -1,17 +1,25 @@
-"""Dock-first desktop launcher for the local web app (items 54d, 68b).
+"""Dock-first desktop launcher for the local web app (items 54d, 68b, 70a, 70b).
 
 Runs the same FastAPI app as ``sidelinehd-extractor start`` but as a normal
-macOS Dock app (AppKit, via PyObjC) instead of a terminal process: clicking
-the Dock icon opens the browser, the Dock right-click menu and the app menu
-carry Open / status / Quit, and every standard quit path (⌘Q, the app menu,
-the Dock, logout) stops the server gracefully. No terminal required. This
-module is the entrypoint the PyInstaller ``.app`` bundle wraps (see
-``packaging/``), and it also works from source:
+macOS Dock app (AppKit, via PyObjC) instead of a terminal process: launch
+presents the app's own window with the web page inside it (``WKWebView``),
+clicking the Dock icon brings that window back, the Dock right-click menu and
+the app menu carry Open / Open in Browser / status / Quit, and every standard
+quit path (⌘Q, the app menu, the Dock, logout, and `stop` via SIGTERM) stops
+the server gracefully. No terminal required. This module is the entrypoint the
+PyInstaller ``.app`` bundle wraps (see ``packaging/``), and it also works from
+source:
 
     python -m sidelinehd_extractor.desktop
 
+**The window is a frame, not a second UI** (70b, decision D2): it renders the
+page and nothing else, so the footer stamp, the health banner, progress, and
+the plain-language rule keep exactly one home and nothing can drift out of
+sync. The only native chrome is what macOS gives every window for free.
+
 Everything except ``run_dock_app`` is import-safe headless (no AppKit, no
-GUI) so the server-thread, data-dir, and menu-model logic stay unit-testable.
+WebKit, no GUI) so the server-thread, data-dir, menu-model, and
+navigation-policy logic stay unit-testable.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ import signal
 import socket
 import sys
 import threading
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -46,6 +55,18 @@ PORT_ATTEMPTS = 10
 
 _SERVER_START_TIMEOUT_SECONDS = 15.0
 _SERVER_STOP_TIMEOUT_SECONDS = 10.0
+
+#: Window geometry (item 70b). The default is roomy enough for the widest
+#: working page (the game view's 72rem column plus chrome); the minimum is the
+#: narrowest at which that column still reads without horizontal scrolling.
+WINDOW_DEFAULT_SIZE = (1200.0, 860.0)
+WINDOW_MIN_SIZE = (800.0, 600.0)
+#: Size and position persist across launches under this name.
+WINDOW_AUTOSAVE_NAME = "SidelineHDExtractorMainWindow"
+#: A load failure gets exactly one silent retry after this long before the
+#: user is told anything — the server is on loopback, so the realistic
+#: transient is a request that raced startup, not a flaky network.
+WINDOW_RELOAD_DELAY_SECONDS = 0.5
 
 
 def default_data_dir() -> Path:
@@ -357,12 +378,75 @@ def install_sigterm_quit_handler(
     return _handle
 
 
-# --- Menu models (item 68b) --------------------------------------------------
+# --- Navigation policy (item 70b) --------------------------------------------
 #
-# The menus' *content* lives here as pure functions returning ordered
-# ``(title, kind)`` tuples, so the unit tests exercise it with no GUI; the
-# AppKit layer in ``run_dock_app`` merely renders them. Item 67d's rule holds
-# in both models: the update entry exists exactly when the check produced a
+# D4: the window shows *our* page; everything else belongs in the user's real
+# browser, where their YouTube and GitHub logins live. The review rows'
+# timestamp deep links and the feedback page's GitHub/mailto hand-offs are
+# exactly the flows that must not land in a frameless app window with no
+# address bar and no way back.
+#
+# It is a URL classifier, so it is a pure function and needs no GUI to test.
+
+#: Schemes the web view resolves internally rather than navigating to a page.
+#: Handing these to the browser would open a blank tab for a load the view is
+#: doing to itself.
+_IN_VIEW_SCHEMES = frozenset({"", "about", "data", "blob", "javascript"})
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+#: Codes a failed provisional navigation reports when *we* stopped it:
+#: ``NSURLErrorCancelled`` and WebKit's frame-load-interrupted-by-policy-change
+#: — which is exactly what cancelling an external link to hand it to the
+#: browser produces. Treating either as a load failure would put an alert on
+#: screen every time someone clicked a YouTube link.
+_CANCELLED_LOAD_ERROR_CODES = frozenset({-999, 102})
+
+
+def _origin(url: str) -> Tuple[str, str, Optional[int]]:
+    parsed = urllib.parse.urlsplit(url)
+    scheme = parsed.scheme.lower()
+    try:
+        port = parsed.port
+    except ValueError:  # a malformed port ("http://h:notanumber")
+        port = None
+    return scheme, (parsed.hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme)
+
+
+def navigation_opens_in_window(url: str, app_url: str) -> bool:
+    """True when a navigation stays in the window; False → the default browser.
+
+    Same-origin means the *same server*: scheme, host, and port all match
+    ours, with the scheme's default port filled in so ``http://host`` and
+    ``http://host:80`` are one origin rather than two. Anything else — an
+    external site, a ``mailto:``, a link to a different local port — is the
+    user's browser's job.
+    """
+
+    scheme, host, port = _origin(url)
+    if scheme in _IN_VIEW_SCHEMES:
+        return True
+    return (scheme, host, port) == _origin(app_url)
+
+
+def _navigation_action_url(action: object) -> str:
+    """The URL string of a ``WKNavigationAction``, or "" if it has none.
+
+    Every hop is optional in principle, and a launcher must never fail over
+    metadata: an unreadable action classifies as in-view, which allows the
+    load rather than opening a browser tab on nothing.
+    """
+
+    request = getattr(action, "request", None)
+    url = request().URL() if request is not None else None
+    return url.absoluteString() if url is not None else ""
+
+
+# --- Menu models (item 68b, extended by 70b) ---------------------------------
+#
+# The menus' *content* lives here as pure functions returning ordered tuples,
+# so the unit tests exercise it with no GUI; the AppKit layer in
+# ``run_dock_app`` merely renders them. Item 67d's rule holds in both the app
+# and Dock models: the update entry exists exactly when the check produced a
 # tag — never a "you're up to date" line.
 
 ENTRY_ACTION = "action"
@@ -371,9 +455,57 @@ ENTRY_SEPARATOR = "separator"
 
 ABOUT_MENU_TITLE = f"About {APP_NAME}"
 OPEN_MENU_TITLE = f"Open {APP_NAME}"
+OPEN_BROWSER_MENU_TITLE = "Open in Browser"
 QUIT_MENU_TITLE = f"Quit {APP_NAME}"
 
+EDIT_MENU_TITLE = "Edit"
+WINDOW_MENU_TITLE = "Window"
+
 MenuEntry = Tuple[str, str]
+#: ``(title, selector, key equivalent)`` for the two standard menus, whose
+#: items are wired to the *first responder* rather than to a target of ours.
+StandardMenuEntry = Tuple[str, str, str]
+_STANDARD_SEPARATOR: StandardMenuEntry = ("", ENTRY_SEPARATOR, "")
+
+
+def edit_menu_entries() -> List[StandardMenuEntry]:
+    """The Edit menu — mandatory, and the point (item 70b).
+
+    In AppKit the ⌘C/⌘V key equivalents come *from this menu*: with no Edit
+    menu, selecting text in a ``WKWebView`` and pressing ⌘C does nothing. In a
+    tool whose entire output is copy-paste kits that is a first-five-minutes
+    bug, and it is also what makes the page's own "select the text and copy
+    manually" fallback honest.
+
+    Every selector travels the responder chain to the web view, so these need
+    no target and no code behind them.
+    """
+
+    return [
+        ("Undo", "undo:", "z"),
+        ("Redo", "redo:", "Z"),  # capital Z is ⇧⌘Z, the standard equivalent
+        _STANDARD_SEPARATOR,
+        ("Cut", "cut:", "x"),
+        ("Copy", "copy:", "c"),
+        ("Paste", "paste:", "v"),
+        _STANDARD_SEPARATOR,
+        ("Select All", "selectAll:", "a"),
+    ]
+
+
+def window_menu_entries() -> List[StandardMenuEntry]:
+    """The Window menu: Minimize, Zoom, Close (item 70b).
+
+    ⌘W closes the window and **does not quit** (D3) — the server, and a
+    40-minute read with it, outlives a reflexive window tidy-up.
+    """
+
+    return [
+        ("Minimize", "performMiniaturize:", "m"),
+        ("Zoom", "performZoom:", ""),
+        _STANDARD_SEPARATOR,
+        ("Close", "performClose:", "w"),
+    ]
 
 
 def _status_line(url: str) -> str:
@@ -383,12 +515,15 @@ def _status_line(url: str) -> str:
 def app_menu_entries(
     url: str, stamp: str, update_tag: Optional[str] = None
 ) -> List[MenuEntry]:
-    """The app menu: About, Open (⌘O), status + build stamp, update, Quit (⌘Q)."""
+    """The app menu: About, Open (⌘O), Open in Browser, status + stamp, update, Quit."""
 
     entries: List[MenuEntry] = [
         (ABOUT_MENU_TITLE, ENTRY_ACTION),
         ("", ENTRY_SEPARATOR),
         (OPEN_MENU_TITLE, ENTRY_ACTION),
+        # D4: the window replaces the browser auto-open, but the browser stays
+        # first-class one click away — dev tools, several tabs, printing.
+        (OPEN_BROWSER_MENU_TITLE, ENTRY_ACTION),
         (_status_line(url), ENTRY_DISPLAY_ONLY),
         # Item 67a: build provenance, so a stale bundle is self-evident from
         # the menu (a frozen app has no git checkout to ask).
@@ -402,7 +537,7 @@ def app_menu_entries(
 
 
 def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEntry]:
-    """The Dock right-click menu: Open, status, update when one exists.
+    """The Dock right-click menu: Open, Open in Browser, status, update when one exists.
 
     Never a Quit entry — macOS appends its own Quit to every Dock menu, and
     a second one would double it.
@@ -410,6 +545,7 @@ def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEn
 
     entries: List[MenuEntry] = [
         (OPEN_MENU_TITLE, ENTRY_ACTION),
+        (OPEN_BROWSER_MENU_TITLE, ENTRY_ACTION),
         (_status_line(url), ENTRY_DISPLAY_ONLY),
     ]
     if update_tag is not None:
@@ -422,13 +558,14 @@ def run_dock_app(
     update_check: Optional[UpdateCheck] = None,
     on_quit: Optional[Callable[[], None]] = None,
 ) -> None:
-    """The AppKit Dock app (item 68b): renders the menu models above. Blocks
-    until quit.
+    """The AppKit Dock app (items 68b, 70b): one window over the menu models
+    above. Blocks until quit.
 
-    AppKit is imported here, never at module scope, so the module stays
-    importable headless (CI, ``--selftest``, the test suite). Menus are only
-    ever touched from the main thread: the update poll is an ``NSTimer`` on
-    the main run loop, and the Dock menu is rebuilt fresh on every show.
+    AppKit and WebKit are imported here, never at module scope, so the module
+    stays importable headless (CI, ``--selftest``, the test suite). Menus and
+    the window are only ever touched from the main thread: the update poll is
+    an ``NSTimer`` on the main run loop, and the Dock menu is rebuilt fresh on
+    every show.
 
     ``on_quit`` runs inside ``applicationShouldTerminate:`` once the server is
     stopped — item 70a's record removal. It must not run at ``atexit``:
@@ -438,6 +575,7 @@ def run_dock_app(
     """
 
     import AppKit
+    import WebKit
 
     app = AppKit.NSApplication.sharedApplication()
     # The bundle's plist yields a Regular (Dock) app now that LSUIElement is
@@ -457,6 +595,9 @@ def run_dock_app(
         if title == QUIT_MENU_TITLE:
             return "terminate:", app
         if title == OPEN_MENU_TITLE:
+            # 70b: "Open" now means *our window*, not a browser tab.
+            return "presentWindow:", delegate
+        if title == OPEN_BROWSER_MENU_TITLE:
             return "openBrowser:", delegate
         return "openReleases:", delegate  # the update item is the only other action
 
@@ -482,22 +623,199 @@ def run_dock_app(
             menu.addItem_(item)
         return menu
 
+    def render_standard_menu(title: str, entries: List[StandardMenuEntry]):
+        """Render Edit / Window: items wired to the responder chain, no target.
+
+        Autoenabling is left on (unlike the app menu, whose display-only lines
+        must stay inert): it is what lets AppKit ask the web view whether it
+        currently has a selection to copy, and grey Copy out when it does not.
+        """
+
+        menu = AppKit.NSMenu.alloc().initWithTitle_(title)
+        for entry_title, selector, key in entries:
+            if selector == ENTRY_SEPARATOR:
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
+                continue
+            item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                entry_title, None, key
+            )
+            item.setAction_(selector)
+            menu.addItem_(item)
+        return menu
+
+    def add_submenu(main_menu, title: str, submenu):
+        item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            title, None, ""
+        )
+        main_menu.addItem_(item)
+        main_menu.setSubmenu_forItem_(submenu, item)
+        return submenu
+
     def install_app_menu(update_tag: Optional[str] = None) -> None:
         main_menu = AppKit.NSMenu.alloc().initWithTitle_("MainMenu")
-        app_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            APP_NAME, None, ""
+        add_submenu(
+            main_menu,
+            APP_NAME,
+            render_menu(app_menu_entries(controller.url, stamp, update_tag)),
         )
-        main_menu.addItem_(app_item)
-        main_menu.setSubmenu_forItem_(
-            render_menu(app_menu_entries(controller.url, stamp, update_tag)), app_item
+        # 70b: the Edit menu is what makes ⌘C work inside the web view — see
+        # edit_menu_entries. The Window menu carries ⌘W, which closes the
+        # window without quitting (D3).
+        add_submenu(
+            main_menu,
+            EDIT_MENU_TITLE,
+            render_standard_menu(EDIT_MENU_TITLE, edit_menu_entries()),
+        )
+        window_menu = add_submenu(
+            main_menu,
+            WINDOW_MENU_TITLE,
+            render_standard_menu(WINDOW_MENU_TITLE, window_menu_entries()),
         )
         app.setMainMenu_(main_menu)
+        # Lets AppKit keep the standard window list at the foot of the menu.
+        app.setWindowsMenu_(window_menu)
+
+    # --- The window (item 70b) ---
+    #
+    # One window, ever. It is a frame around the page (D2): no native toolbar,
+    # no native status widgets, nothing that could drift out of step with what
+    # the page itself already shows.
+
+    window_state: dict = {}
+
+    def load_url(url: str) -> None:
+        web_view = window_state.get("web_view")
+        if web_view is None:
+            return
+        target = AppKit.NSURL.URLWithString_(url)
+        if target is not None:
+            web_view.loadRequest_(AppKit.NSURLRequest.requestWithURL_(target))
+
+    def build_window():
+        web_view = WebKit.WKWebView.alloc().initWithFrame_configuration_(
+            AppKit.NSMakeRect(0.0, 0.0, *WINDOW_DEFAULT_SIZE),
+            WebKit.WKWebViewConfiguration.alloc().init(),
+        )
+        web_view.setNavigationDelegate_(delegate)
+        web_view.setUIDelegate_(delegate)
+        web_view.setAutoresizingMask_(
+            AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
+        )
+        window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            AppKit.NSMakeRect(0.0, 0.0, *WINDOW_DEFAULT_SIZE),
+            AppKit.NSWindowStyleMaskTitled
+            | AppKit.NSWindowStyleMaskClosable
+            | AppKit.NSWindowStyleMaskMiniaturizable
+            | AppKit.NSWindowStyleMaskResizable,
+            AppKit.NSBackingStoreBuffered,
+            False,
+        )
+        window.setTitle_(APP_NAME)
+        # Closing must not deallocate it (D3: close is not quit) — the app
+        # stays in the Dock, and the click that follows re-presents this one.
+        window.setReleasedWhenClosed_(False)
+        window.setContentMinSize_(AppKit.NSMakeSize(*WINDOW_MIN_SIZE))
+        window.setContentView_(web_view)
+        window.center()
+        window.setFrameAutosaveName_(WINDOW_AUTOSAVE_NAME)
+        # setFrameAutosaveName_ arranges only the *saving*; this is what
+        # restores the last launch's size and position when there is one.
+        window.setFrameUsingName_(WINDOW_AUTOSAVE_NAME)
+        window_state["window"] = window
+        window_state["web_view"] = web_view
+        load_url(controller.url)
+        return window
+
+    def present_window() -> None:
+        window = window_state.get("window") or build_window()
+        window.makeKeyAndOrderFront_(None)
+        app.activateIgnoringOtherApps_(True)
+
+    def open_externally(url: str) -> None:
+        if url:
+            webbrowser.open(url)
+
+    def show_load_failure_alert() -> None:
+        # Never a blank white window with no explanation: say what happened
+        # and offer the two things that actually help.
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_(f"{APP_NAME} could not show its page.")
+        alert.setInformativeText_(
+            "The app is running, but its page did not load. You can open it in "
+            "your browser instead, or quit and open the app again."
+        )
+        alert.addButtonWithTitle_(OPEN_BROWSER_MENU_TITLE)
+        alert.addButtonWithTitle_(QUIT_MENU_TITLE)
+        if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+            webbrowser.open(controller.url)
+        else:
+            app.terminate_(None)
+
+    def handle_load_failure(error) -> None:
+        if error is not None and error.code() in _CANCELLED_LOAD_ERROR_CODES:
+            return  # we cancelled it ourselves, on its way to the browser
+        if not window_state.get("retried"):
+            window_state["retried"] = True
+            AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                WINDOW_RELOAD_DELAY_SECONDS, delegate, "retryLoad:", None, False
+            )
+            return
+        show_load_failure_alert()
 
     class _DockDelegate(AppKit.NSObject):
         def applicationShouldHandleReopen_hasVisibleWindows_(self, _app, _has_windows):
-            # "Click the Dock icon opens the app" — the browser is the UI.
-            webbrowser.open(controller.url)
+            # 70b: a Dock icon is a promise of windows, and this is the window
+            # it promises. M5 answered this hook by launching Safari, which is
+            # the invention the owner tripped over on first use.
+            present_window()
             return False
+
+        def applicationShouldTerminateAfterLastWindowClosed_(self, _app):
+            # D3. ⌘W tidies the window away; the server, and a 30–45-minute
+            # read with it, keeps going. This is the Music/Mail model.
+            return False
+
+        def presentWindow_(self, _sender):
+            present_window()
+
+        def retryLoad_(self, _timer):
+            load_url(controller.url)
+
+        def webView_didFinishNavigation_(self, _web_view, _navigation):
+            window_state["retried"] = False
+
+        def webView_didFailProvisionalNavigation_withError_(
+            self, _web_view, _navigation, error
+        ):
+            handle_load_failure(error)
+
+        def webView_didFailNavigation_withError_(self, _web_view, _navigation, error):
+            handle_load_failure(error)
+
+        def webView_decidePolicyForNavigationAction_decisionHandler_(
+            self, _web_view, action, decision_handler
+        ):
+            # D4: our origin stays here; everything else goes to the real
+            # browser, where the user's YouTube and GitHub logins live.
+            target = _navigation_action_url(action)
+            if navigation_opens_in_window(target, controller.url):
+                decision_handler(WebKit.WKNavigationActionPolicyAllow)
+                return
+            decision_handler(WebKit.WKNavigationActionPolicyCancel)
+            open_externally(target)
+
+        def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
+            self, _web_view, _configuration, action, _features
+        ):
+            # target="_blank" — the review rows' YouTube deep links (item 63)
+            # and the feedback page's GitHub hand-off arrive here. There is
+            # exactly one window, ever: navigate it or hand off, create nothing.
+            target = _navigation_action_url(action)
+            if navigation_opens_in_window(target, controller.url):
+                load_url(target)
+            else:
+                open_externally(target)
+            return None
 
         def applicationDockMenu_(self, _app):
             # Rebuilt per show, so the update item needs no mutation path.
@@ -547,6 +865,10 @@ def run_dock_app(
     # here nothing asks a question yet, so it is only written to.
     quit_context = QuitContext()
     install_sigterm_quit_handler(lambda: app.terminate_(None), quit_context)
+    # Item 70b: launch presents the app's own window. This is what replaced
+    # main()'s `webbrowser.open` — a Dock app that opens a different
+    # application is the shape this milestone exists to retire.
+    present_window()
     AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         1.0, delegate, "heartbeat:", None, True
     )
@@ -627,7 +949,7 @@ def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Bundle entrypoint: chdir to the data dir, start the server, run the Dock app."""
+    """Bundle entrypoint: chdir to the data dir, start the server, show the window."""
 
     args = sys.argv[1:] if argv is None else argv
     # Membership test rather than argparse: macOS passes legacy `-psn_...`
@@ -647,9 +969,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # check must never block launch, and --selftest never reaches this path.
     update_check = UpdateCheck()
     update_check.start()
-    # First launch orientation (matches the 54b `start` behavior): open the
-    # browser so a double-click visibly does something.
-    webbrowser.open(controller.url)
+    # Item 70b (D4): no `webbrowser.open` here any more. A double-click is
+    # answered by the app's *own* window, which run_dock_app presents; the
+    # browser stays one click away on the Open in Browser menu item.
     try:
         run_dock_app(
             controller, update_check, on_quit=lambda: release_server_record(record)
