@@ -17,13 +17,14 @@ GUI) so the server-thread, data-dir, and menu-model logic stay unit-testable.
 from __future__ import annotations
 
 import os
+import signal
 import socket
 import sys
 import threading
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
@@ -31,6 +32,9 @@ from sidelinehd_extractor.updates import (
     UpdateCheck,
     update_menu_title,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from sidelinehd_extractor.webapp.lifecycle import ServerState
 
 APP_NAME = "SidelineHD Extractor"
 DEFAULT_HOST = "127.0.0.1"
@@ -224,6 +228,135 @@ class ServerController:
         self._thread = None
 
 
+# --- Lifecycle registration (item 70a) ---------------------------------------
+#
+# Item 65's staleness defence — `status` / `stop` / `restart` over the shared
+# `webapp.json` record — was built because an orphaned stale server once
+# produced two days of plausible wrong scores. It was CLI-side only, so the
+# app that is now the *primary* onboarding path was the one server it could
+# not see. The app writes the same record, tagged `origin="app"` so `restart`
+# can decline politely rather than try to respawn a bundle.
+
+
+def register_server_record(
+    controller: ServerController,
+    data_dir: Path,
+    path: Optional[Path] = None,
+) -> Optional["ServerState"]:
+    """Record this app as the running server; return the record, or None.
+
+    None means we are serving *unregistered* — either another live server owns
+    the record (we decline to erase it) or the write failed. Both are warned
+    about and neither stops the launch: a launcher must never fail to launch
+    over metadata (the M1 rule), and the record is a defence, not a dependency.
+    """
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    target = path or lifecycle.server_state_path()
+    state = lifecycle.new_server_state(
+        controller.host,
+        controller.port,
+        # A frozen bundle has no installed distribution metadata to read
+        # (`importlib.metadata` reports "unknown" under PyInstaller), so the
+        # 67a build stamp is the version of record there.
+        version=build_stamp().version,
+        origin=lifecycle.ORIGIN_APP,
+        data_dir=str(data_dir),
+    )
+    try:
+        claimed = lifecycle.claim_server_record(state, target)
+    except OSError as error:
+        print(
+            f"warning: could not record this server ({error}) — `status` and "
+            "`stop` will not see it.",
+            file=sys.stderr,
+        )
+        return None
+    if not claimed:
+        blocker = lifecycle.read_server_state(target)
+        if blocker is not None:
+            print(
+                f"{lifecycle.unregistered_warning(blocker)} Stop that one and "
+                f"open {APP_NAME} again to put this one in charge.",
+                file=sys.stderr,
+            )
+        return None
+    return state
+
+
+def release_server_record(
+    state: Optional["ServerState"], path: Optional[Path] = None
+) -> None:
+    """Remove our record. Idempotent, and never raises (the M1 rule).
+
+    ``expected_pid`` means this can only ever remove a record we own, so the
+    duplicate call from ``main()``'s ``finally`` is harmless — and so is a
+    quit that races a record another process has since claimed.
+    """
+
+    if state is None:
+        return
+    from sidelinehd_extractor.webapp import lifecycle
+
+    try:
+        lifecycle.remove_server_state(
+            path or lifecycle.server_state_path(), expected_pid=state.pid
+        )
+    except OSError:
+        pass
+
+
+class QuitContext:
+    """Whether the quit now in progress was asked for by a person at the screen.
+
+    `stop` sends SIGTERM, and **SIGTERM is a non-interactive quit** (D5): it
+    takes the same graceful path as ⌘Q but skips every confirmation on the
+    way. A dialog raised in answer to a terminal command can only be dismissed
+    by someone who is not looking at that screen, so asking would stall the
+    quit until the CLI's own timer killed the app outright — the least
+    graceful of the three outcomes available. The person who typed `stop` has
+    already answered.
+
+    70a has nothing to ask yet, so the flag has no visible effect here. It
+    ships now because the signal handler that sets it is 70a's; **70c** is
+    where it earns its keep, suppressing the quit-mid-run confirmation on this
+    one path. It is set by the signal handler and nowhere else — a stray
+    setter would silently disarm that confirmation for ⌘Q too.
+    """
+
+    def __init__(self) -> None:
+        self.interactive = True
+
+    def mark_non_interactive(self) -> None:
+        self.interactive = False
+
+
+def install_sigterm_quit_handler(
+    terminate: Callable[[], None],
+    quit_context: QuitContext,
+    *,
+    install: Optional[Callable[[int, Callable], object]] = None,
+) -> Callable[[int, object], None]:
+    """Route SIGTERM into the app's own graceful quit. Returns the handler.
+
+    Without this, `stop` would kill the app where it stands: uvicorn never
+    stopped, the record left behind. With it, `stop` funnels into the same
+    ``applicationShouldTerminate:`` every other quit path uses.
+
+    Its companion is the heartbeat timer in ``run_dock_app``: a Python signal
+    handler only runs when Python bytecode next executes, and once the 67d
+    poll timer invalidates itself, nothing else on the main run loop does.
+    """
+
+    def _handle(signum: int, frame: object) -> None:
+        quit_context.mark_non_interactive()
+        terminate()
+
+    (install or signal.signal)(signal.SIGTERM, _handle)
+    return _handle
+
+
 # --- Menu models (item 68b) --------------------------------------------------
 #
 # The menus' *content* lives here as pure functions returning ordered
@@ -285,7 +418,9 @@ def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEn
 
 
 def run_dock_app(
-    controller: ServerController, update_check: Optional[UpdateCheck] = None
+    controller: ServerController,
+    update_check: Optional[UpdateCheck] = None,
+    on_quit: Optional[Callable[[], None]] = None,
 ) -> None:
     """The AppKit Dock app (item 68b): renders the menu models above. Blocks
     until quit.
@@ -294,6 +429,12 @@ def run_dock_app(
     importable headless (CI, ``--selftest``, the test suite). Menus are only
     ever touched from the main thread: the update poll is an ``NSTimer`` on
     the main run loop, and the Dock menu is rebuilt fresh on every show.
+
+    ``on_quit`` runs inside ``applicationShouldTerminate:`` once the server is
+    stopped — item 70a's record removal. It must not run at ``atexit``:
+    Cocoa's ``terminate:`` exits the process without Python's interpreter
+    finalization, so an ``atexit`` cleanup would silently never fire in the
+    bundle.
     """
 
     import AppKit
@@ -365,10 +506,19 @@ def run_dock_app(
 
         def applicationShouldTerminate_(self, _app):
             # The single hook that makes ⌘Q, app menu → Quit, Dock → Quit,
-            # and logout all stop the server gracefully. stop() bounds its
-            # thread join, so quit — including logout — can never wedge.
+            # logout, and now `stop` (via SIGTERM) all stop the server
+            # gracefully. stop() bounds its thread join, so quit — including
+            # logout — can never wedge.
             controller.stop()
+            if on_quit is not None:
+                on_quit()
             return AppKit.NSTerminateNow
+
+        def heartbeat_(self, _timer):
+            # Deliberately does nothing. Its only job is to run Python
+            # bytecode on the main run loop about once a second, so a pending
+            # SIGTERM gets delivered — see install_sigterm_quit_handler.
+            return None
 
         def openBrowser_(self, _sender):
             webbrowser.open(controller.url)
@@ -390,6 +540,16 @@ def run_dock_app(
     delegate = _DockDelegate.alloc().init()
     app.setDelegate_(delegate)
     install_app_menu()
+    # Item 70a: `stop` sends SIGTERM, and the graceful path is the same one
+    # ⌘Q takes. The heartbeat is permanent (never invalidated) — it is what
+    # gives the interpreter a chance to deliver the signal at all.
+    # `quit_context` is what applicationShouldTerminate_ will consult in 70c;
+    # here nothing asks a question yet, so it is only written to.
+    quit_context = QuitContext()
+    install_sigterm_quit_handler(lambda: app.terminate_(None), quit_context)
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        1.0, delegate, "heartbeat:", None, True
+    )
     if update_check is not None:
         AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0, delegate, "pollUpdateCheck:", None, True
@@ -476,10 +636,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if "--selftest" in args:
         return run_selftest()
 
-    prepare_data_dir()
+    data_dir = prepare_data_dir()
     port = find_open_port()
     controller = ServerController(port=port)
     controller.start()
+    # Item 70a: only once the server is actually up — the record says "a
+    # server is running here", and until start() returns that is not true.
+    record = register_server_record(controller, data_dir)
     # Item 67d: only after the server is up, and on a daemon thread — the
     # check must never block launch, and --selftest never reaches this path.
     update_check = UpdateCheck()
@@ -488,9 +651,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # browser so a double-click visibly does something.
     webbrowser.open(controller.url)
     try:
-        run_dock_app(controller, update_check)
+        run_dock_app(
+            controller, update_check, on_quit=lambda: release_server_record(record)
+        )
     finally:
+        # Idempotent, and the only cleanup a source run or a startup failure
+        # gets: Cocoa's terminate: never reaches here in the bundle.
         controller.stop()
+        release_server_record(record)
     return 0
 
 

@@ -1493,8 +1493,8 @@ def test_cli_start_port_in_use_reports_recorded_server(tmp_path, monkeypatch, ca
     assert "stop" in err
 
 
-def test_cli_restart_stops_then_starts(monkeypatch, capsys):
-    calls = []
+def _patch_restart_environment(monkeypatch, tmp_path, calls):
+    monkeypatch.setattr(lifecycle_module, "default_data_dir", lambda: tmp_path)
     monkeypatch.setattr(
         cli_module,
         "stop_recorded_server",
@@ -1506,10 +1506,113 @@ def test_cli_restart_stops_then_starts(monkeypatch, capsys):
         lambda args: calls.append(("start", args.host, args.port, args.no_browser)) or 0,
     )
 
+
+def test_cli_restart_stops_then_starts(monkeypatch, tmp_path, capsys):
+    calls = []
+    _patch_restart_environment(monkeypatch, tmp_path, calls)
+
     assert main(["restart", "--port", "9999", "--no-browser"]) == 0
 
     assert calls == ["stop", ("start", "127.0.0.1", 9999, True)]
     assert "Stopped (PID 4242)." in capsys.readouterr().out
+
+
+# --- Item 70a: the Dock app is visible to status / stop / restart ---
+
+
+def _write_record(tmp_path, *, pid, origin, data_dir=""):
+    state = lifecycle_module.new_server_state(
+        "127.0.0.1",
+        8000,
+        pid=pid,
+        version="0.test",
+        started_at="2026-07-10T12:00:00Z",
+        origin=origin,
+        data_dir=data_dir,
+    )
+    lifecycle_module.write_server_state(state, tmp_path / "webapp.json")
+    return state
+
+
+def test_cli_restart_declines_to_relaunch_the_desktop_app(monkeypatch, tmp_path, capsys):
+    """The CLI cannot respawn an `.app` it did not start. Stopping the app and
+    silently starting a *CLI* server in its place would strand the user
+    worse than saying so."""
+
+    calls = []
+    _patch_restart_environment(monkeypatch, tmp_path, calls)
+    _write_record(tmp_path, pid=777, origin=lifecycle_module.ORIGIN_APP)
+    # CR-93: never a real PID. `is_pid_alive` probes with `os.kill(pid, 0)`,
+    # which on Windows terminates the target instead of asking after it, so a
+    # live PID here would kill pytest's parent on the windows-latest leg.
+    # `_cmd_restart` consults the name bound into cli's own namespace, as the
+    # stale-record sibling below already does with `lambda pid: False`.
+    asked = []
+
+    def _alive(pid):
+        asked.append(pid)
+        return True
+
+    monkeypatch.setattr(cli_module, "is_pid_alive", _alive)
+
+    assert main(["restart"]) == 1
+
+    assert asked == [777], "the injected liveness check was bypassed"
+    assert calls == []  # touched nothing
+    assert lifecycle_module.read_server_state(tmp_path / "webapp.json") is not None
+    err = capsys.readouterr().err
+    assert "Dock" in err
+    assert "sidelinehd-extractor stop" in err
+
+
+def test_cli_restart_is_not_blocked_by_a_stale_desktop_app_record(
+    monkeypatch, tmp_path, capsys
+):
+    """A dead record is not a running app: it must never block a launch."""
+
+    calls = []
+    _patch_restart_environment(monkeypatch, tmp_path, calls)
+    _write_record(tmp_path, pid=999_999, origin=lifecycle_module.ORIGIN_APP)
+    monkeypatch.setattr(cli_module, "is_pid_alive", lambda pid: False)
+
+    assert main(["restart", "--no-browser"]) == 0
+    assert calls == ["stop", ("start", "127.0.0.1", 8000, True)]
+
+
+def test_cli_start_serves_unregistered_rather_than_erasing_a_live_record(
+    tmp_path, monkeypatch, capsys
+):
+    """Item 70a: overwriting the record is how `status` and `stop` start
+    naming a server that is not the one running. `start` declines, warns, and
+    serves anyway — survivable here because Ctrl+C is always available."""
+
+    recorded = {}
+    _patch_start_environment(monkeypatch, recorded, tmp_path)
+    # CR-93: an arbitrary foreign PID with the check injected, never a live one
+    # — `os.kill(pid, 0)` is a probe on POSIX and a kill on Windows.
+    incumbent = _write_record(tmp_path, pid=777, origin=lifecycle_module.ORIGIN_CLI)
+
+    # Reaches `claim_server_record` without an explicit `alive=`, so this is
+    # CR-91's call-time seam again; `asked` keeps a bypass from going quiet.
+    asked = []
+
+    def _alive(pid):
+        asked.append(pid)
+        return True
+
+    monkeypatch.setattr(lifecycle_module, "is_pid_alive", _alive)
+
+    assert main(["start", "--port", "9999", "--no-browser"]) == 0
+
+    assert asked == [777], "the injected liveness check was bypassed"
+    # It served...
+    assert recorded["app"] == "sidelinehd_extractor.webapp.app:create_app"
+    # ...and the incumbent's record survived both the claim and our cleanup.
+    assert recorded["state_during_run"] == incumbent
+    assert lifecycle_module.read_server_state(tmp_path / "webapp.json") == incumbent
+    err = capsys.readouterr().err
+    assert "will not appear in `status`" in err
+    assert "Ctrl+C" in err
 
 
 # --- Item 54c: in-app onboarding + plain language ---

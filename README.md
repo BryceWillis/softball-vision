@@ -273,6 +273,12 @@ Use `sidelinehd-extractor status`, `sidelinehd-extractor stop`, and
 installing updated code, run `restart`; an already-running server keeps the code
 it loaded at startup.
 
+These see the desktop app too: a running `.app` shows up in `status` as
+`running (desktop app)`, along with the folder it is serving, and `stop` shuts
+it down gracefully. `restart` is the exception — it cannot relaunch an app it
+did not start, so it says so and leaves the app alone; quit it from the Dock
+and open it again instead.
+
 Install the external OCR engine per the
 [External dependencies](#external-dependencies) steps above. The primary
 `run-game` and `run-youtube` commands use Tesseract OCR by default; pass

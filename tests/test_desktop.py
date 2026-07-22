@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import os
+import signal
 import socket
 import urllib.request
 from pathlib import Path
@@ -299,23 +300,56 @@ def test_main_selftest_flag_dispatches_without_starting_the_gui(monkeypatch):
     assert desktop.main(["--selftest"]) == 7
 
 
+class _FakeController:
+    """Stands in for ServerController in the main() orchestration tests."""
+
+    host = "127.0.0.1"
+
+    def __init__(self, port, events=None):
+        self.port = port
+        self.url = f"http://127.0.0.1:{port}"
+        self._events = events if events is not None else []
+
+    def start(self):
+        self._events.append("server-start")
+
+    def stop(self):
+        self._events.append("server-stop")
+
+
+def _patch_main_launch(monkeypatch, events, tmp_path):
+    """Wire main()'s collaborators to fakes, leaving the record path real."""
+
+    monkeypatch.setattr(
+        desktop, "prepare_data_dir", lambda: events.append("data-dir") or tmp_path
+    )
+    # CR-95: deliberately *not* DEFAULT_PORT — a record built from the default
+    # rather than the bound port is indistinguishable from a correct one when
+    # the two are the same number, and `status` would then advertise a URL
+    # nothing is listening on.
+    monkeypatch.setattr(desktop, "find_open_port", lambda: 8123)
+    monkeypatch.setattr(
+        desktop, "ServerController", lambda port: _FakeController(port, events)
+    )
+    monkeypatch.setattr(desktop, "UpdateCheck", lambda: _NoopCheck())
+    monkeypatch.setattr(desktop.webbrowser, "open", lambda url: events.append("browser"))
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.lifecycle.default_data_dir", lambda: tmp_path
+    )
+
+
+class _NoopCheck:
+    def start(self):
+        return None
+
+
 def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_app(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     """Item 67d: the check starts only once the server is up (it must never
     block launch) and the Dock app receives it to poll."""
 
     events = []
-
-    class _Controller:
-        def __init__(self, port):
-            self.url = f"http://127.0.0.1:{port}"
-
-        def start(self):
-            events.append("server-start")
-
-        def stop(self):
-            events.append("server-stop")
 
     class _Check:
         def start(self):
@@ -324,21 +358,221 @@ def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_
     check = _Check()
     captured = {}
 
-    def fake_dock_app(controller, update_check=None):
+    def fake_dock_app(controller, update_check=None, on_quit=None):
         captured["update_check"] = update_check
         events.append("dock-app")
 
-    monkeypatch.setattr(desktop, "prepare_data_dir", lambda: events.append("data-dir"))
-    monkeypatch.setattr(desktop, "find_open_port", lambda: 8000)
-    monkeypatch.setattr(desktop, "ServerController", _Controller)
+    _patch_main_launch(monkeypatch, events, tmp_path)
     monkeypatch.setattr(desktop, "UpdateCheck", lambda: check)
-    monkeypatch.setattr(desktop.webbrowser, "open", lambda url: events.append("browser"))
     monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
 
     assert desktop.main([]) == 0
     assert captured["update_check"] is check
     assert events.index("server-start") < events.index("update-check-start")
     assert events.index("update-check-start") < events.index("dock-app")
+
+
+# --- Lifecycle registration (item 70a) ---------------------------------------
+
+
+def test_main_records_the_running_app_and_removes_it_on_quit(monkeypatch, tmp_path):
+    """Item 70a: `status` and `stop` could not see the Dock app at all — the
+    one server item 65's staleness defence did not cover."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    events = []
+    seen = {}
+
+    def fake_dock_app(controller, update_check=None, on_quit=None):
+        seen["record"] = lifecycle.read_server_state(tmp_path / "webapp.json")
+        on_quit()  # the applicationShouldTerminate_ path, without a GUI
+
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
+
+    assert desktop.main([]) == 0
+
+    record = seen["record"]
+    assert record is not None
+    assert record.origin == lifecycle.ORIGIN_APP
+    assert record.port == 8123  # the *actual* port, not desktop.DEFAULT_PORT
+    assert record.data_dir == str(tmp_path)
+    assert record.pid == os.getpid()
+    # Quit removes it, so the next `status` says "not running" rather than
+    # naming a server that stopped an hour ago.
+    assert not (tmp_path / "webapp.json").exists()
+
+
+def test_main_removes_the_record_even_when_the_gui_never_reaches_quit(
+    monkeypatch, tmp_path
+):
+    """The source-run path and any startup failure clean up too: main()'s
+    finally is the only cleanup those get, and Cocoa's terminate: is the only
+    one the bundle gets — so both exist and both are idempotent."""
+
+    events = []
+
+    def fake_dock_app(controller, update_check=None, on_quit=None):
+        raise RuntimeError("no GUI session")
+
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
+
+    with pytest.raises(RuntimeError):
+        desktop.main([])
+    assert not (tmp_path / "webapp.json").exists()
+
+
+def test_the_app_does_not_erase_a_live_cli_servers_record(monkeypatch, tmp_path, capsys):
+    """The honest interim until 70d presents the running server instead of
+    starting a rival: serve, say so, and leave `status` naming the CLI one."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    events = []
+    # An arbitrary *foreign* PID with the liveness check injected — never a real
+    # one. CR-93: `is_pid_alive` probes with `os.kill(pid, 0)`, which on Windows
+    # is not a probe but `TerminateProcess`, so handing it a genuinely live PID
+    # would kill pytest's parent on the windows-latest CI leg. os.getpid() would
+    # read as "our own record" and be rewritten, which is the other case.
+    incumbent = lifecycle.new_server_state(
+        "127.0.0.1", 8000, pid=777, version="0.test", data_dir="/checkout"
+    )
+    lifecycle.write_server_state(incumbent, tmp_path / "webapp.json")
+
+    # CR-91's seam, earning its keep: `claim_server_record` resolves `alive` at
+    # call time, so this replacement is reachable. The `asked` list is what makes
+    # a bypass loud rather than silent — an unasserted monkeypatch is how CR-91
+    # hid for a whole review pass.
+    asked = []
+
+    def _alive(pid):
+        asked.append(pid)
+        return True
+
+    monkeypatch.setattr(lifecycle, "is_pid_alive", _alive)
+
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(
+        desktop, "run_dock_app", lambda controller, update_check=None, on_quit=None: None
+    )
+
+    assert desktop.main([]) == 0
+
+    assert asked == [777], "the injected liveness check was bypassed"
+    # Untouched, including through our own quit-time cleanup.
+    assert lifecycle.read_server_state(tmp_path / "webapp.json") == incumbent
+    err = capsys.readouterr().err
+    assert "already running" in err
+    assert "PID 777" in err
+
+
+def test_a_failed_record_write_warns_but_still_launches(monkeypatch, tmp_path, capsys):
+    """A launcher must never fail to launch over metadata (the M1 rule): the
+    record is a defence, not a dependency."""
+
+    events = []
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.lifecycle.claim_server_record",
+        lambda state, path=None, **kwargs: (_ for _ in ()).throw(
+            PermissionError("read-only data dir")
+        ),
+    )
+    monkeypatch.setattr(
+        desktop, "run_dock_app", lambda controller, update_check=None, on_quit=None: None
+    )
+
+    assert desktop.main([]) == 0
+    assert "dock-app" not in events  # the fake never appends; the launch ran
+    assert events.count("server-start") == 1
+    assert "could not record this server" in capsys.readouterr().err
+
+
+def test_register_server_record_uses_the_build_stamp_version(monkeypatch, tmp_path):
+    """A frozen bundle has no distribution metadata to read — importlib
+    reports "unknown" — so the 67a build stamp is the version of record."""
+
+    from sidelinehd_extractor.build_info import BuildStamp
+
+    monkeypatch.setattr(
+        desktop,
+        "build_stamp",
+        lambda: BuildStamp(version="9.9.9", sha="abc1234", built_at=None, origin="bundle"),
+    )
+    record = desktop.register_server_record(
+        _FakeController(8123), tmp_path, path=tmp_path / "webapp.json"
+    )
+
+    assert record is not None
+    assert record.version == "9.9.9"
+
+
+def test_release_server_record_never_removes_someone_elses(tmp_path):
+    from sidelinehd_extractor.webapp import lifecycle
+
+    path = tmp_path / "webapp.json"
+    theirs = lifecycle.new_server_state("127.0.0.1", 8000, pid=4242, version="0.test")
+    lifecycle.write_server_state(theirs, path)
+    ours = lifecycle.new_server_state("127.0.0.1", 8001, pid=5555, version="0.test")
+
+    desktop.release_server_record(ours, path)
+    assert lifecycle.read_server_state(path) == theirs
+
+    # Ours goes, and going twice is not an error.
+    lifecycle.write_server_state(ours, path)
+    desktop.release_server_record(ours, path)
+    desktop.release_server_record(ours, path)
+    assert not path.exists()
+
+    desktop.release_server_record(None, path)  # nothing claimed, nothing to do
+
+
+def test_selftest_never_writes_a_server_record(monkeypatch, tmp_path):
+    """--selftest is a smoke test, not a server: a record would make `status`
+    and `stop` name a process that has already exited."""
+
+    _point_selftest_at(monkeypatch, tmp_path, _tiny_app)
+    monkeypatch.setattr(
+        "sidelinehd_extractor.webapp.lifecycle.default_data_dir", lambda: tmp_path
+    )
+
+    assert desktop.run_selftest() == 0
+    assert not (tmp_path / "webapp.json").exists()
+
+
+# --- SIGTERM as a non-interactive quit (item 70a, D5) ------------------------
+
+
+def test_sigterm_handler_takes_the_graceful_path_and_flags_it_non_interactive():
+    """`stop` must funnel into the same applicationShouldTerminate: every
+    other quit uses — and 70c must be able to tell that nobody is at the
+    screen to answer a dialog."""
+
+    context = desktop.QuitContext()
+    assert context.interactive  # a normal quit is interactive until told otherwise
+
+    terminated = []
+    installed = {}
+    handler = desktop.install_sigterm_quit_handler(
+        lambda: terminated.append("terminate"),
+        context,
+        install=lambda signum, fn: installed.update(signum=signum, fn=fn),
+    )
+
+    assert installed["signum"] == signal.SIGTERM
+    assert installed["fn"] is handler
+
+    handler(signal.SIGTERM, None)
+    assert terminated == ["terminate"]
+    assert not context.interactive
+
+
+def test_quit_context_stays_interactive_without_a_signal():
+    # The flag is set by the signal handler and nowhere else: a stray setter
+    # would silently disarm 70c's confirmation for ⌘Q too.
+    assert desktop.QuitContext().interactive
 
 
 def test_server_controller_start_raises_when_port_is_taken():

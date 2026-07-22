@@ -52,11 +52,15 @@ from sidelinehd_extractor.video import probe_video, read_frame_at
 from sidelinehd_extractor.workflow import export_paths as workflow_export_paths
 from sidelinehd_extractor.workflow import ExportOptions, run_game, run_youtube_game
 from sidelinehd_extractor.webapp.lifecycle import (
+    ORIGIN_APP,
     ServerStateRegistration,
     git_short_sha,
+    is_pid_alive,
     read_server_state,
+    restart_decline_message,
     status_message,
     stop_recorded_server,
+    unregistered_warning,
     version_display,
 )
 from sidelinehd_extractor.youtube import (
@@ -786,7 +790,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if _port_in_use(args.host, args.port):
         _print_port_in_use(args.host, args.port)
         return 1
-    with ServerStateRegistration(args.host, args.port) as state:
+    registration = ServerStateRegistration(args.host, args.port)
+    with registration as state:
+        _warn_if_unregistered(registration)
         print(
             f"Serving {version_display(state.version, git_short_sha())} on {state.url}",
             file=sys.stderr,
@@ -878,7 +884,9 @@ def _cmd_start(args: argparse.Namespace) -> int:
         return 1
 
     url = f"http://{args.host}:{args.port}"
-    with ServerStateRegistration(args.host, args.port) as state:
+    registration = ServerStateRegistration(args.host, args.port)
+    with registration as state:
+        _warn_if_unregistered(registration)
         print(
             f"Serving {version_display(state.version, git_short_sha())} on {url} "
             "— press Ctrl+C here to stop.",
@@ -899,6 +907,25 @@ def _cmd_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_if_unregistered(registration: ServerStateRegistration) -> None:
+    """Say so when another live server kept the record (item 70a).
+
+    Serving unregistered is survivable here — and only here — because `start`
+    and `serve` are foreground commands with a terminal attached, so Ctrl+C is
+    always available. Silence would not be: `status` and `stop` would go on
+    naming the *other* server with nothing to explain why.
+    """
+
+    if registration.registered or registration.conflict is None:
+        return
+    print(
+        f"{unregistered_warning(registration.conflict)} "
+        "Press Ctrl+C here to stop this server.",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _cmd_stop(args: argparse.Namespace) -> int:
     message = stop_recorded_server()
     print(message)
@@ -917,6 +944,15 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_restart(args: argparse.Namespace) -> int:
+    # Item 70a: the CLI cannot respawn an `.app` it did not start, so a live
+    # desktop-app record is declined rather than half-honoured — stopping it
+    # and then starting a *CLI* server in its place would be a worse surprise
+    # than saying no. A stale app record is not a reason to decline: it blocks
+    # nothing, and the stop below clears it.
+    state = read_server_state()
+    if state is not None and state.origin == ORIGIN_APP and is_pid_alive(state.pid):
+        print(restart_decline_message(state), file=sys.stderr)
+        return 1
     print(stop_recorded_server())
     return _cmd_start(args)
 
