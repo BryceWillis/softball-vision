@@ -241,6 +241,43 @@ class ReviewReportTests(unittest.TestCase):
             text = result.output_path.read_text(encoding="utf-8")
             self.assertIn("batting-half-filter", text)
             self.assertIn("24 of 46", text)
+            # Nothing was carried, so the carry-over sentence stays silent.
+            self.assertNotIn("carry-over", text)
+
+    def test_write_review_report_reports_carried_roster_name_matches(self):
+        """A half inference resting on recovered names is a weaker read.
+
+        Names recovered from the ``+1`` sample count toward the 2:1 gate, so a
+        run that only clears it on carried names should say so here rather than
+        look identical to one that cleared it on trigger frames alone.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "run"
+            run_dir.mkdir()
+            write_jsonl(run_dir / "events.jsonl", [])
+            write_json(
+                run_dir / "manifest.json",
+                {
+                    "detection": {
+                        "inferred_batting_half": "bottom",
+                        "top_roster_matches": 9,
+                        "bottom_roster_matches": 20,
+                        "top_roster_matches_from_carryover": 0,
+                        "bottom_roster_matches_from_carryover": 4,
+                        "at_bats_before_half_filter": 35,
+                        "at_bats_dropped_by_half_filter": 11,
+                        "batting_half_warning": None,
+                    }
+                },
+            )
+
+            result = write_review_report(run_dir)
+
+            text = result.output_path.read_text(encoding="utf-8")
+            self.assertIn("batting-half-filter", text)
+            self.assertIn("0 in top and 4 in bottom", text)
+            self.assertIn("name carry-over", text)
 
     def test_write_review_report_reports_an_ambiguous_batting_half(self):
         with tempfile.TemporaryDirectory() as directory:

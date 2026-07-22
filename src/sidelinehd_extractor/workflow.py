@@ -221,6 +221,15 @@ def run_game(
             ),
             "top_roster_matches": batting_half_inference.top_roster_matches,
             "bottom_roster_matches": batting_half_inference.bottom_roster_matches,
+            # How many of those matches were recovered by the +1 name
+            # carry-over (item 66), so a run that clears the 2:1 gate on
+            # carried names is visibly doing so rather than silently.
+            "top_roster_matches_from_carryover": (
+                batting_half_inference.top_roster_matches_from_carryover
+            ),
+            "bottom_roster_matches_from_carryover": (
+                batting_half_inference.bottom_roster_matches_from_carryover
+            ),
             "at_bats_before_half_filter": at_bats_before_half_filter,
             "at_bats_dropped_by_half_filter": (
                 at_bats_before_half_filter - count_at_bats(events)

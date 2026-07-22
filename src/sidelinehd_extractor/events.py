@@ -134,6 +134,11 @@ class BattingHalfInference:
     bottom_at_bats: int
     bottom_roster_matches: int
     warning: Optional[str] = None
+    #: How many of the match counts above came from the ``+1`` name carry-over
+    #: (item 66) rather than from the trigger frame's own read. A run that
+    #: clears the 2:1 gate on carried names should be visibly doing so.
+    top_roster_matches_from_carryover: int = 0
+    bottom_roster_matches_from_carryover: int = 0
 
     @property
     def message(self) -> str:
@@ -327,6 +332,16 @@ def detect_events(
                 )
             )
         ):
+            # Computed *after* the detection decision, deliberately: the
+            # carry-over annotates an at-bat that has already been detected and
+            # can never help decide one (item 66).
+            carried_name_match = _carried_name_match(
+                ordered_states,
+                index,
+                roster_match_source,
+                effective_batter_number,
+                roster,
+            )
             events.append(
                 Event(
                     event_type=EventType.AT_BAT_START,
@@ -343,6 +358,14 @@ def detect_events(
                         "ocr_player_number": state.batter_number,
                         "batter_card_name": state.metadata.get("batter_name"),
                         "roster_match_source": roster_match_source,
+                        # Deliberately *beside* an unchanged roster_match_source
+                        # rather than flipping it to "name": the source field
+                        # keeps reporting what the trigger frame did, and it
+                        # also feeds the phantom-order veto, CONFIRMED_ORDER_
+                        # SOURCES, and the tiered at-bat spacing that gates
+                        # detection. The marker changes exactly one consumer,
+                        # _event_has_roster_name_match (item 66).
+                        "name_match_carryover": carried_name_match,
                         "batter_number_source": state.metadata.get("batter_number_source"),
                         LINEUP_STRIP_CONFIDENCE_KEY: state.metadata.get(
                             LINEUP_STRIP_CONFIDENCE_KEY
@@ -576,8 +599,8 @@ def infer_batting_half(
     """Infer which half contains the rostered team's named batter cards."""
 
     counts = {
-        HalfInning.TOP: {"total": 0, "matches": 0},
-        HalfInning.BOTTOM: {"total": 0, "matches": 0},
+        HalfInning.TOP: {"total": 0, "matches": 0, "carried": 0},
+        HalfInning.BOTTOM: {"total": 0, "matches": 0, "carried": 0},
     }
 
     for event in events:
@@ -586,6 +609,8 @@ def infer_batting_half(
         counts[event.half]["total"] += 1
         if roster is not None and _event_has_roster_name_match(event):
             counts[event.half]["matches"] += 1
+            if _event_has_carried_name_match(event):
+                counts[event.half]["carried"] += 1
 
     top_matches = counts[HalfInning.TOP]["matches"]
     bottom_matches = counts[HalfInning.BOTTOM]["matches"]
@@ -609,6 +634,8 @@ def infer_batting_half(
         bottom_at_bats=counts[HalfInning.BOTTOM]["total"],
         bottom_roster_matches=bottom_matches,
         warning=warning,
+        top_roster_matches_from_carryover=counts[HalfInning.TOP]["carried"],
+        bottom_roster_matches_from_carryover=counts[HalfInning.BOTTOM]["carried"],
     )
 
 
@@ -1020,6 +1047,57 @@ def _has_minimum_at_bat_spacing(
     return timestamp_seconds - previous_timestamp_seconds >= minimum_seconds
 
 
+def _carried_name_match(
+    states: List[OverlayState],
+    index: int,
+    roster_match_source: Optional[str],
+    effective_batter_number: Optional[str],
+    roster: Optional[Roster],
+) -> bool:
+    """Whether the single next sample recovers this at-bat's roster-name match.
+
+    The batter card animates in from the side rather than appearing in place,
+    and sampling is a blind fixed grid, so a sample landing mid-slide yields a
+    horizontally offset or clipped name crop. That garbled read falls below the
+    roster fuzzy-match gate and loses the ``roster_match_source == "name"``
+    signal — which costs half-inning inference, not the at-bat (item 66).
+
+    Three conditions, each measured across a 45-run re-derivation:
+
+    - **Forward only.** The outgoing card reads cleanly right up to the frame it
+      blanks, so a backward or centred look takes the *previous* batter: ``-1``
+      recovers 258 and is wrong in 252 of them, against ``+1``'s 159 recovered
+      and 0 wrong.
+    - **Exactly one sample.** Every wider window pays recoveries in wrong names
+      (k=2 already buys 5 wrong; k=12 buys 48), because 12 samples is 60 s
+      against a 45 s at-bat spacing floor, so the look runs past the next batter
+      and reads that batter's card. Stopping at the next at-bat's timestamp is
+      *not* a sufficient guard on its own — it removes 28 of k=12's 48 and
+      leaves 20. ``+1`` is the only width measured at zero wrong attributions.
+      Do not widen it without a new guard specified *and measured* first, and do
+      not call this a "confirmation window" — that names two existing
+      ``DetectionConfig`` knobs, and both readings introduce wrong names.
+    - **Number agreement.** All 159 measured recoveries agreed with the at-bat's
+      own resolved jersey, so requiring agreement costs nothing measured and
+      converts "zero wrong attributions" from an observation into a structural
+      property.
+
+    No new threshold, no new sampling, no new OCR: the ``+1`` name resolves
+    through the same ``Roster.number_for_name`` fuzzy gate as every other read.
+    """
+
+    if roster is None or roster_match_source == "name":
+        return False
+    if not effective_batter_number:
+        return False
+    if index + 1 >= len(states):
+        return False
+    batter_name = states[index + 1].metadata.get("batter_name")
+    if not batter_name:
+        return False
+    return roster.number_for_name(str(batter_name)) == effective_batter_number
+
+
 def _at_bat_spacing_for_roster_match(
     roster_match_source: Optional[str],
     min_spacing_seconds: float,
@@ -1336,4 +1414,18 @@ def _has_batter_change_activity_signal(state: OverlayState) -> bool:
 
 
 def _event_has_roster_name_match(event: Event) -> bool:
-    return event.metadata.get("roster_match_source") == "name"
+    """Whether this at-bat counts as a roster-name match for half inference.
+
+    The sole consumer of the ``+1`` carry-over marker. ``roster_match_source``
+    is deliberately *not* consulted for the carried case — see the metadata
+    comment at the emission site in ``detect_events``.
+    """
+
+    return (
+        event.metadata.get("roster_match_source") == "name"
+        or _event_has_carried_name_match(event)
+    )
+
+
+def _event_has_carried_name_match(event: Event) -> bool:
+    return event.metadata.get("name_match_carryover") is True

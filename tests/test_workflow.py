@@ -388,7 +388,75 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(detection["at_bats_dropped_by_half_filter"], 1)
         self.assertEqual(detection["top_roster_matches"], 6)
         self.assertEqual(detection["bottom_roster_matches"], 1)
+        self.assertEqual(detection["top_roster_matches_from_carryover"], 0)
+        self.assertEqual(detection["bottom_roster_matches_from_carryover"], 0)
         self.assertIsNone(detection["batting_half_warning"])
+
+    def test_run_game_records_roster_name_matches_recovered_by_carryover(self):
+        """A match carried from the ``+1`` sample counts, and says it did.
+
+        The half filter deletes at-bats outright, so which signal decided the
+        inference belongs in the manifest beside the counts it decided.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="22", full_name="Maya R.", display_name="Maya R."),
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+            ],
+        )
+        events = [
+            Event(EventType.HALF_INNING_START, 600, "Top 1", inning=1, half=HalfInning.TOP)
+        ] + [
+            Event(
+                EventType.AT_BAT_START,
+                610 + 60 * index,
+                "Maya R. (#22)",
+                inning=1,
+                half=HalfInning.TOP,
+                player_number="22",
+                player_name="Maya R.",
+                metadata=(
+                    {"roster_match_source": "number", "name_match_carryover": True}
+                    if index >= 4
+                    else {"roster_match_source": "name", "name_match_carryover": False}
+                ),
+            )
+            for index in range(6)
+        ] + [
+            Event(
+                EventType.AT_BAT_START,
+                3000,
+                "Amelia V. (#26)",
+                inning=1,
+                half=HalfInning.BOTTOM,
+                player_number="26",
+                player_name="Amelia V.",
+                metadata={"roster_match_source": "name", "name_match_carryover": False},
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            _, run_dir = self._run_game_with_stubbed_pipeline(
+                root,
+                [],
+                events=events,
+                roster=roster,
+                detection=DetectionConfig(auto_detect_batting_half=True),
+            )
+
+            detection = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))[
+                "detection"
+            ]
+
+        self.assertEqual(detection["inferred_batting_half"], "top")
+        self.assertEqual(detection["top_roster_matches"], 6)
+        self.assertEqual(detection["top_roster_matches_from_carryover"], 2)
+        self.assertEqual(detection["bottom_roster_matches"], 1)
+        self.assertEqual(detection["bottom_roster_matches_from_carryover"], 0)
 
     def test_run_game_records_when_the_batting_half_filter_declined(self):
         """An ambiguous inference is recorded too, with nothing dropped."""

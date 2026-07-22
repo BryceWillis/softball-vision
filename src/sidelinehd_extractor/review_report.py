@@ -213,6 +213,7 @@ def _batting_half_warnings(manifest_path: Path) -> List[dict]:
         return []
 
     warnings: List[dict] = []
+    carryover = _carryover_sentence(detection)
     dropped = detection.get("at_bats_dropped_by_half_filter")
     if isinstance(dropped, int) and dropped > 0:
         total = detection.get("at_bats_before_half_filter")
@@ -223,7 +224,7 @@ def _batting_half_warnings(manifest_path: Path) -> List[dict]:
                 "message": (
                     f"{dropped} of {total} detected at-bats were dropped as not in the "
                     f"inferred batting half ({half}). If batters are missing from the "
-                    f"exports, check the half-inning reads first."
+                    f"exports, check the half-inning reads first." + carryover
                 ),
             }
         )
@@ -235,11 +236,32 @@ def _batting_half_warnings(manifest_path: Path) -> List[dict]:
                     f"Batting half not inferred ({detection['batting_half_warning']}): "
                     f"{detection.get('top_roster_matches')} roster-name matches in top, "
                     f"{detection.get('bottom_roster_matches')} in bottom. Both halves were "
-                    f"kept, so at-bats may appear twice."
+                    f"kept, so at-bats may appear twice." + carryover
                 ),
             }
         )
     return warnings
+
+
+def _carryover_sentence(detection: dict) -> str:
+    """How much of the half inference rested on recovered names, if any.
+
+    A half inference that only clears the 2:1 gate because names were recovered
+    from the ``+1`` sample (item 66) is a weaker read than one that clears it on
+    trigger frames alone, and this report is where someone looks when the output
+    disagrees with the game. Silent when nothing was carried.
+    """
+
+    top = detection.get("top_roster_matches_from_carryover")
+    bottom = detection.get("bottom_roster_matches_from_carryover")
+    top = top if isinstance(top, int) else 0
+    bottom = bottom if isinstance(bottom, int) else 0
+    if top <= 0 and bottom <= 0:
+        return ""
+    return (
+        f" Of those matches, {top} in top and {bottom} in bottom were recovered "
+        "from the next sample by name carry-over."
+    )
 
 
 def _render_warnings(warnings: List[dict]) -> List[str]:

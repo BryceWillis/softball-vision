@@ -1,7 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from sidelinehd_extractor import events as events_module
 from sidelinehd_extractor.events import (
     DetectionConfig,
     _at_bat_spacing_for_roster_match,
@@ -2795,6 +2797,283 @@ class EventDetectionTests(unittest.TestCase):
             ],
             [0, 530],
         )
+
+
+class NameMatchCarryoverTests(unittest.TestCase):
+    """The forward-only ``+1`` batter-card name carry-over (item 66).
+
+    The batter card animates in from the side, so a sample landing mid-slide
+    yields a clipped name crop. The fixtures below use ``"ia V."`` as that clip:
+    a real fragment of the sanctioned placeholder ``"Amelia V."`` that
+    ``Roster.number_for_name`` genuinely refuses, because its ``min(len) >= 5``
+    gate blocks fuzzy matching on a three-letter stub. That is the measured
+    mechanism, not a synthetic stand-in for it.
+    """
+
+    def _roster(self) -> Roster:
+        return Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number="26", full_name="Amelia V.", display_name="Amelia V."),
+                RosterPlayer(number="12", full_name="Chloe W.", display_name="Chloe W."),
+            ],
+        )
+
+    def _state(self, timestamp: float, name, number: str = "26") -> OverlayState:
+        metadata = {"batter_name": name} if name is not None else {}
+        return OverlayState(
+            timestamp_seconds=timestamp,
+            inning=1,
+            half=HalfInning.TOP,
+            batter_number=number,
+            metadata=metadata,
+        )
+
+    def _at_bats(self, events):
+        return [event for event in events if event.event_type == EventType.AT_BAT_START]
+
+    def test_garbled_trigger_carries_the_name_match_from_the_next_sample(self):
+        events = detect_events(
+            [self._state(600, "ia V."), self._state(605, "Amelia V.")],
+            roster=self._roster(),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertIs(at_bat.metadata["name_match_carryover"], True)
+        # The source field keeps reporting what the trigger frame actually did.
+        self.assertEqual(at_bat.metadata["roster_match_source"], "number")
+        self.assertEqual(at_bat.player_number, "26")
+
+    def test_carryover_refused_when_the_next_sample_names_a_different_jersey(self):
+        events = detect_events(
+            [
+                self._state(600, "ia V."),
+                self._state(605, "Chloe W."),
+                self._state(610, "ia V."),
+            ],
+            roster=self._roster(),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_carryover_is_forward_only_and_ignores_a_clean_previous_sample(self):
+        """A backward look takes the *previous* batter, not this one.
+
+        The outgoing card reads cleanly right up to the frame it blanks. Across
+        the corpus a ``-1`` look recovers 258 names and is wrong in 252 of them.
+        """
+
+        events = detect_events(
+            [
+                self._state(595, "Chloe W.", number="12"),
+                self._state(600, "ia V."),
+                self._state(605, "ia V."),
+            ],
+            roster=self._roster(),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertEqual(at_bat.player_number, "26")
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_carryover_width_is_exactly_one_sample(self):
+        """A clean read at ``+2`` is out of reach, deliberately.
+
+        Every width above one pays recoveries in wrong names — k=2 already buys
+        five — because the look starts running past the next batter's card.
+        """
+
+        events = detect_events(
+            [
+                self._state(600, "ia V."),
+                self._state(605, "ia V."),
+                self._state(610, "Amelia V."),
+            ],
+            roster=self._roster(),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_no_carryover_when_the_trigger_already_matched_by_name(self):
+        events = detect_events(
+            [self._state(600, "Amelia V."), self._state(605, "Amelia V.")],
+            roster=self._roster(),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertEqual(at_bat.metadata["roster_match_source"], "name")
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_no_carryover_without_a_roster(self):
+        """A resolvable ``+1`` name is still worth nothing with nothing to
+        resolve it against — the fuzzy gate lives on the roster."""
+
+        events = detect_events(
+            [self._state(600, None), self._state(605, "Amelia V.")],
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertIsNone(at_bat.metadata["roster_match_source"])
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_no_carryover_at_the_final_state_of_a_run(self):
+        """There is no ``+1`` past the end of the sample grid."""
+
+        events = detect_events(
+            [self._state(600, "ia V.")],
+            roster=self._roster(),
+            config=DetectionConfig(min_batter_observations=1),
+        )
+
+        at_bat = self._at_bats(events)[0]
+        self.assertIs(at_bat.metadata["name_match_carryover"], False)
+
+    def test_carryover_does_not_change_the_detected_at_bats(self):
+        """The feature annotates events; it must never move detection.
+
+        ``roster_match_source`` is read by the phantom-order veto,
+        ``CONFIRMED_ORDER_SOURCES`` and the tiered at-bat spacing, so a design
+        that flipped it to ``"name"`` would silently change all three. This
+        compares a run with the carry-over live against the same run with the
+        predicate forced off, and requires the at-bat set to be identical.
+        """
+
+        states = [
+            self._state(600, "ia V."),
+            self._state(605, "Amelia V."),
+            self._state(660, "hloe W.", number="12"),
+            self._state(665, "Chloe W.", number="12"),
+            self._state(720, "ia V."),
+            self._state(725, "Amelia V."),
+        ]
+        roster = self._roster()
+
+        with_feature = detect_events(states, roster=roster)
+        with mock.patch.object(events_module, "_carried_name_match", return_value=False):
+            without_feature = detect_events(states, roster=roster)
+
+        def identity(event_list):
+            return [
+                (
+                    event.event_type,
+                    event.timestamp_seconds,
+                    event.label,
+                    event.player_number,
+                    event.player_name,
+                    event.half,
+                    event.inning,
+                )
+                for event in event_list
+            ]
+
+        self.assertEqual(identity(with_feature), identity(without_feature))
+        self.assertTrue(
+            any(event.metadata.get("name_match_carryover") for event in with_feature)
+        )
+        self.assertFalse(
+            any(event.metadata.get("name_match_carryover") for event in without_feature)
+        )
+
+    def test_synthesized_at_bats_are_never_marked(self):
+        """``inferred-missing`` at-bats have no OCR sample behind them.
+
+        ``validate_batting_order`` invents them at interpolated timestamps, so
+        there is no "+1 sample" from a point that is not on the grid. The skip
+        is structural — the carry-over is decided at event creation, before
+        these exist — and this asserts it rather than trusting it.
+        """
+
+        roster = Roster(
+            team_name="Stars",
+            players=[
+                RosterPlayer(number=str(number), full_name=name, display_name=name)
+                for number, name in ((2, "Emma B."), (3, "Maya R."), (4, "Ava T."))
+            ],
+        )
+        cycle = [
+            Event(
+                EventType.AT_BAT_START,
+                timestamp,
+                f"#{number}",
+                inning=1,
+                half=HalfInning.TOP,
+                player_number=number,
+                metadata={"roster_match_source": "name", "name_match_carryover": False},
+            )
+            for timestamp, number in (
+                (100.0, "2"),
+                (160.0, "3"),
+                (220.0, "4"),
+                (280.0, "2"),
+                (400.0, "4"),
+            )
+        ]
+
+        validated = validate_batting_order(cycle, roster=roster)
+
+        synthesized = [
+            event
+            for event in validated
+            if "inferred-missing" in (event.metadata.get("order_flags") or [])
+        ]
+        self.assertTrue(synthesized)
+        for event in synthesized:
+            self.assertNotIn("name_match_carryover", event.metadata)
+
+    def _half_at_bat(self, timestamp, half, number, carried=False, matched=False):
+        metadata = {"name_match_carryover": carried}
+        if matched:
+            metadata["roster_match_source"] = "name"
+        return Event(
+            EventType.AT_BAT_START,
+            timestamp,
+            f"#{number}",
+            half=half,
+            player_number=number,
+            metadata=metadata,
+        )
+
+    def test_infer_batting_half_counts_a_carried_match(self):
+        roster = self._roster()
+        at_bats = [
+            self._half_at_bat(600, HalfInning.TOP, "26", matched=True),
+            self._half_at_bat(660, HalfInning.TOP, "12", carried=True),
+            self._half_at_bat(720, HalfInning.BOTTOM, "26"),
+        ]
+
+        inference = infer_batting_half(at_bats, roster)
+
+        self.assertEqual(inference.top_roster_matches, 2)
+        self.assertEqual(inference.top_roster_matches_from_carryover, 1)
+        self.assertEqual(inference.bottom_roster_matches, 0)
+        self.assertEqual(inference.bottom_roster_matches_from_carryover, 0)
+
+    def test_a_carried_match_makes_an_ambiguous_split_decisive(self):
+        """The whole point of the feature: 3 v 2 declines, 4 v 2 filters.
+
+        This is the shape of the seven corpus runs the carry-over lifts over the
+        2:1 gate, where a declined inference published both teams' at-bats.
+        """
+
+        roster = self._roster()
+        base = [
+            self._half_at_bat(600 + 60 * index, HalfInning.TOP, "26", matched=True)
+            for index in range(3)
+        ] + [
+            self._half_at_bat(2000 + 60 * index, HalfInning.BOTTOM, "12", matched=True)
+            for index in range(2)
+        ]
+
+        self.assertIsNone(infer_batting_half(base, roster).inferred_half)
+
+        lifted = base + [self._half_at_bat(900, HalfInning.TOP, "26", carried=True)]
+        inference = infer_batting_half(lifted, roster)
+
+        self.assertEqual(inference.inferred_half, HalfInning.TOP)
+        self.assertEqual(inference.top_roster_matches, 4)
+        self.assertEqual(inference.top_roster_matches_from_carryover, 1)
 
 
 if __name__ == "__main__":
