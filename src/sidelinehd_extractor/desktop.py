@@ -1,4 +1,4 @@
-"""Dock-first desktop launcher for the local web app (items 54d, 68b, 70a, 70b).
+"""Dock-first desktop launcher for the local web app (items 54d, 68b, 70a–70c).
 
 Runs the same FastAPI app as ``sidelinehd-extractor start`` but as a normal
 macOS Dock app (AppKit, via PyObjC) instead of a terminal process: launch
@@ -17,9 +17,15 @@ page and nothing else, so the footer stamp, the health banner, progress, and
 the plain-language rule keep exactly one home and nothing can drift out of
 sync. The only native chrome is what macOS gives every window for free.
 
+A read takes 30–45 minutes, so item 70c makes it visible from outside the
+window: the Dock tile carries the read's percentage while it runs, and quitting
+mid-read asks first — except on `stop`'s SIGTERM, which is a non-interactive
+quit and never asks (D5).
+
 Everything except ``run_dock_app`` is import-safe headless (no AppKit, no
-WebKit, no GUI) so the server-thread, data-dir, menu-model, and
-navigation-policy logic stay unit-testable.
+WebKit, no UserNotifications, no GUI) so the server-thread, data-dir,
+menu-model, navigation-policy, and long-run-visibility logic stay
+unit-testable.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
@@ -43,6 +49,7 @@ from sidelinehd_extractor.updates import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from sidelinehd_extractor.webapp.jobs import Job, JobStore
     from sidelinehd_extractor.webapp.lifecycle import ServerState
 
 APP_NAME = "SidelineHD Extractor"
@@ -179,14 +186,21 @@ class ServerController:
         self._app_factory = app_factory or self._default_app_factory
         self._server = None
         self._thread: Optional[threading.Thread] = None
+        #: The job registry this controller's app runs on, once it has built
+        #: one (item 70c). ``None`` until ``start()``, and permanently None
+        #: when a caller supplied its own ``app_factory`` — the launcher reads
+        #: it for the Dock badge and the quit confirmation, so both must
+        #: degrade to "nothing running" rather than assume it is there. No new
+        #: HTTP surface: the app and the server share one process.
+        self.store: Optional["JobStore"] = None
 
-    @staticmethod
-    def _default_app_factory() -> object:
+    def _default_app_factory(self) -> object:
         from sidelinehd_extractor.webapp.app import create_app
         from sidelinehd_extractor.webapp.jobs import JobRunner, JobStore
 
         store = JobStore()
         runner = JobRunner(store, pipeline_kwargs=desktop_pipeline_kwargs)
+        self.store = store
         return create_app(store=store, runner=runner)
 
     @property
@@ -378,6 +392,126 @@ def install_sigterm_quit_handler(
     return _handle
 
 
+# --- Long-run visibility (item 70c) ------------------------------------------
+#
+# Reading a game takes 30–45 minutes, and it was the app's most valuable work
+# and its least visible: with the window closed the Dock tile said nothing,
+# and a reflexive ⌘Q threw the read away without a word. Both halves below are
+# pure functions over job state; the ``NSTimer`` and the ``NSAlert`` in
+# ``run_dock_app`` are thin render code around them, which is what lets the
+# whole contract — including "SIGTERM never asks" — be a unit test rather than
+# a manual check.
+#
+# D2 holds: the badge is not a second UI. It shows the same OCR percentage the
+# page already shows, in the one place the page cannot reach when it is closed.
+
+#: Statuses a job never leaves. Mirrors ``Job.is_terminal``; needed here as
+#: bare strings because ``newly_finished`` compares against a *remembered*
+#: status rather than a live job.
+_TERMINAL_STATUSES = frozenset({"done", "error"})
+
+#: What the Dock tile carries while a job is working but has no frame counts
+#: yet — downloading, or any stage before OCR. Precision is not the point at
+#: that stage; "this is not an idle app" is.
+BADGE_ACTIVITY_MARK = "…"
+
+
+def badge_label(job: Optional["Job"]) -> Optional[str]:
+    """The Dock badge for a job, or None when the tile should be clear.
+
+    The OCR stage's percentage is the number worth showing: it is the
+    half-hour the user is actually waiting on. Anything terminal clears the
+    badge — and that clearing is the *guaranteed* completion signal, the one
+    that works whether or not the OS lets an ad-hoc-signed bundle post a
+    notification.
+
+    A queued job is not idle — it is work this app has accepted and has not
+    done yet — so it carries the activity mark rather than nothing.
+    """
+
+    if job is None or job.is_terminal:
+        return None
+    if job.status == "running" and job.frames_total > 0:
+        percent = int(job.frames_done * 100 / job.frames_total)
+        # Playlist jobs reset the counts per entry, so a stale `frames_done`
+        # can briefly exceed the new total; clamping keeps "104%" off the Dock.
+        return f"{max(0, min(percent, 100))}%"
+    return BADGE_ACTIVITY_MARK
+
+
+def active_job(jobs: Sequence["Job"]) -> Optional["Job"]:
+    """The job the Dock tile speaks for: the running one, else newest queued.
+
+    ``JobRunner`` has a single worker, so at most one job is ever running and
+    the queued case is the gap between submit and pick-up (or an impatient
+    second submission). ``JobStore.list()`` is newest-first, so ``[0]`` is the
+    most recent of either.
+    """
+
+    for job in jobs:
+        if job.status == "running":
+            return job
+    for job in jobs:
+        if not job.is_terminal:
+            return job
+    return None
+
+
+def should_confirm_quit(jobs: Sequence["Job"], *, interactive: bool) -> bool:
+    """True when quitting must ask first: a read is in flight and someone is here.
+
+    ``interactive`` is 70a's ``QuitContext`` flag, and **this is the one quit
+    path that skips the question** (D5). `stop` sends SIGTERM, and a dialog
+    raised in answer to a terminal command can only be dismissed by someone
+    who is not looking at this screen — so asking would stall the quit until
+    the CLI's timer killed the app outright, a `SIGKILL` mid-frame with an
+    orphaned dialog behind it. That is *worse* for the run than the graceful
+    stop the dialog exists to protect, and the person who typed `stop` has
+    already answered the question it asks.
+    """
+
+    if not interactive:
+        return False
+    return any(not job.is_terminal for job in jobs)
+
+
+def newly_finished(
+    jobs: Sequence["Job"], seen: Dict[str, str]
+) -> List["Job"]:
+    """Jobs that reached a terminal status since the last look.
+
+    ``seen`` (``job id -> status``) is updated in place, so the caller keeps
+    one dict for the app's lifetime. A job first observed *already* terminal
+    is never announced: at launch the store is empty, so that case only arises
+    if a job somehow completes between two ticks of the same timer, and a
+    notification is not worth a false one.
+    """
+
+    finished: List["Job"] = []
+    for job in jobs:
+        previous = seen.get(job.id)
+        seen[job.id] = job.status
+        if job.is_terminal and previous is not None and previous not in _TERMINAL_STATUSES:
+            finished.append(job)
+    return finished
+
+
+def completion_notification(job: "Job") -> Tuple[str, str]:
+    """``(title, body)`` for the "your game finished" notification (item 70c).
+
+    Plain language, and honest about the failure case: a coach who has waited
+    forty minutes needs to be told it did not work just as much as they need
+    to be told it did.
+    """
+
+    if job.status == "error":
+        return (
+            "That game didn't finish",
+            "Open SidelineHD Extractor to see what went wrong.",
+        )
+    return ("Your game is ready", "The timestamps are waiting in the app.")
+
+
 # --- Navigation policy (item 70b) --------------------------------------------
 #
 # D4: the window shows *our* page; everything else belongs in the user's real
@@ -460,6 +594,18 @@ QUIT_MENU_TITLE = f"Quit {APP_NAME}"
 
 EDIT_MENU_TITLE = "Edit"
 WINDOW_MENU_TITLE = "Window"
+
+#: The quit-mid-run confirmation's copy (item 70c). Plain language, and it
+#: names the consequence rather than asking "are you sure?" — the user is
+#: being asked to weigh forty minutes of work, so the dialog has to say that
+#: is what is at stake.
+QUIT_CONFIRM_MESSAGE = "A game is still being read. Quit anyway?"
+QUIT_CONFIRM_DETAIL = (
+    "The unfinished game will stop and won't produce timestamps. "
+    "You can read it again later from the same link."
+)
+QUIT_CONFIRM_QUIT_TITLE = "Quit"
+QUIT_CONFIRM_CANCEL_TITLE = "Cancel"
 
 MenuEntry = Tuple[str, str]
 #: ``(title, selector, key equivalent)`` for the two standard menus, whose
@@ -558,14 +704,14 @@ def run_dock_app(
     update_check: Optional[UpdateCheck] = None,
     on_quit: Optional[Callable[[], None]] = None,
 ) -> None:
-    """The AppKit Dock app (items 68b, 70b): one window over the menu models
-    above. Blocks until quit.
+    """The AppKit Dock app (items 68b, 70b, 70c): one window over the menu
+    models above, plus the Dock tile's progress badge. Blocks until quit.
 
-    AppKit and WebKit are imported here, never at module scope, so the module
-    stays importable headless (CI, ``--selftest``, the test suite). Menus and
-    the window are only ever touched from the main thread: the update poll is
-    an ``NSTimer`` on the main run loop, and the Dock menu is rebuilt fresh on
-    every show.
+    AppKit, WebKit, and UserNotifications are imported here, never at module
+    scope, so the module stays importable headless (CI, ``--selftest``, the
+    test suite). Menus, the window, and the Dock tile are only ever touched
+    from the main thread: every poll is an ``NSTimer`` on the main run loop,
+    and the Dock menu is rebuilt fresh on every show.
 
     ``on_quit`` runs inside ``applicationShouldTerminate:`` once the server is
     stopped — item 70a's record removal. It must not run at ``atexit``:
@@ -674,6 +820,116 @@ def run_dock_app(
         app.setMainMenu_(main_menu)
         # Lets AppKit keep the standard window list at the foot of the menu.
         app.setWindowsMenu_(window_menu)
+
+    # --- Long-run visibility (item 70c) ---
+    #
+    # Thin render code over the pure functions above. Everything here runs on
+    # the main thread — the badge timer is an NSTimer on the main run loop —
+    # and every failure is swallowed: the Dock tile and the notification are
+    # courtesies, and neither may ever disturb a run or a quit (the M1 rule).
+
+    # `quit_context` is written by the SIGTERM handler and read by
+    # applicationShouldTerminate_, so it must exist before either.
+    quit_context = QuitContext()
+    badge_state: dict = {"label": None}
+    seen_job_statuses: Dict[str, str] = {}
+    notifier: dict = {"center": None}
+
+    def current_jobs() -> List["Job"]:
+        """Job state for the badge and the confirmation, or [] if invisible.
+
+        A controller built with a caller's own ``app_factory`` has no store,
+        so both features degrade to "nothing is running" — which is the safe
+        reading: a blank tile and a quit that does not ask.
+        """
+
+        store = getattr(controller, "store", None)
+        return list(store.list()) if store is not None else []
+
+    def refresh_dock_badge() -> None:
+        label = badge_label(active_job(current_jobs()))
+        if label == badge_state["label"]:
+            return
+        badge_state["label"] = label
+        # setBadgeLabel_(None) is how AppKit spells "clear it".
+        app.dockTile().setBadgeLabel_(label)
+
+    def prepare_notifications() -> None:
+        """Ask once for permission to post "your game is ready".
+
+        Deliberately best-effort. ``UNUserNotificationCenter`` requires a real
+        bundle identifier, which a source run
+        (``python -m sidelinehd_extractor.desktop``) does not have, and
+        delivery from an ad-hoc-signed bundle is exactly the kind of thing
+        that varies by macOS version. If any of it declines, we drop it
+        without ceremony — the badge clearing and the page's Done state are
+        the guaranteed signals.
+        """
+
+        if AppKit.NSBundle.mainBundle().bundleIdentifier() is None:
+            return
+        import UserNotifications
+
+        center = UserNotifications.UNUserNotificationCenter.currentNotificationCenter()
+        if center is None:
+            return
+        center.requestAuthorizationWithOptions_completionHandler_(
+            UserNotifications.UNAuthorizationOptionAlert
+            | UserNotifications.UNAuthorizationOptionSound
+            # Badge is asked for because this app *does* carry one. The Dock
+            # badge above is an ``NSDockTile`` label and needs no permission,
+            # but an app that registers with the notification centre and then
+            # shows a badge it never asked to show is describing itself wrong
+            # to the OS — and on some macOS versions that is enough for the
+            # badge to be suppressed.
+            | UserNotifications.UNAuthorizationOptionBadge,
+            lambda granted, error: None,
+        )
+        notifier["center"] = center
+
+    def post_completion_notification(job: "Job") -> None:
+        center = notifier["center"]
+        if center is None:
+            return
+        import UserNotifications
+
+        title, body = completion_notification(job)
+        content = UserNotifications.UNMutableNotificationContent.alloc().init()
+        content.setTitle_(title)
+        content.setBody_(body)
+        request = UserNotifications.UNNotificationRequest.requestWithIdentifier_content_trigger_(
+            f"job-{job.id}", content, None
+        )
+        center.addNotificationRequest_withCompletionHandler_(request, None)
+
+    def announce_finished_jobs() -> None:
+        for job in newly_finished(current_jobs(), seen_job_statuses):
+            try:
+                post_completion_notification(job)
+            except Exception:
+                # A notification failure must never surface to the user as an
+                # error — the run finished, which is the thing that mattered.
+                notifier["center"] = None
+
+    def confirm_quit_mid_run() -> bool:
+        """Ask before a quit throws away a read in flight. True → quit anyway.
+
+        A failure to present the alert quits rather than wedging: a dialog
+        that cannot be shown must not become a quit that cannot happen.
+        """
+
+        try:
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_(QUIT_CONFIRM_MESSAGE)
+            alert.setInformativeText_(QUIT_CONFIRM_DETAIL)
+            alert.addButtonWithTitle_(QUIT_CONFIRM_QUIT_TITLE)
+            # AppKit gives a button titled "Cancel" the Escape key equivalent
+            # for free, so the reflex that reaches for ⎋ keeps the run.
+            alert.addButtonWithTitle_(QUIT_CONFIRM_CANCEL_TITLE)
+            app.activateIgnoringOtherApps_(True)
+            return alert.runModal() == AppKit.NSAlertFirstButtonReturn
+        except Exception:
+            return True
 
     # --- The window (item 70b) ---
     #
@@ -827,10 +1083,31 @@ def run_dock_app(
             # logout, and now `stop` (via SIGTERM) all stop the server
             # gracefully. stop() bounds its thread join, so quit — including
             # logout — can never wedge.
+            #
+            # Item 70c: a 40-minute read must not vanish to a reflexive ⌘Q.
+            # Logout takes this path deliberately — macOS handles a
+            # logout-blocking alert natively and the person is at the screen —
+            # while `stop`'s SIGTERM does not ask, which is what
+            # `quit_context.interactive` carries here (D5).
+            if should_confirm_quit(
+                current_jobs(), interactive=quit_context.interactive
+            ) and not confirm_quit_mid_run():
+                return AppKit.NSTerminateCancel
             controller.stop()
             if on_quit is not None:
                 on_quit()
             return AppKit.NSTerminateNow
+
+        def updateDockBadge_(self, _timer):
+            # Item 70c. A sibling of the heartbeat rather than a passenger on
+            # it: the heartbeat's one job is delivering signals, and it should
+            # not acquire a second reason to be wrong.
+            try:
+                refresh_dock_badge()
+                announce_finished_jobs()
+            except Exception:
+                pass
+            return None
 
         def heartbeat_(self, _timer):
             # Deliberately does nothing. Its only job is to run Python
@@ -861,16 +1138,26 @@ def run_dock_app(
     # Item 70a: `stop` sends SIGTERM, and the graceful path is the same one
     # ⌘Q takes. The heartbeat is permanent (never invalidated) — it is what
     # gives the interpreter a chance to deliver the signal at all.
-    # `quit_context` is what applicationShouldTerminate_ will consult in 70c;
-    # here nothing asks a question yet, so it is only written to.
-    quit_context = QuitContext()
+    # `quit_context` (built above) is what applicationShouldTerminate_ reads to
+    # skip 70c's confirmation on this one path.
     install_sigterm_quit_handler(lambda: app.terminate_(None), quit_context)
+    # Item 70c: best-effort, and never a precondition for anything.
+    try:
+        prepare_notifications()
+    except Exception:
+        pass
     # Item 70b: launch presents the app's own window. This is what replaced
     # main()'s `webbrowser.open` — a Dock app that opens a different
     # application is the shape this milestone exists to retire.
     present_window()
     AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         1.0, delegate, "heartbeat:", None, True
+    )
+    # Item 70c: the Dock tile's only source of truth about a run in flight.
+    # Permanent, like the heartbeat — a read can start at any point in the
+    # app's life, including with the window closed, which is the whole case.
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        1.0, delegate, "updateDockBadge:", None, True
     )
     if update_check is not None:
         AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(

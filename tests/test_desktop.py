@@ -800,6 +800,191 @@ def test_navigation_action_url_survives_an_action_with_no_url():
     assert desktop.navigation_opens_in_window("", _APP_URL)
 
 
+# --- Long-run visibility (item 70c) ------------------------------------------
+#
+# The Dock badge and the quit-mid-run confirmation are pure functions over job
+# state, so the whole contract — including "SIGTERM never asks", the one rule
+# whose failure silently disarms the dialog for ⌘Q too — is tested here rather
+# than clicked through on a bundle.
+
+
+def _job(status="running", frames_done=0, frames_total=0, job_id="j1"):
+    from sidelinehd_extractor.webapp.jobs import Job
+
+    return Job(
+        id=job_id,
+        kind="single",
+        url="https://youtu.be/example",
+        status=status,
+        frames_done=frames_done,
+        frames_total=frames_total,
+    )
+
+
+def test_badge_shows_the_read_percentage():
+    """The OCR percentage is the number worth showing: it is the half-hour
+    the user is actually waiting on."""
+
+    assert desktop.badge_label(_job(frames_done=4900, frames_total=10000)) == "49%"
+    assert desktop.badge_label(_job(frames_done=0, frames_total=10000)) == "0%"
+    assert desktop.badge_label(_job(frames_done=10000, frames_total=10000)) == "100%"
+
+
+def test_badge_falls_back_to_an_activity_mark_without_counts():
+    """Downloading, and every stage before OCR, has no frame counts — but the
+    app is not idle and the tile must not say it is."""
+
+    assert desktop.badge_label(_job(frames_total=0)) == desktop.BADGE_ACTIVITY_MARK
+    # A queued job is work accepted and not yet done, not idleness.
+    assert desktop.badge_label(_job(status="queued")) == desktop.BADGE_ACTIVITY_MARK
+
+
+def test_badge_clears_when_nothing_is_running():
+    """Clearing is the *guaranteed* completion signal — the one that works
+    whether or not the OS lets an ad-hoc-signed bundle post a notification."""
+
+    assert desktop.badge_label(None) is None
+    assert desktop.badge_label(_job(status="done", frames_done=99, frames_total=99)) is None
+    assert desktop.badge_label(_job(status="error")) is None
+
+
+def test_badge_percentage_never_exceeds_100():
+    """Playlist jobs reset the counts per entry (documented Job behaviour), so
+    a stale frames_done can briefly outrun the new total."""
+
+    assert desktop.badge_label(_job(frames_done=1200, frames_total=800)) == "100%"
+
+
+def test_active_job_prefers_the_running_one_over_a_queued_one():
+    """JobStore.list() is newest-first, so a second submission sits ahead of
+    the job actually being worked on."""
+
+    queued = _job(status="queued", job_id="new")
+    running = _job(frames_done=1, frames_total=10, job_id="old")
+    assert desktop.active_job([queued, running]) is running
+
+
+def test_active_job_falls_back_to_the_newest_pending_job():
+    newest = _job(status="queued", job_id="new")
+    older = _job(status="queued", job_id="old")
+    assert desktop.active_job([newest, older]) is newest
+
+
+def test_active_job_is_none_when_every_job_has_finished():
+    assert desktop.active_job([]) is None
+    assert desktop.active_job([_job(status="done"), _job(status="error", job_id="j2")]) is None
+
+
+def test_quit_asks_when_a_read_is_in_flight():
+    for status in ("queued", "running"):
+        assert desktop.should_confirm_quit([_job(status=status)], interactive=True)
+
+
+def test_quit_asks_nothing_when_no_job_is_running():
+    assert not desktop.should_confirm_quit([], interactive=True)
+    assert not desktop.should_confirm_quit([_job(status="done")], interactive=True)
+    assert not desktop.should_confirm_quit([_job(status="error")], interactive=True)
+
+
+def test_sigterm_never_asks_even_mid_run():
+    """D5, and the rule this slice most needs pinned: a dialog raised in answer
+    to `stop` can only be dismissed by someone who is not looking at that
+    screen, so it would stall the quit until the CLI's timer killed the app —
+    a SIGKILL mid-frame, which is worse for the run than the graceful stop the
+    dialog exists to protect."""
+
+    for status in ("queued", "running", "done", "error"):
+        assert not desktop.should_confirm_quit([_job(status=status)], interactive=False)
+
+
+def test_quit_confirmation_reads_the_70a_flag_the_signal_handler_sets():
+    """End to end over the two 70a/70c pieces: the flag is set by the SIGTERM
+    handler and nowhere else, and it is what disarms the dialog."""
+
+    context = desktop.QuitContext()
+    jobs = [_job(status="running")]
+    assert desktop.should_confirm_quit(jobs, interactive=context.interactive)
+
+    desktop.install_sigterm_quit_handler(
+        lambda: None, context, install=lambda signum, fn: None
+    )(signal.SIGTERM, None)
+    assert not desktop.should_confirm_quit(jobs, interactive=context.interactive)
+
+
+def test_quit_confirmation_copy_names_the_consequence():
+    """Plain language, per the milestone rule: the user is being asked to weigh
+    forty minutes of work, so the dialog has to say that is what is at stake —
+    not "are you sure?"."""
+
+    assert desktop.QUIT_CONFIRM_MESSAGE == "A game is still being read. Quit anyway?"
+    assert "won't produce timestamps" in desktop.QUIT_CONFIRM_DETAIL
+    assert (desktop.QUIT_CONFIRM_QUIT_TITLE, desktop.QUIT_CONFIRM_CANCEL_TITLE) == (
+        "Quit",
+        "Cancel",
+    )
+
+
+def test_newly_finished_announces_each_job_exactly_once():
+    seen = {}
+    running = _job(status="running")
+    assert desktop.newly_finished([running], seen) == []
+
+    done = _job(status="done")
+    assert desktop.newly_finished([done], seen) == [done]
+    # Still there on the next tick, and already announced.
+    assert desktop.newly_finished([done], seen) == []
+
+
+def test_newly_finished_ignores_a_job_first_seen_already_terminal():
+    """A false "your game is ready" is worse than a missing one."""
+
+    assert desktop.newly_finished([_job(status="done")], {}) == []
+
+
+def test_newly_finished_announces_failures_too():
+    seen = {}
+    desktop.newly_finished([_job(status="running")], seen)
+    assert desktop.newly_finished([_job(status="error")], seen)
+
+
+def test_completion_notification_is_honest_about_a_failed_run():
+    """A coach who waited forty minutes needs to be told it did not work just
+    as much as they need to be told it did."""
+
+    title, body = desktop.completion_notification(_job(status="done"))
+    assert title == "Your game is ready"
+    assert body
+
+    failed_title, failed_body = desktop.completion_notification(_job(status="error"))
+    assert failed_title != title
+    assert "didn't finish" in failed_title
+    assert failed_body
+
+
+def test_controller_exposes_the_job_store_it_builds(monkeypatch):
+    """70c reads job state in-process (controller.store) rather than adding an
+    HTTP surface — the launcher and the server are one process."""
+
+    from sidelinehd_extractor.webapp import jobs as jobs_module
+
+    controller = ServerController(port=8199)
+    assert controller.store is None  # nothing built yet
+
+    built = controller._app_factory()
+    assert isinstance(controller.store, jobs_module.JobStore)
+    assert built is not None
+
+
+def test_a_controller_with_a_custom_app_factory_has_no_store():
+    """The badge and the confirmation must degrade to "nothing is running"
+    rather than assume a store is there — a blank tile and a quit that does
+    not ask, which is the safe reading."""
+
+    controller = ServerController(port=8199, app_factory=lambda: _tiny_app)
+    controller._app_factory()
+    assert controller.store is None
+
+
 # --- Dock-first packaging and dependency guards (item 68b) -------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -818,11 +1003,15 @@ def test_desktop_extra_swapped_rumps_for_pyobjc():
     # otherwise run_dock_app raises ImportError on the first launch after a
     # source install and the app never appears at all.
     assert "pyobjc-framework-WebKit" in text
+    # Item 70c: "your game is ready". Best-effort at runtime, but the extra is
+    # where it has to be declared or the bundle cannot post one at all.
+    assert "pyobjc-framework-UserNotifications" in text
 
 
 def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
     """The module must stay importable headless (CI, --selftest, this suite):
-    AppKit and WebKit may only be imported inside run_dock_app."""
+    AppKit, WebKit, and UserNotifications may only be imported inside
+    run_dock_app."""
 
     tree = ast.parse(Path(desktop.__file__).read_text(encoding="utf-8"))
     top_level = set()
@@ -831,4 +1020,6 @@ def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
             top_level.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             top_level.add((node.module or "").split(".")[0])
-    assert top_level.isdisjoint({"AppKit", "Cocoa", "WebKit", "objc", "rumps"})
+    assert top_level.isdisjoint(
+        {"AppKit", "Cocoa", "WebKit", "UserNotifications", "objc", "rumps"}
+    )

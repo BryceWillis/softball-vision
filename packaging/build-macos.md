@@ -152,6 +152,17 @@ because the bundle is single-arch.
    (`runs/`, `videos/`, `rosters/`, `sidelinehd.cfg`).
 5. Run a short game video end-to-end: OCR must work with no Tesseract
    installed (embedded tesserocr + bundled `eng.traineddata`).
+   - **While it reads, look at the Dock icon** (item 70c): the tile carries a
+     percentage badge that climbs, and it clears when the game finishes.
+     Close the window first — the badge is what makes a 40-minute read
+     visible with no window open, which is the whole point of it.
+   - **Press ⌘Q while it is still reading.** A plain-language confirmation
+     appears naming the consequence; **Cancel** leaves the read running
+     untouched; **Quit** stops within `controller.stop()`'s 10-second bound.
+   - **Then `sidelinehd-extractor stop` during a read** (item 70c / D5): it
+     must **not** put a dialog on screen. The app stops gracefully inside the
+     CLI's 12-second wait and `stop` prints `Stopped (PID …)`, not the
+     force-stopped message.
 6. Quit — Dock right-click → **Quit**, or ⌘Q — stops the server and exits:
    the port is freed (`lsof -i :8000` clean) and no process survives.
 
