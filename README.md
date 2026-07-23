@@ -28,19 +28,16 @@ app called **SidelineHD Extractor**.
 **3. Drag it into your Applications folder** — do this now, before opening it
 for the first time.
 
-**4. Open it once with right-click → Open.** macOS will warn you that the app
-is from an "unidentified developer." That warning is expected, not a sign
-that something is wrong: the app is signed, but it is not registered with
-Apple's paid developer program, so macOS cannot vouch for who built it.
-Right-click (or Control-click) **SidelineHD Extractor** in Applications and
-choose **Open**, then click **Open** in the dialog. macOS remembers your
-answer — from then on the app opens with a normal double-click. (Replacing
-the app with a newer download resets this, so an update needs the same
-one-time right-click → Open again.)
+**4. Open it.** Double-click **SidelineHD Extractor** in Applications. macOS
+shows its ordinary "downloaded from the internet" confirmation — click
+**Open**, and that's the only question it asks. Releases are signed and
+notarized with Apple, so macOS can verify who built the app and that Apple
+has checked it.
 
-   If you double-clicked first instead, macOS shows a warning with **no Open
-   button at all** — it looks like a dead end, but it isn't. Close the
-   dialog, then right-click the app and choose **Open**.
+   (Releases **before v0.6.0** were not notarized, so those older zips only
+   get a scarier warning with no Open button at all. It looks like a dead
+   end, but it isn't: close the dialog, then right-click the app and choose
+   **Open**, then **Open** again in the dialog.)
 
 **5. That's it.** The app's icon appears in your Dock and the app's own window
 opens on the first page. That page explains the rest: add your team's roster,
@@ -66,7 +63,7 @@ Send the **zip file**, not the unpacked app. Re-zipping the app with Finder
 (right-click → **Compress**) is fine; emailing the raw `.app` is not — mail
 programs mangle app bundles, and the copy that arrives will not open. The
 other coach then follows the same steps above: unzip, drag to Applications,
-and right-click → **Open** once.
+double-click, and click **Open** on the one-time confirmation.
 
 ### How the app checks for updates
 
@@ -78,8 +75,8 @@ when you're offline. If a newer version exists, an
 **SidelineHD Extractor** menu at the top of the screen, and the Dock icon's
 right-click menu — and opens the Releases page; download
 the new zip and replace the app yourself (the app never replaces itself).
-The fresh download needs the same one-time right-click → **Open** described
-in step 4 above. When you're up to date, no update item appears.
+The fresh download opens with the same one-time confirmation described in
+step 4 above. When you're up to date, no update item appears.
 
 To turn the check off entirely, add this to `sidelinehd.cfg` in the app's
 data folder — in Finder, press `Cmd+Shift+G` and go to

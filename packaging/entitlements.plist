@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime exceptions for the notarized bundle (M6 slice 69a).
+
+  Notarization requires the hardened runtime, and a PyInstaller/CPython
+  bundle violates two of its defaults. Each entry here is a security
+  posture decision: tests/test_packaging_entitlements.py pins this file to
+  exactly this set, so adding one must arrive as a deliberate diff line.
+  The set is validated by CI's scrubbed-PATH selftest, which runs against
+  the *signed* bundle — a missing entitlement fails there, not on a
+  coach's machine.
+-->
+<plist version="1.0">
+<dict>
+	<!-- ctypes/cffi and cysignals JIT-map executable pages at runtime;
+	     without this the hardened runtime kills the process on the first
+	     such mmap. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<!-- The tesserocr wheel ships its own .dylibs/ (libtesseract et al.)
+	     signed by the wheel's builder, not by our Developer ID; library
+	     validation would refuse to load them. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

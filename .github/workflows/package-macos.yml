@@ -1,9 +1,18 @@
-# Item 67b: CI-built macOS .app artifact (the deferred 54d-3).
+# Item 67b: CI-built macOS .app artifact (the deferred 54d-3), extended by
+# M6 slice 69a with Developer ID signing, notarization, and stapling.
 # Mirrors packaging/build-macos.md step for step — the doc and this workflow
 # are one recipe, and whenever one changes the other changes in the same
 # commit. The packaging/** push trigger exists to make drift fail loudly.
 # Kept separate from ci.yml: different trigger, and a macOS-only runner cost
 # the three-OS test matrix should not pay on every push.
+#
+# Signing posture (69a): tag builds are Developer-ID-signed with the
+# hardened runtime, notarized, and stapled — a tag with missing secrets
+# fails loudly rather than shipping ad-hoc. Branch builds with secrets are
+# signed but not notarized, so Apple's service is not a dependency of every
+# packaging push. Forks (no secrets) keep the ad-hoc path and stay green.
+# Step order: build → sign → selftest (fast local failure before the slow
+# remote step) → zip → notarize → staple → re-zip → validate/assess → upload.
 name: Package macOS app
 
 on:
@@ -25,7 +34,8 @@ jobs:
     # arm64 only (macos-latest is Apple Silicon); Intel is not covered and
     # the artifact name says so. Revisit only if an Intel user appears.
     runs-on: macos-latest
-    timeout-minutes: 30
+    # 45, not 30: tag builds wait on Apple's notary service.
+    timeout-minutes: 45
     env:
       APP_PATH: dist/SidelineHD Extractor.app
       ZIP_NAME: SidelineHD-Extractor-macos-arm64.zip
@@ -35,6 +45,50 @@ jobs:
           # The 67a build stamp runs `git rev-parse --short HEAD`; a shallow
           # checkout would silently drop the SHA from the baked stamp.
           fetch-depth: 0
+
+      - name: Check signing secrets
+        # GitHub cannot branch `if:` on secrets directly, so this step
+        # exports a have_signing output the signing steps key on. It also
+        # enforces the 69a posture up front, before the slow build steps:
+        # a tag build missing any signing/notarization secret fails loudly
+        # naming the secret — a release artifact silently shipping ad-hoc
+        # would re-open the exact hole 69a closes. A branch build with a
+        # partial signing set fails too (a cert that cannot be used is a
+        # misconfiguration, not a fork); a build with no cert at all is a
+        # fork and stays green on the ad-hoc path.
+        id: signing
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error::Tag build with no MACOS_CERT_P12 secret — a release must never ship ad-hoc-signed. Load the signing secrets before tagging."
+              exit 1
+            fi
+            echo "have_signing=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for name in APPLE_TEAM_ID MACOS_CERT_PASSWORD MACOS_KEYCHAIN_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::MACOS_CERT_P12 is set but the $name secret is missing — signing cannot proceed."
+              exit 1
+            fi
+          done
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            for name in ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8; do
+              if [ -z "${!name}" ]; then
+                echo "::error::Tag build cannot notarize: the $name secret is missing."
+                exit 1
+              fi
+            done
+          fi
+          echo "have_signing=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v5
         with:
@@ -73,7 +127,70 @@ jobs:
       - name: Build the .app with PyInstaller
         run: pyinstaller --noconfirm packaging/sidelinehd.spec
 
-      - name: Ad-hoc sign and verify
+      - name: Import the Developer ID certificate into a temp keychain
+        if: steps.signing.outputs.have_signing == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        # Uniquely named per run so stale keychain state can never leak
+        # between runs; the always() cleanup step below deletes it and every
+        # decoded key file, success or failure.
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/sidelinehd-signing-$GITHUB_RUN_ID.keychain-db"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing-cert.p12"
+          security import "$RUNNER_TEMP/signing-cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/signing-cert.p12"
+          # Lets codesign use the imported key non-interactively; the output
+          # dumps keychain attributes and is discarded.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Sign with Developer ID (hardened runtime + entitlements)
+        if: steps.signing.outputs.have_signing == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Inside-out, not --deep: every nested Mach-O first (dylibs, .so
+        # extensions, helper executables like the bundled ffmpeg), then the
+        # bundle itself, which signs the main executable and attaches the
+        # hardened-runtime entitlements. Entitlements go on the main
+        # executable only — they are meaningless on libraries.
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -v team="($APPLE_TEAM_ID)" \
+              '/Developer ID Application/ && index($0, team) {print $2; exit}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No 'Developer ID Application' identity for team $APPLE_TEAM_ID in the imported certificate."
+            exit 1
+          fi
+          find "$APP_PATH/Contents" -type f -print0 | while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q 'Mach-O'; then
+              codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            fi
+          done
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/entitlements.plist \
+            --sign "$IDENTITY" "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+          info=$(codesign -dvv "$APP_PATH" 2>&1)
+          echo "$info" | grep "TeamIdentifier=" || true
+          if ! echo "$info" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"; then
+            echo "::error::Signed bundle's TeamIdentifier is not $APPLE_TEAM_ID."
+            exit 1
+          fi
+          if ! echo "$info" | grep -Eq 'flags=.*runtime'; then
+            echo "::error::Signed bundle does not carry the hardened-runtime flag."
+            exit 1
+          fi
+
+      - name: Ad-hoc sign and verify (forks — no signing secrets)
+        if: steps.signing.outputs.have_signing != 'true'
         run: |
           codesign --force --deep -s - "$APP_PATH"
           codesign --verify "$APP_PATH"
@@ -83,7 +200,10 @@ jobs:
         # --selftest is the full startup path minus the GUI (data dir,
         # dependency self-containment, port, server, GET / must be 200). Run
         # against the built binary, not the source tree — the source tree is
-        # not the thing being shipped.
+        # not the thing being shipped. It runs after signing deliberately:
+        # under the hardened runtime this is what measures the entitlements
+        # set in packaging/entitlements.plist, so a gap fails CI here rather
+        # than reaching a coach.
         # PATH is scrubbed to the bare launchd set a double-clicked .app
         # gets: every prior verification ran from a terminal whose Homebrew
         # PATH silently supplied tesseract and yt-dlp, which is exactly how
@@ -104,6 +224,60 @@ jobs:
         # bundle launchable, which surfaces to the recipient as the build
         # doc's "app won't open (damaged)".
         run: ditto -c -k --keepParent "$APP_PATH" "dist/$ZIP_NAME"
+
+      - name: Notarize (tag builds only)
+        # Branch builds stay signed-but-unnotarized so Apple's service is
+        # not a dependency of every packaging push. If the notary service is
+        # slow or down the job fails; re-run it — a tag never ships
+        # unnotarized. notarytool's exit code is not trusted to reflect the
+        # verdict, so the status is asserted from the JSON output, and on
+        # anything but Accepted the notary log is fetched for the real
+        # reason before failing.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          KEY_FILE="$RUNNER_TEMP/asc-api-key.p8"
+          printf '%s' "$ASC_API_KEY_P8" | base64 --decode > "$KEY_FILE"
+          xcrun notarytool submit "dist/$ZIP_NAME" \
+            --key "$KEY_FILE" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m --output-format json \
+            | tee "$RUNNER_TEMP/notary.json"
+          status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$RUNNER_TEMP/notary.json")
+          if [ "$status" != "Accepted" ]; then
+            sub_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$RUNNER_TEMP/notary.json")
+            if [ -n "$sub_id" ]; then
+              xcrun notarytool log "$sub_id" \
+                --key "$KEY_FILE" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            fi
+            echo "::error::Notarization did not come back Accepted (status: ${status:-unknown})."
+            exit 1
+          fi
+          rm -f "$KEY_FILE"
+
+      - name: Staple, re-package, and assess (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        # Stapling mutates the bundle, so the shipped zip is rebuilt after
+        # it — the pre-notarization zip must never be the one uploaded.
+        # stapler validate and spctl are hard assertions: notarization is a
+        # distribution property asserted here, where it is produced (the
+        # updater's runtime gate deliberately does not re-check it).
+        run: |
+          xcrun stapler staple "$APP_PATH"
+          rm -f "dist/$ZIP_NAME"
+          ditto -c -k --keepParent "$APP_PATH" "dist/$ZIP_NAME"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute -vv "$APP_PATH"
+
+      - name: Clean up signing keychain and key material
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/signing-cert.p12" "$RUNNER_TEMP/asc-api-key.p8"
 
       - uses: actions/upload-artifact@v4
         with:

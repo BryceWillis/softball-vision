@@ -65,21 +65,48 @@ the web footer so a stale bundle is self-evident. It also sets the bundle's
 macOS reports (Get Info) should match `pyproject.toml`. Building from a
 source tarball with no git is fine — the stamp just drops the SHA segment.
 
-## 4. Ad-hoc signing (local distribution)
+## 4. Signing — local builds are ad-hoc; CI does the real signing
 
-Unsigned apps are blocked outright on Apple Silicon; ad-hoc signing makes
-the app runnable, though Gatekeeper still requires right-click → Open the
-first time on a machine that downloaded it:
+Local and dev builds are **ad-hoc signed**, deliberately. Unsigned apps are
+blocked outright on Apple Silicon; ad-hoc signing makes the app runnable,
+though Gatekeeper still requires right-click → Open the first time on a
+machine that downloaded it:
 
 ```sh
 codesign --force --deep -s - "dist/SidelineHD Extractor.app"
 codesign --verify "dist/SidelineHD Extractor.app"
 ```
 
-Real Developer ID signing + notarization is deferred until distribution
-matters — revisit when the recipient count passes about three, or on the
-first recipient who cannot get past Gatekeeper unaided (see the roadmap's
-M1 distribution decision).
+Real Developer ID signing, notarization, and stapling landed in CI (M6
+slice 69a) — `.github/workflows/package-macos.yml` carries the steps:
+
+- **Branch builds** (signing secrets present) sign with the Developer ID
+  Application identity, the hardened runtime (`--options runtime
+  --timestamp`), and the committed `packaging/entitlements.plist` —
+  inside-out, nested Mach-Os first, then the bundle. Notarization is
+  skipped on branches so Apple's service is not a dependency of every
+  packaging push.
+- **Tag builds** additionally submit the zip to Apple's notary service
+  (`notarytool submit --wait`), staple the ticket onto the app, **rebuild
+  the zip** (stapling mutates the bundle — the pre-staple zip must never
+  ship), then hard-assert `stapler validate` and `spctl --assess --type
+  execute`. A tag build missing any signing secret **fails loudly** rather
+  than shipping ad-hoc; if the notary service is down, the job fails —
+  re-run it. A tag never ships unnotarized.
+- **Forks** (no secrets) run the ad-hoc line above and stay green.
+
+`packaging/entitlements.plist` is the hardened runtime's exception list —
+unsigned executable memory (ctypes/cffi/cysignals) and library validation
+off (the tesserocr wheel's bundled dylibs). Each entry is a security
+posture decision: `tests/test_packaging_entitlements.py` pins the file to
+exactly that set, and the scrubbed-PATH selftest (step 5) runs against the
+*signed* bundle in CI, so an entitlement gap fails there rather than on a
+coach's machine.
+
+Secrets, by name (values live only in GitHub Actions): `APPLE_TEAM_ID`,
+`MACOS_CERT_P12` (base64 `.p12`), `MACOS_CERT_PASSWORD`,
+`MACOS_KEYCHAIN_PASSWORD`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_API_KEY_P8`
+(base64 `.p8`).
 
 ## 5. Smoke-test the built bundle with a scrubbed PATH
 
@@ -126,7 +153,9 @@ because the bundle is single-arch.
 ## 7. Verify on a clean account
 
 1. Copy the `.app` to a user account (or machine) with no brew/python setup.
-2. Double-click (first time: right-click → Open). The app's icon (the
+2. Double-click (first time on an ad-hoc local build: right-click → Open;
+   a notarized release download opens with the ordinary one-question
+   confirm). The app's icon (the
    item 68a artwork) appears in the Dock and in ⌘Tab — and **no** "SHD" item
    appears in the menu bar — and **the app's own window opens** on the home
    page, titled *SidelineHD Extractor*. **No browser tab opens** (item 70b
@@ -215,8 +244,12 @@ yours to redistribute under the repo's MIT license before committing it.
   `pip install --only-binary tesserocr tesserocr`.
 - **OCR errors mentioning tessdata** — step 2 was skipped; the spec fails
   fast if `packaging/tessdata/eng.traineddata` is missing.
-- **App won't open ("damaged")** — signing step skipped, or the zip was
-  transferred without preserving the bundle; re-sign per step 4.
+- **App won't open ("damaged")** — for a **release download** (v0.6.0 and
+  later are notarized), Gatekeeper distrust is not the cause: the zip was
+  repacked with `zip` instead of `ditto`, or mangled in transit (mailed
+  `.app`, step 6's warning). Re-download the original zip. For a **local
+  ad-hoc build**, the signing step was skipped or the bundle was
+  transferred without preserving symlinks; re-sign per step 4.
 - **Rebuilt app still shows the old (or generic) icon** — Finder and the
   Dock cache icons aggressively, so after replacing an existing `.app` the
   old artwork can persist and look like a failed build. Move or rename the
