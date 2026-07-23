@@ -441,6 +441,38 @@ def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_
     assert events.index("update-check-start") < events.index("dock-app")
 
 
+def test_main_binds_the_update_check_to_the_data_dir(monkeypatch, tmp_path):
+    """Item 70f / CR-98: the update opt-out must be read from the app's data
+    dir, not the launcher's CWD (`/` in a Finder-launched bundle). `main()`
+    hands `UpdateCheck` a `check` bound to that data dir; pin the binding so a
+    refactor back to a bare `UpdateCheck()` / `available_update` cannot
+    silently reinstate the read-from-`/` bug with the suite green. The seam
+    test in test_updates.py covers the forwarding this binding depends on."""
+
+    events = []
+    captured = {}
+
+    def fake_update_check(check=None):
+        captured["check"] = check
+        return _NoopCheck()
+
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(desktop, "UpdateCheck", fake_update_check)
+    monkeypatch.setattr(desktop, "run_dock_app", lambda *a, **kw: None)
+
+    # `_patch_main_launch` makes `prepare_data_dir` return `tmp_path`, so the
+    # data dir main() binds is `tmp_path`. Spy `available_update` and prove the
+    # bound check forwards that dir as its cwd when invoked.
+    seen = []
+    monkeypatch.setattr(
+        desktop, "available_update", lambda *a, **kw: seen.append(kw.get("cwd")) or None
+    )
+
+    assert desktop.main([]) == 0
+    assert captured["check"]() is None
+    assert seen == [tmp_path]
+
+
 def test_launch_no_longer_opens_a_browser(monkeypatch, tmp_path):
     """Item 70b (D4): launch presents the app's own window. Opening a browser
     tab from the Dock app is the invention this milestone exists to retire —
@@ -1014,14 +1046,23 @@ def test_server_is_healthy_needs_both_a_live_pid_and_a_200(monkeypatch):
 
     record = _record(pid=4242)
 
-    # Dead PID: never even probed over the network.
+    # Dead PID: the PID-alive guard must short-circuit *before* the network
+    # probe. The probe is stubbed to answer a *healthy* 200 and to record that
+    # it ran, so the outcome distinguishes "guarded" from "not guarded"
+    # (CR-97): with the guard, the dead PID returns False without probing;
+    # without it, the healthy probe would run and return True. A *raising*
+    # probe cannot prove this — `server_is_healthy` wraps it in `except
+    # Exception`, so a swallowed AssertionError yields False whether or not the
+    # guard is there, and the sub-case passes even with the guard deleted.
+    probed = []
     monkeypatch.setattr(lifecycle, "is_pid_alive", lambda pid: False)
-
-    def _must_not_probe(*args, **kwargs):
-        raise AssertionError("a dead PID must not be probed")
-
-    monkeypatch.setattr(desktop.urllib.request, "urlopen", _must_not_probe)
+    monkeypatch.setattr(
+        desktop.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: probed.append(url) or _FakeResponse(200),
+    )
     assert desktop.server_is_healthy(record) is False
+    assert probed == []  # short-circuited before the probe
 
     # Alive + 200 → healthy.
     monkeypatch.setattr(lifecycle, "is_pid_alive", lambda pid: True)

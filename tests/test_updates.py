@@ -313,6 +313,31 @@ def test_available_update_swallows_an_unexpected_raise(monkeypatch, tmp_path):
     assert available_update() is None
 
 
+def test_available_update_forwards_cwd_to_the_enable_gate(monkeypatch, tmp_path):
+    """`available_update(cwd=)` reads the opt-out from the cwd it is handed.
+
+    Pins the `available_update(cwd=)` → `update_check_enabled(cwd=)` forwarding
+    that 70f relies on so a bundle's data-dir opt-out is honoured (CR-98). The
+    leaf gate is covered with an explicit cwd elsewhere; the forwarding was
+    not, and a refactor dropping it would silently read `check_for_updates`
+    from the launcher's CWD (`/`) with the whole suite green.
+    """
+
+    seen = []
+
+    def _record_cwd(cwd=None):
+        seen.append(cwd)
+        return False  # disabled → short-circuit before any network I/O
+
+    monkeypatch.setattr(updates, "update_check_enabled", _record_cwd)
+    calls = _serve(monkeypatch)
+    sentinel = tmp_path / "data-dir"
+
+    assert available_update(cwd=sentinel) is None
+    assert seen == [sentinel]
+    assert calls == []  # the gate said no → the request is never attempted
+
+
 # --- UpdateCheck / menu label ----------------------------------------------
 
 
