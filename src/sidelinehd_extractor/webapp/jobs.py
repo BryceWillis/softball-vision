@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional
 
 from sidelinehd_extractor.batch import PlaylistBatchResult, run_playlist_batch
-from sidelinehd_extractor.config import load_project_config, load_overlay_template, load_roster
+from sidelinehd_extractor.config import (
+    load_overlay_template,
+    load_project_config,
+    load_roster,
+    resolve_config_path,
+)
 from sidelinehd_extractor.events import DetectionConfig
 from sidelinehd_extractor.ocr import create_ocr_backend
 from sidelinehd_extractor.serialization import to_plain_data
@@ -105,17 +110,21 @@ class JobStore:
                 job.current_stage = stage
 
 
-def default_pipeline_kwargs() -> dict:
+def default_pipeline_kwargs(data_root: Optional[Path] = None) -> dict:
     """Build the shared pipeline arguments the CLI would use by default.
 
     Mirrors ``run-youtube``/``run-playlist`` defaults: ``sidelinehd.cfg``
-    supplies template/roster/team name, and OCR is Tesseract.
+    supplies template/roster/team name, and OCR is Tesseract. ``data_root``
+    is the base ``sidelinehd.cfg`` resolves against — None means the process
+    CWD (the CLI-served default); the desktop passes its data dir (70f).
     """
 
-    config = load_project_config()
-    template = load_overlay_template(config.template) if config.template else None
+    config = load_project_config(cwd=data_root)
+    template_path = resolve_config_path(config.template, data_root)
+    roster_path = resolve_config_path(config.roster, data_root)
+    template = load_overlay_template(template_path) if template_path else None
     roster = (
-        load_roster(config.roster, team_name=config.team_name) if config.roster else None
+        load_roster(roster_path, team_name=config.team_name) if roster_path else None
     )
     return {
         "template": template,

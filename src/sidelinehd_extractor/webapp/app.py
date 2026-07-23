@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import partial
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -51,18 +52,23 @@ from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish
 from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.review_triage import summarize_triage, triage_review_rows
 from sidelinehd_extractor.roster import (
-    ROSTERS_DIRNAME,
     UnknownRoster,
     configured_roster_path,
     default_roster_path,
     existing_roster_path,
     is_configured_default,
     parse_team_list,
+    rosters_directory,
     write_roster_csv,
 )
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
-from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
+from sidelinehd_extractor.webapp.jobs import (
+    Job,
+    JobRunner,
+    JobStore,
+    default_pipeline_kwargs,
+)
 from sidelinehd_extractor.webapp.lifecycle import footer_runtime_label
 from sidelinehd_extractor.workflow import NO_SCOREBOARD_WARNING, finalize_run_exports
 from sidelinehd_extractor.youtube import youtube_watch_url
@@ -329,7 +335,12 @@ _REVIEW_PAGES = ("review", "game")
 
 
 def build_review_context(
-    job: Job, entry: int, run_dir: Path, show_all: bool, page: str = "review"
+    job: Job,
+    entry: int,
+    run_dir: Path,
+    show_all: bool,
+    page: str = "review",
+    data_root: Optional[Path] = None,
 ) -> dict:
     """Rows + applied corrections for the review page/partial.
 
@@ -353,7 +364,7 @@ def build_review_context(
     # rendered in plain language; the default view shows only action-worthy
     # plays, with informational flags collapsed behind the show-all toggle.
     rows = triage_review_rows(
-        collect_event_review_rows(corrected, roster=load_configured_roster())
+        collect_event_review_rows(corrected, roster=load_configured_roster(cwd=data_root))
     )
     attention = [row for row in rows if row.needs_attention]
     triage = summarize_triage(rows)
@@ -428,28 +439,30 @@ def _correction_from_form(
 _ROSTER_ROW_KEY_PATTERN = re.compile(r"^number_(\d+)$")
 
 
-def _existing_roster_path(slug: str) -> Path:
+def _existing_roster_path(slug: str, base: Optional[Path] = None) -> Path:
     """Resolve a slug to an existing roster CSV, 404-ing on the shared guard.
 
     The slug validation and path resolution live in ``roster`` so the CLI's
     ``delete-roster`` / ``set-default-roster`` share exactly this guard (70e);
     the route keeps its 404 by translating the plain error at the boundary.
+    ``base`` is the data root the ``rosters/`` directory resolves under (70f).
     """
 
     try:
-        return existing_roster_path(slug)
+        return existing_roster_path(slug, base=base)
     except UnknownRoster:
         raise HTTPException(status_code=404, detail="Unknown roster")
 
 
-def list_roster_summaries() -> list:
+def list_roster_summaries(base: Optional[Path] = None) -> list:
     """One display dict per CSV under ``rosters/``, sorted by filename.
 
     A CSV that fails to load still gets an entry (with its error) so a corrupt
-    file is visible in the UI rather than silently missing.
+    file is visible in the UI rather than silently missing. ``base`` is the
+    data root the ``rosters/`` directory resolves under (70f).
     """
 
-    directory = Path(ROSTERS_DIRNAME)
+    directory = rosters_directory(base)
     if not directory.is_dir():
         return []
     summaries = []
@@ -464,7 +477,7 @@ def list_roster_summaries() -> list:
             summary.update(
                 team_name=roster.team_name,
                 player_count=len(roster.players),
-                is_default=is_configured_default(csv_path),
+                is_default=is_configured_default(csv_path, cwd=base),
             )
         summaries.append(summary)
     return summaries
@@ -551,16 +564,35 @@ def create_app(
     store: Optional[JobStore] = None,
     runner: Optional[JobRunner] = None,
     runs_dir: Optional[Path] = None,
+    data_root: Optional[Path] = None,
 ) -> FastAPI:
     """Build the web application. Zero-arg call works as a uvicorn factory.
 
     Item 57: completed runs found under ``runs_dir`` (default: the runner's
     output dir) are rehydrated into the store at startup so past results
     survive a server restart.
+
+    ``data_root`` (M7 / 70f) is the base ``rosters/``, ``runs/``, ``videos/``,
+    and ``sidelinehd.cfg`` resolve against. ``None`` keeps the CWD-relative
+    behaviour the CLI's ``serve``/``start`` factory relies on — byte for byte;
+    the desktop app passes its data dir so the same paths resolve under it
+    without an ``os.chdir``. A caller that supplies its own ``runner`` (the
+    desktop launcher does) has already pointed it at ``data_root``; ``data_root``
+    then only governs the roster/config routes.
     """
 
     store = store or JobStore()
-    runner = runner or JobRunner(store)
+    if runner is None:
+        runner = (
+            JobRunner(store)
+            if data_root is None
+            else JobRunner(
+                store,
+                video_dir=data_root / "videos",
+                output_dir=data_root / "runs",
+                pipeline_kwargs=partial(default_pipeline_kwargs, data_root),
+            )
+        )
     rehydrate_jobs_from_runs(store, runs_dir if runs_dir is not None else runner.output_dir)
     # tesserocr must be first-imported from the main thread (cysignals
     # installs signal handlers on import); request handlers and job threads
@@ -570,6 +602,7 @@ def create_app(
     app = FastAPI(title="SidelineHD Extractor")
     app.state.store = store
     app.state.runner = runner
+    app.state.data_root = data_root
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     templates = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
     templates.env.globals.update(
@@ -594,7 +627,7 @@ def create_app(
         # Item 54c: roster-first prompt. Runs snapshot the configured roster at
         # run time, so a roster added afterward does not backfill names — the
         # submit page must say so *before* the run and offer a one-click add.
-        roster = load_configured_roster()
+        roster = load_configured_roster(cwd=data_root)
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -604,7 +637,7 @@ def create_app(
                 "roster_configured": roster is not None,
                 "roster_team_name": roster.team_name if roster else None,
                 "roster_player_count": len(roster.players) if roster else 0,
-                "has_rosters": bool(list_roster_summaries()),
+                "has_rosters": bool(list_roster_summaries(data_root)),
                 "how_open": not jobs,
             },
         )
@@ -655,10 +688,14 @@ def create_app(
     def _roster_panel() -> dict:
         """Configured-roster summary for the game page's roster panel."""
 
-        roster = load_configured_roster()
-        path = configured_roster_path()
+        roster = load_configured_roster(cwd=data_root)
+        path = configured_roster_path(cwd=data_root)
         edit_url = None
-        if path is not None and path.suffix == ".csv" and path.parent == Path(ROSTERS_DIRNAME):
+        if (
+            path is not None
+            and path.suffix == ".csv"
+            and path.parent == rosters_directory(data_root)
+        ):
             edit_url = f"/rosters/{path.stem}"
         return {
             "team_name": roster.team_name if roster else None,
@@ -683,7 +720,7 @@ def create_app(
         entries = _review_entries(job)
         block = _game_block(entry, _entry_label(job, entry, entries[entry]), entries[entry])
         context = build_review_context(
-            job, entry, run_dir, show_all=(show == "all"), page="game"
+            job, entry, run_dir, show_all=(show == "all"), page="game", data_root=data_root
         )
         context.update(
             pending=False,
@@ -703,7 +740,7 @@ def create_app(
         finalize_run_exports(
             run_dir,
             corrections=_load_run_corrections(run_dir),
-            roster=load_configured_roster(),
+            roster=load_configured_roster(cwd=data_root),
         )
         return RedirectResponse(url=f"/jobs/{job_id}/game?entry={entry}", status_code=303)
 
@@ -748,7 +785,9 @@ def create_app(
                 request, "review.html", {"job": job, "pending": True, "entry": entry}
             )
         run_dir = _run_dir_for_entry(job, entry)
-        context = build_review_context(job, entry, run_dir, show_all=(show == "all"))
+        context = build_review_context(
+            job, entry, run_dir, show_all=(show == "all"), data_root=data_root
+        )
         context["pending"] = False
         return templates.TemplateResponse(request, "review.html", context)
 
@@ -760,10 +799,10 @@ def create_app(
         run_dir = _run_dir_for_entry(job, entry)
         write_event_corrections(run_dir / CORRECTIONS_FILENAME, corrections)
         finalize_run_exports(
-            run_dir, corrections=corrections, roster=load_configured_roster()
+            run_dir, corrections=corrections, roster=load_configured_roster(cwd=data_root)
         )
         context = build_review_context(
-            job, entry, run_dir, show_all=(show == "all"), page=page
+            job, entry, run_dir, show_all=(show == "all"), page=page, data_root=data_root
         )
         return templates.TemplateResponse(request, "_review_rows.html", context)
 
@@ -859,7 +898,7 @@ def create_app(
             request,
             "rosters.html",
             {
-                "rosters": list_roster_summaries(),
+                "rosters": list_roster_summaries(data_root),
                 "error": error,
                 "form_team_name": form_team_name,
                 "form_team_list": form_team_list,
@@ -891,7 +930,7 @@ def create_app(
                 "slug": slug,
                 "team_name": roster.team_name,
                 "rows": rows if rows is not None else _roster_row_dicts(roster.players),
-                "is_default": is_configured_default(path),
+                "is_default": is_configured_default(path, cwd=data_root),
                 "error": error,
             },
             status_code=status_code,
@@ -926,7 +965,7 @@ def create_app(
 
         if not cleaned_name:
             return _error("Enter a team name.")
-        path = default_roster_path(cleaned_name)
+        path = default_roster_path(cleaned_name, base=data_root)
         if path.exists():
             return _error(
                 f"A roster already exists at {path} — edit it instead of creating a new one."
@@ -945,12 +984,12 @@ def create_app(
 
     @app.get("/rosters/{slug}", response_class=HTMLResponse)
     def roster_edit(request: Request, slug: str) -> HTMLResponse:
-        path = _existing_roster_path(slug)
+        path = _existing_roster_path(slug, data_root)
         return _roster_edit_page(request, slug, path)
 
     @app.post("/rosters/{slug}", response_class=HTMLResponse)
     async def save_roster(request: Request, slug: str) -> HTMLResponse:
-        path = _existing_roster_path(slug)
+        path = _existing_roster_path(slug, data_root)
         form = await request.form()
         current_team_name = _load_roster_or_400(path).team_name
         submitted_rows = _roster_form_rows(form)
@@ -982,7 +1021,7 @@ def create_app(
     def delete_roster(slug: str) -> RedirectResponse:
         # The confirm guard (stronger when this is the configured default) is
         # the onsubmit prompt rendered by the templates.
-        path = _existing_roster_path(slug)
+        path = _existing_roster_path(slug, data_root)
         path.unlink()
         return RedirectResponse(url="/rosters", status_code=303)
 
@@ -991,11 +1030,11 @@ def create_app(
         # preserves the template and any unmanaged key, and only overrides the
         # team name when the 54c one-click path passes the just-typed one (so
         # the pretty name survives; the CSV stores only the stem until item 52).
-        set_default_roster_config(path, team_name=team_name)
+        set_default_roster_config(path, team_name=team_name, cwd=data_root)
 
     @app.post("/rosters/{slug}/set-default", response_class=HTMLResponse)
     def set_default_roster(slug: str) -> RedirectResponse:
-        _write_default_roster_config(_existing_roster_path(slug))
+        _write_default_roster_config(_existing_roster_path(slug, data_root))
         return RedirectResponse(url="/rosters", status_code=303)
 
     return app

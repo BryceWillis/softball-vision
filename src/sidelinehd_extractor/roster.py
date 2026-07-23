@@ -8,15 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from sidelinehd_extractor.config import load_project_config_values
+from sidelinehd_extractor.config import load_project_config_values, resolve_config_path
 from sidelinehd_extractor.models import Roster, RosterPlayer
 from sidelinehd_extractor.naming import slugify
 
 
 ROSTER_CSV_FIELDS = ["number", "full_name", "preferred_name", "display_name", "aliases"]
 
-#: The directory managed rosters live in, resolved relative to CWD (the same
-#: base the web app uses). Both the web routes and the CLI admin commands
+#: The directory-name managed rosters live in, joined onto a base directory by
+#: ``rosters_directory`` below. Both the web routes and the CLI admin commands
 #: resolve ``rosters/<slug>.csv`` through the helpers below so their slug guard
 #: and default-roster logic are one implementation, not two (M7 / 70e).
 ROSTERS_DIRNAME = "rosters"
@@ -35,40 +35,61 @@ class UnknownRoster(ValueError):
     """
 
 
-def roster_csv_path(slug: str) -> Path:
+def rosters_directory(base: Optional[Path] = None) -> Path:
+    """The ``rosters/`` directory, resolved against ``base``.
+
+    ``base`` is the data root — None means the process CWD (the relative
+    ``rosters/`` the CLI and today's web app resolve at open time). The desktop
+    app passes its data dir so rosters resolve under it without a chdir (70f).
+    """
+
+    return (base / ROSTERS_DIRNAME) if base is not None else Path(ROSTERS_DIRNAME)
+
+
+def roster_csv_path(slug: str, base: Optional[Path] = None) -> Path:
     """Resolve a roster slug to its ``rosters/<slug>.csv`` path.
 
     Raises :class:`UnknownRoster` for anything ``slugify`` would not produce —
-    the traversal guard both surfaces share.
+    the traversal guard both surfaces share. ``base`` names the data root (70f).
     """
 
     if not _ROSTER_SLUG_PATTERN.match(slug):
         raise UnknownRoster(f"{slug!r} is not a valid roster name")
-    return Path(ROSTERS_DIRNAME) / f"{slug}.csv"
+    return rosters_directory(base) / f"{slug}.csv"
 
 
-def existing_roster_path(slug: str) -> Path:
+def existing_roster_path(slug: str, base: Optional[Path] = None) -> Path:
     """Resolve a slug to an existing roster CSV, else raise :class:`UnknownRoster`."""
 
-    path = roster_csv_path(slug)
+    path = roster_csv_path(slug, base=base)
     if not path.exists():
         raise UnknownRoster(f"no roster named {slug!r} under {ROSTERS_DIRNAME}/")
     return path
 
 
-def configured_roster_path() -> Optional[Path]:
-    """The raw roster path from ``sidelinehd.cfg``, unvalidated (expanduser only)."""
+def configured_roster_path(cwd: Optional[Path] = None) -> Optional[Path]:
+    """The roster path from ``sidelinehd.cfg``, resolved against ``cwd``.
 
-    value = load_project_config_values().get("roster")
+    ``cwd`` is the base ``sidelinehd.cfg`` is read from — None means the process
+    CWD; the desktop passes its data dir (70f). A relative cfg value is joined
+    to ``cwd`` (via :func:`resolve_config_path`) so it stays comparable and
+    openable now that the desktop no longer ``chdir``s into its data dir.
+    """
+
+    value = load_project_config_values(cwd=cwd).get("roster")
     if not value:
         return None
-    return Path(value).expanduser()
+    return resolve_config_path(Path(value).expanduser(), cwd)
 
 
-def is_configured_default(path: Path) -> bool:
-    """Whether ``path`` is the roster ``sidelinehd.cfg`` names as the default."""
+def is_configured_default(path: Path, cwd: Optional[Path] = None) -> bool:
+    """Whether ``path`` is the roster ``sidelinehd.cfg`` names as the default.
 
-    configured = configured_roster_path()
+    ``cwd`` is threaded to :func:`configured_roster_path` so the desktop reads
+    its data dir's config, not the launcher's CWD (70f).
+    """
+
+    configured = configured_roster_path(cwd=cwd)
     if configured is None:
         return False
     try:
@@ -172,10 +193,14 @@ def make_roster_from_lines(
     return write_roster_csv(roster, output_path)
 
 
-def default_roster_path(team_name: str) -> Path:
-    """Return the default private roster path for a team name."""
+def default_roster_path(team_name: str, base: Optional[Path] = None) -> Path:
+    """Return the default private roster path for a team name.
 
-    return Path("rosters") / f"{slugify(team_name, fallback='roster')}.csv"
+    ``base`` names the data root the ``rosters/`` directory resolves under —
+    None keeps the CWD-relative path the CLI uses (70f).
+    """
+
+    return rosters_directory(base) / f"{slugify(team_name, fallback='roster')}.csv"
 
 
 def _clean_name(value: str) -> str:

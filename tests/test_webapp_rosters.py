@@ -359,3 +359,37 @@ def test_create_roster_rejects_offsite_next_redirect(client, tmp_path):
     )
     assert response.status_code == 303
     assert response.headers["location"].startswith("/rosters/")
+
+
+def test_roster_routes_resolve_under_data_root_with_cwd_elsewhere(tmp_path, monkeypatch):
+    """M7 / 70f: ``create_app(data_root=...)`` resolves ``rosters/`` and
+    ``sidelinehd.cfg`` under the base even though the process CWD is elsewhere —
+    the desktop path, which no longer chdirs into its data dir."""
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    # Seed a roster the CLI way, but under the explicit base.
+    path = default_roster_path("Blue Thunder", base=data_root)
+    write_roster_csv(parse_team_list(TEAM_LIST, team_name="Blue Thunder"), path)
+
+    client = TestClient(create_app(data_root=data_root))
+
+    # The listing finds the roster that lives under the base, not the CWD.
+    listing = client.get("/rosters")
+    assert listing.status_code == 200
+    assert f"/rosters/{path.stem}" in listing.text
+    assert "No rosters yet" not in listing.text
+
+    # Set-default writes sidelinehd.cfg under the base, not the CWD.
+    client.post(f"/rosters/{path.stem}/set-default", follow_redirects=False)
+    assert load_project_config_values(cwd=data_root).get("roster") == str(path)
+    assert not (elsewhere / "sidelinehd.cfg").exists()
+    assert not (elsewhere / "rosters").exists()
+
+    # The default badge is derived from the base's config, so it shows now.
+    after = client.get("/rosters")
+    assert '<span class="default-badge">' in after.text

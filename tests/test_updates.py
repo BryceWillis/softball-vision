@@ -168,6 +168,27 @@ def test_config_opt_out_disables_a_frozen_bundle(monkeypatch, tmp_path):
     assert update_check_enabled() is False
 
 
+def test_config_opt_out_is_read_from_an_explicit_cwd(monkeypatch, tmp_path):
+    """M7 / 70f: the desktop passes its data dir as ``cwd`` so the opt-out keeps
+    working now that the launcher no longer chdirs into the data dir — the CWD
+    itself has no config."""
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / "sidelinehd.cfg").write_text(
+        "[defaults]\ncheck_for_updates = false\n", encoding="utf-8"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _clear_gates(monkeypatch, elsewhere, frozen=True)  # CWD has no cfg
+
+    # Read from the data dir: the opt-out is honoured.
+    assert update_check_enabled(cwd=data_root) is False
+    # Read from the CWD (no cfg): a frozen bundle defaults to enabled — proving
+    # the base is what carries the opt-out, not the process CWD.
+    assert update_check_enabled() is True
+
+
 def test_config_explicit_true_keeps_a_frozen_bundle_enabled(monkeypatch, tmp_path):
     _clear_gates(monkeypatch, tmp_path, frozen=True)
     (tmp_path / "sidelinehd.cfg").write_text(

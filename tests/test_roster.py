@@ -14,6 +14,7 @@ from sidelinehd_extractor.roster import (
     parse_team_list,
     parse_team_list_line,
     roster_csv_path,
+    rosters_directory,
     write_roster_csv,
 )
 
@@ -157,6 +158,59 @@ class RosterSlugHelperTests(unittest.TestCase):
                 self.assertEqual(configured_roster_path(), path)
                 self.assertTrue(is_configured_default(path))
                 self.assertFalse(is_configured_default(other))
+
+
+class RosterBaseResolutionTests(unittest.TestCase):
+    """M7 / 70f: the ``rosters/`` directory resolves against an explicit base.
+
+    ``base=None`` keeps the CWD-relative path the CLI has always produced, byte
+    for byte; a supplied base resolves ``rosters/`` under it so the desktop app
+    works without an ``os.chdir``.
+    """
+
+    def test_rosters_directory_defaults_to_the_cwd_relative_name(self):
+        # Byte-identical to the pre-70f literal both surfaces resolved at open.
+        self.assertEqual(rosters_directory(), Path("rosters"))
+        self.assertEqual(rosters_directory(None), Path("rosters"))
+
+    def test_rosters_directory_resolves_under_an_explicit_base(self):
+        base = Path("/tmp/data-root")
+        self.assertEqual(rosters_directory(base), base / "rosters")
+
+    def test_roster_helpers_thread_the_base_through(self):
+        base = Path("/tmp/data-root")
+        self.assertEqual(roster_csv_path("blue_thunder"), Path("rosters") / "blue_thunder.csv")
+        self.assertEqual(
+            roster_csv_path("blue_thunder", base=base),
+            base / "rosters" / "blue_thunder.csv",
+        )
+        self.assertEqual(
+            default_roster_path("Blue Thunder", base=base),
+            base / "rosters" / "blue_thunder.csv",
+        )
+
+    def test_slug_guard_holds_regardless_of_base(self):
+        # A base must never weaken the traversal guard both surfaces share.
+        for bad in ("../roster", "foo/bar", "/etc/passwd", "Blue Thunder"):
+            with self.assertRaises(UnknownRoster):
+                roster_csv_path(bad, base=Path("/tmp/data-root"))
+
+    def test_explicit_base_round_trips_with_cwd_elsewhere(self):
+        # The regression guard 70f names: exercise the roster helpers from a
+        # process whose CWD is *not* the data dir, against an explicit base.
+        with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as elsewhere:
+            root = Path(data_dir)
+            with _working_directory(Path(elsewhere)):
+                path = default_roster_path("Blue Thunder", base=root)
+                write_roster_csv(
+                    parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), path
+                )
+                # Resolves under the base even though the CWD is elsewhere...
+                self.assertEqual(existing_roster_path("blue_thunder", base=root), path)
+                self.assertEqual(load_roster(path).name_for_number("7"), "Zoe H.")
+                # ...and the CWD-relative lookup (no base) does not find it.
+                with self.assertRaises(UnknownRoster):
+                    existing_roster_path("blue_thunder")
 
 
 if __name__ == "__main__":

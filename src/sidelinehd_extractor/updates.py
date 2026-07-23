@@ -25,6 +25,7 @@ import re
 import sys
 import threading
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 RELEASES_PAGE_URL = "https://github.com/BryceWillis/softball-vision/releases/latest"
@@ -33,8 +34,9 @@ LATEST_RELEASE_API_URL = (
 )
 
 #: ``check_for_updates = false`` under ``[defaults]`` in sidelinehd.cfg
-#: (item 28's config, read from the data dir the desktop app chdirs into)
-#: suppresses the request entirely — not merely the display of the result.
+#: (item 28's config, read from the desktop app's data dir — passed in as
+#: ``cwd`` since 70f retired the chdir) suppresses the request entirely — not
+#: merely the display of the result.
 UPDATE_CHECK_CONFIG_KEY = "check_for_updates"
 #: Env override, stronger than the config file: falsey values ("0", "false",
 #: "no", "off") suppress the check — the CI selftest sets this so a runner
@@ -96,13 +98,17 @@ def latest_release(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Optional[str]:
         return None
 
 
-def update_check_enabled() -> bool:
+def update_check_enabled(cwd: Optional[Path] = None) -> bool:
     """Whether the check may run — decided before any network I/O.
 
     Precedence: env var (either direction) > config-file opt-out > the
     default, which is frozen-only — the check is a bundle affordance, and a
     developer mid-version should not see an offer for a release older than
     their tree (``git pull`` remains the source install's update path).
+
+    ``cwd`` is the base ``sidelinehd.cfg`` is read from — None means the process
+    CWD. The desktop passes its data dir (70f) so the opt-out keeps working now
+    that the entrypoint no longer ``chdir``s into it.
     """
 
     env = (os.environ.get(UPDATE_CHECK_ENV_VAR) or "").strip().lower()
@@ -114,7 +120,7 @@ def update_check_enabled() -> bool:
         # Lazy import keeps this module import-safe headless and cheap.
         from sidelinehd_extractor.config import load_project_config_values
 
-        value = load_project_config_values().get(UPDATE_CHECK_CONFIG_KEY, "")
+        value = load_project_config_values(cwd=cwd).get(UPDATE_CHECK_CONFIG_KEY, "")
     except Exception:
         value = ""
     if value.strip().lower() in _FALSEY:
@@ -122,16 +128,19 @@ def update_check_enabled() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
-def available_update(timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Optional[str]:
+def available_update(
+    timeout: float = DEFAULT_TIMEOUT_SECONDS, cwd: Optional[Path] = None
+) -> Optional[str]:
     """The newer release's tag (e.g. ``"v0.3.0"``), or ``None``.
 
     ``None`` covers every non-update outcome alike: up to date, ahead of the
     latest tag, disabled, offline, or any failure — by design there is no
     way to distinguish them, so no caller can accidentally surface an error.
+    ``cwd`` is threaded to the config opt-out check (70f).
     """
 
     try:
-        if not update_check_enabled():
+        if not update_check_enabled(cwd=cwd):
             return None
         from sidelinehd_extractor.build_info import build_stamp
 

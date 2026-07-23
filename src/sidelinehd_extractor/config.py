@@ -120,8 +120,29 @@ def set_default_roster_config(
     )
 
 
-def load_configured_roster() -> Optional[Roster]:
+def resolve_config_path(path: Optional[Path], base: Optional[Path]) -> Optional[Path]:
+    """Resolve a relative ``sidelinehd.cfg`` value (roster/template) against
+    the directory the config was read from (M7 / 70f).
+
+    Before 70f the desktop ``chdir``-ed into its data dir, so a relative cfg
+    value opened correctly against the process CWD. Now the CWD is left
+    untouched, so a relative value must be joined to ``base`` (the data dir) to
+    stay openable. Absolute values and ``None`` pass through unchanged, and a
+    ``None`` base (the CLI, whose CWD *is* the base) leaves the value
+    CWD-relative exactly as before.
+    """
+
+    if path is None or base is None or path.is_absolute():
+        return path
+    return base / path
+
+
+def load_configured_roster(cwd: Optional[Path] = None) -> Optional[Roster]:
     """The roster ``sidelinehd.cfg`` names as the default, or None.
+
+    ``cwd`` is the base the config is resolved against — None means the process
+    CWD (the CLI default). The desktop app passes its data dir so the roster
+    resolves under it rather than under the launcher's CWD (M7 / 70f).
 
     Any failure — no config, no roster key, an unloadable file — degrades to
     None so callers (the web review flags, the CLI re-export tail) work without
@@ -131,10 +152,11 @@ def load_configured_roster() -> Optional[Roster]:
     """
 
     try:
-        config = load_project_config()
-        if not config.roster:
+        config = load_project_config(cwd=cwd)
+        roster_path = resolve_config_path(config.roster, cwd)
+        if not roster_path:
             return None
-        return load_roster(config.roster, team_name=config.team_name)
+        return load_roster(roster_path, team_name=config.team_name)
     except Exception:  # noqa: BLE001 - callers must work without a config
         return None
 

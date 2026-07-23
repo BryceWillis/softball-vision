@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -10,12 +11,15 @@ from sidelinehd_extractor.config import (
     ProjectConfig,
     default_overlay_template,
     full_frame_overlay_template,
+    load_configured_roster,
     load_overlay_template,
     load_project_config,
     load_project_config_values,
     load_roster,
+    resolve_config_path,
     write_project_config,
 )
+from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
 
 
 class ConfigLoaderTests(unittest.TestCase):
@@ -206,6 +210,85 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.team_name, "Stars")
         self.assertIn("missing-roster.csv", stderr.getvalue())
         self.assertIn("missing-template.json", stderr.getvalue())
+
+
+class LoadConfiguredRosterBaseTests(unittest.TestCase):
+    """M7 / 70f: ``load_configured_roster`` resolves its config against ``cwd``."""
+
+    def test_reads_the_configured_roster_from_an_explicit_base(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster_path = default_roster_path("Blue Thunder", base=root)
+            write_roster_csv(
+                parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), roster_path
+            )
+            write_project_config(
+                ProjectConfig(roster=roster_path, team_name="Blue Thunder"), cwd=root
+            )
+
+            roster = load_configured_roster(cwd=root)
+
+        self.assertIsNotNone(roster)
+        self.assertEqual(roster.name_for_number("7"), "Zoe H.")
+
+    def test_default_cwd_does_not_find_a_config_that_lives_under_the_base(self):
+        # The base is load-bearing: without it the desktop would read the
+        # launcher's CWD and miss the data dir's config entirely.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            roster_path = default_roster_path("Blue Thunder", base=root)
+            write_roster_csv(
+                parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), roster_path
+            )
+            write_project_config(
+                ProjectConfig(roster=roster_path, team_name="Blue Thunder"), cwd=root
+            )
+
+            # A CWD with no sidelinehd.cfg of its own resolves to no roster.
+            with tempfile.TemporaryDirectory() as elsewhere:
+                previous = Path.cwd()
+                os.chdir(elsewhere)
+                try:
+                    self.assertIsNone(load_configured_roster())
+                finally:
+                    os.chdir(previous)
+
+    def test_relative_cfg_roster_value_resolves_against_the_base(self):
+        """70f edge case: a *relative* roster path in sidelinehd.cfg resolves
+        against the data root, not the process CWD — the effective behavior the
+        old chdir gave, which must not silently change once the chdir is gone."""
+
+        with tempfile.TemporaryDirectory() as data_dir, tempfile.TemporaryDirectory() as elsewhere:
+            root = Path(data_dir)
+            # Roster under the base, cfg names it *relatively* (the old-desktop
+            # on-disk shape a pre-70f install still has).
+            roster_path = default_roster_path("Blue Thunder", base=root)
+            write_roster_csv(
+                parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), roster_path
+            )
+            (root / "sidelinehd.cfg").write_text(
+                "[defaults]\nroster = rosters/blue_thunder.csv\nteam_name = Blue Thunder\n",
+                encoding="utf-8",
+            )
+
+            previous = Path.cwd()
+            os.chdir(elsewhere)  # CWD is not the data dir
+            try:
+                roster = load_configured_roster(cwd=root)
+            finally:
+                os.chdir(previous)
+
+        self.assertIsNotNone(roster)
+        self.assertEqual(roster.name_for_number("7"), "Zoe H.")
+
+    def test_resolve_config_path_joins_only_relative_values_with_a_base(self):
+        base = Path("/tmp/data-root")
+        self.assertEqual(resolve_config_path(Path("rosters/x.csv"), base), base / "rosters/x.csv")
+        # Absolute values, None values, and a None base all pass through.
+        absolute = Path("/etc/roster.csv")
+        self.assertEqual(resolve_config_path(absolute, base), absolute)
+        self.assertIsNone(resolve_config_path(None, base))
+        self.assertEqual(resolve_config_path(Path("rosters/x.csv"), None), Path("rosters/x.csv"))
 
 
 if __name__ == "__main__":

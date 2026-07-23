@@ -38,6 +38,7 @@ import threading
 import urllib.parse
 import urllib.request
 import webbrowser
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -45,6 +46,7 @@ from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
     RELEASES_PAGE_URL,
     UpdateCheck,
+    available_update,
     update_menu_title,
 )
 
@@ -79,9 +81,12 @@ WINDOW_RELOAD_DELAY_SECONDS = 0.5
 def default_data_dir() -> Path:
     """The per-user data dir the desktop app runs in.
 
-    A double-clicked ``.app`` starts with CWD ``/``, but the web app resolves
-    ``rosters/``, ``runs/``, ``videos/``, and ``sidelinehd.cfg`` relative to
-    CWD — so the desktop entrypoint chdirs somewhere stable and findable.
+    A double-clicked ``.app`` starts with CWD ``/``, so the app resolves
+    ``rosters/``, ``runs/``, ``videos/``, and ``sidelinehd.cfg`` against this
+    stable, findable directory. Before 70f the entrypoint ``os.chdir``-ed here;
+    now the directory is threaded to the web app as an explicit ``data_root``,
+    so the process CWD is left untouched (App Sandbox and native file dialogs
+    both break on a chdir).
     """
 
     if sys.platform == "darwin":
@@ -92,11 +97,15 @@ def default_data_dir() -> Path:
 
 
 def prepare_data_dir(data_dir: Optional[Path] = None) -> Path:
-    """Create the data dir, chdir into it, and point OCR at bundled tessdata."""
+    """Create the data dir and point OCR at bundled tessdata; return the dir.
+
+    70f retired the ``os.chdir`` that used to run here: the returned directory
+    is threaded to the web app as ``data_root`` instead, so nothing in the
+    bundle depends on the process CWD.
+    """
 
     target = (data_dir or default_data_dir()).expanduser()
     target.mkdir(parents=True, exist_ok=True)
-    os.chdir(target)
     _configure_bundled_tessdata()
     return target
 
@@ -117,28 +126,33 @@ def _configure_bundled_tessdata() -> None:
         os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
 
 
-def desktop_pipeline_kwargs() -> dict:
+def desktop_pipeline_kwargs(data_root: Optional[Path] = None) -> dict:
     """Job pipeline kwargs for the bundled app.
 
     Mirrors ``jobs.default_pipeline_kwargs`` except the OCR backend is
     requested as ``tesserocr`` — the bundle ships the self-contained
     tesserocr wheel instead of a Tesseract CLI binary. ``create_ocr_backend``
     already falls back to the CLI backend when tesserocr is not importable
-    (running from source), so this is safe in both worlds.
+    (running from source), so this is safe in both worlds. ``data_root`` is the
+    base ``sidelinehd.cfg`` resolves against (70f) — the data dir, no longer a
+    chdir'd CWD.
     """
 
     from sidelinehd_extractor.config import (
         load_overlay_template,
         load_project_config,
         load_roster,
+        resolve_config_path,
     )
     from sidelinehd_extractor.events import DetectionConfig
     from sidelinehd_extractor.ocr import create_ocr_backend
 
-    config = load_project_config()
-    template = load_overlay_template(config.template) if config.template else None
+    config = load_project_config(cwd=data_root)
+    template_path = resolve_config_path(config.template, data_root)
+    roster_path = resolve_config_path(config.roster, data_root)
+    template = load_overlay_template(template_path) if template_path else None
     roster = (
-        load_roster(config.roster, team_name=config.team_name) if config.roster else None
+        load_roster(roster_path, team_name=config.team_name) if roster_path else None
     )
     return {
         "template": template,
@@ -180,10 +194,16 @@ class ServerController:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         app_factory: Optional[Callable[[], object]] = None,
+        data_dir: Optional[Path] = None,
     ) -> None:
         self.host = host
         self.port = port
         self._app_factory = app_factory or self._default_app_factory
+        #: The data root the app resolves ``rosters/``/``runs/``/``videos/``/
+        #: ``sidelinehd.cfg`` against (70f). ``None`` keeps the CWD-relative
+        #: behaviour a from-source or test run expects; the bundle passes its
+        #: data dir so no ``os.chdir`` is needed.
+        self._data_dir = data_dir
         self._server = None
         self._thread: Optional[threading.Thread] = None
         #: The job registry this controller's app runs on, once it has built
@@ -198,10 +218,19 @@ class ServerController:
         from sidelinehd_extractor.webapp.app import create_app
         from sidelinehd_extractor.webapp.jobs import JobRunner, JobStore
 
+        data_dir = self._data_dir
         store = JobStore()
-        runner = JobRunner(store, pipeline_kwargs=desktop_pipeline_kwargs)
+        # 70f: point the runner's run/video dirs and the config the pipeline
+        # reads at the explicit data dir rather than a chdir'd CWD. When
+        # data_dir is None (a from-source run without one), the CWD-relative
+        # defaults are preserved exactly.
+        runner_kwargs: dict = {"pipeline_kwargs": partial(desktop_pipeline_kwargs, data_dir)}
+        if data_dir is not None:
+            runner_kwargs["video_dir"] = data_dir / "videos"
+            runner_kwargs["output_dir"] = data_dir / "runs"
+        runner = JobRunner(store, **runner_kwargs)
         self.store = store
-        return create_app(store=store, runner=runner)
+        return create_app(store=store, runner=runner, data_root=data_dir)
 
     @property
     def url(self) -> str:
@@ -1393,10 +1422,10 @@ def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
     by hand when diagnosing a broken install.
     """
 
-    prepare_data_dir()
+    data_dir = prepare_data_dir()
     failures = bundle_dependency_failures()
     port = find_open_port()
-    controller = ServerController(port=port)
+    controller = ServerController(port=port, data_dir=data_dir)
     try:
         controller.start(timeout=timeout)
         with urllib.request.urlopen(f"{controller.url}/", timeout=timeout) as response:
@@ -1419,7 +1448,7 @@ def run_selftest(timeout: float = _SERVER_START_TIMEOUT_SECONDS) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Bundle entrypoint: chdir to the data dir, start the server, show the window."""
+    """Bundle entrypoint: prepare the data dir, start the server, show the window."""
 
     args = sys.argv[1:] if argv is None else argv
     # Membership test rather than argparse: macOS passes legacy `-psn_...`
@@ -1448,14 +1477,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         lifecycle.remove_server_state(expected_pid=existing.pid)
 
     port = find_open_port()
-    controller = ServerController(port=port)
+    controller = ServerController(port=port, data_dir=data_dir)
     controller.start()
     # Item 70a: only once the server is actually up — the record says "a
     # server is running here", and until start() returns that is not true.
     record = register_server_record(controller, data_dir)
     # Item 67d: only after the server is up, and on a daemon thread — the
     # check must never block launch, and --selftest never reaches this path.
-    update_check = UpdateCheck()
+    # 70f: bind the config opt-out to the data dir, since the entrypoint no
+    # longer chdirs into it — otherwise `check_for_updates = false` would be
+    # read from the launcher's CWD (`/`) and silently ignored.
+    update_check = UpdateCheck(check=partial(available_update, cwd=data_dir))
     update_check.start()
     # Item 70b (D4): no `webbrowser.open` here any more. A double-click is
     # answered by the app's *own* window, which run_dock_app presents; the

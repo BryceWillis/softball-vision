@@ -938,7 +938,7 @@ def _make_review_client(tmp_path, monkeypatch):
     from sidelinehd_extractor.webapp import app as app_module
 
     # Flags must not depend on whatever project config exists in the CWD.
-    monkeypatch.setattr(app_module, "load_configured_roster", lambda: None)
+    monkeypatch.setattr(app_module, "load_configured_roster", lambda cwd=None: None)
     run_dir, chapters_path, at_bats_path = _seed_review_run(tmp_path)
     client, store = _make_client()
     job = store.create(kind="single", url="https://youtu.be/abc123")
@@ -1024,7 +1024,7 @@ def test_review_page_collapses_informational_flags_behind_show_all(tmp_path, mon
     from sidelinehd_extractor.webapp import app as app_module
     from sidelinehd_extractor.workflow import finalize_run_exports
 
-    monkeypatch.setattr(app_module, "load_configured_roster", lambda: None)
+    monkeypatch.setattr(app_module, "load_configured_roster", lambda cwd=None: None)
     run_dir = tmp_path / "runs" / "triage-run"
     run_dir.mkdir(parents=True)
     prefix = run_dir / "full"

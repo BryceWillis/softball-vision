@@ -50,13 +50,18 @@ def test_default_data_dir_is_application_support_on_mac(monkeypatch):
     )
 
 
-def test_prepare_data_dir_creates_and_chdirs(tmp_path):
+def test_prepare_data_dir_creates_without_changing_cwd(tmp_path):
+    # 70f retired the os.chdir: the data dir is created and returned to be
+    # threaded as an explicit data_root, and the process CWD is left untouched
+    # (App Sandbox and native file dialogs both break on a chdir).
     target = tmp_path / "nested" / "data-dir"
     with _RestoreCwd():
+        before = Path.cwd()
         result = prepare_data_dir(target)
         assert result == target
         assert target.is_dir()
-        assert Path.cwd() == target
+        assert Path.cwd() == before
+        assert Path.cwd() != target
 
 
 def test_prepare_data_dir_points_frozen_bundle_at_tessdata(tmp_path, monkeypatch):
@@ -127,6 +132,60 @@ def test_desktop_pipeline_kwargs_requests_tesserocr_backend(monkeypatch, tmp_pat
     assert kwargs["template"] is None and kwargs["roster"] is None
 
 
+def test_desktop_pipeline_kwargs_reads_config_from_the_data_root(monkeypatch, tmp_path):
+    """70f: the pipeline's roster/template come from the data dir passed in as
+    ``data_root``, not from the launcher's CWD (no chdir any more)."""
+
+    from sidelinehd_extractor import ocr as ocr_module
+    from sidelinehd_extractor.config import ProjectConfig, write_project_config
+    from sidelinehd_extractor.roster import default_roster_path, write_roster_csv
+    from sidelinehd_extractor.roster import parse_team_list
+
+    monkeypatch.setattr(ocr_module, "create_ocr_backend", lambda name: object())
+
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    roster_path = default_roster_path("Blue Thunder", base=data_root)
+    write_roster_csv(parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), roster_path)
+    write_project_config(
+        ProjectConfig(roster=roster_path, team_name="Blue Thunder"), cwd=data_root
+    )
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # CWD is deliberately *not* the data dir
+
+    kwargs = desktop_pipeline_kwargs(data_root=data_root)
+    assert kwargs["roster"] is not None
+    assert kwargs["roster"].name_for_number("7") == "Zoe H."
+    # And with no base, the same CWD (no config) yields no roster.
+    assert desktop_pipeline_kwargs()["roster"] is None
+
+
+def test_controller_points_the_app_at_its_data_dir(tmp_path):
+    """70f: a controller given a data dir threads it to the app so rosters/
+    runs/videos/config resolve there without an os.chdir."""
+
+    data_dir = tmp_path / "data"
+    controller = ServerController(port=8137, data_dir=data_dir)
+    app = controller._default_app_factory()
+    assert app.state.data_root == data_dir
+    assert app.state.runner.output_dir == data_dir / "runs"
+    # The launcher reads controller.store for the badge/quit confirmation.
+    assert controller.store is app.state.store
+
+
+def test_controller_without_a_data_dir_keeps_cwd_relative_defaults(tmp_path, monkeypatch):
+    """No data dir (a from-source run) preserves the pre-70f behaviour exactly:
+    the runner writes to the CWD-relative ``runs/``."""
+
+    monkeypatch.chdir(tmp_path)
+    controller = ServerController(port=8138)
+    app = controller._default_app_factory()
+    assert app.state.data_root is None
+    assert app.state.runner.output_dir == Path("runs")
+
+
 async def _tiny_app(scope, receive, send):
     if scope["type"] != "http":
         return
@@ -181,7 +240,9 @@ def _point_selftest_at(monkeypatch, tmp_path, app):
     monkeypatch.setattr(
         desktop,
         "ServerController",
-        lambda port: ServerController(port=port, app_factory=lambda: app),
+        lambda port, data_dir=None: ServerController(
+            port=port, data_dir=data_dir, app_factory=lambda: app
+        ),
     )
     return prepared
 
@@ -270,7 +331,7 @@ def test_selftest_fails_and_still_stops_when_the_server_never_starts(monkeypatch
     controllers = []
 
     class _DeadController:
-        def __init__(self, port):
+        def __init__(self, port, data_dir=None):
             self.url = f"http://127.0.0.1:{port}"
             self.stopped = False
             controllers.append(self)
@@ -329,9 +390,11 @@ def _patch_main_launch(monkeypatch, events, tmp_path):
     # nothing is listening on.
     monkeypatch.setattr(desktop, "find_open_port", lambda: 8123)
     monkeypatch.setattr(
-        desktop, "ServerController", lambda port: _FakeController(port, events)
+        desktop,
+        "ServerController",
+        lambda port, data_dir=None: _FakeController(port, events),
     )
-    monkeypatch.setattr(desktop, "UpdateCheck", lambda: _NoopCheck())
+    monkeypatch.setattr(desktop, "UpdateCheck", lambda check=None: _NoopCheck())
     monkeypatch.setattr(desktop.webbrowser, "open", lambda url: events.append("browser"))
     monkeypatch.setattr(
         "sidelinehd_extractor.webapp.lifecycle.default_data_dir", lambda: tmp_path
@@ -369,7 +432,7 @@ def test_main_starts_the_update_check_after_the_server_and_hands_it_to_the_dock_
         events.append("dock-app")
 
     _patch_main_launch(monkeypatch, events, tmp_path)
-    monkeypatch.setattr(desktop, "UpdateCheck", lambda: check)
+    monkeypatch.setattr(desktop, "UpdateCheck", lambda **_kw: check)
     monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
 
     assert desktop.main([]) == 0
