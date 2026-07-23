@@ -182,12 +182,31 @@ neither this recipe nor `.github/workflows/package-macos.yml` has an icon
 step — the spec consumes the checked-in `.icns` directly, and fails fast
 if it is missing (like a missing traineddata).
 
-To swap the artwork: replace `icon-1024.png` (the default monogram is
-reproducible via `python packaging/icon/generate_icon.py`), re-run
-`sh packaging/icon/make-icns.sh`, rebuild. No code changes. The default
-"SHD" monogram may blur at the smallest (16px) sizes — acceptable for a
-placeholder; real artwork replaces the PNG, not the pipeline. Icon rules:
-no player names, no photographs, no SidelineHD-owned artwork.
+The shipped icon (item 71) is a photographic softball dissolving into pixels
+on the app's deep-navy ground. Its **master** is
+`softball-vision-dock-icon.png` (also committed); `icon-1024.png` is a
+**derived** file — `make_dock_icon.py` conditions the master into the shape
+`make-icns.sh` expects: it masks the full-bleed squircle to real transparency
+(the master's corners are opaque white, which macOS would otherwise composite
+as four pale wedges), scales the tile to Apple's 824-of-1024 grid, and insets
+it on a transparent canvas.
+
+To swap the artwork:
+
+- **Real artwork** — replace `softball-vision-dock-icon.png`, run
+  `python packaging/icon/make_dock_icon.py` (regenerates `icon-1024.png`),
+  then `sh packaging/icon/make-icns.sh`, rebuild.
+- **Back to the placeholder** — the "SHD" monogram is reproducible via
+  `python packaging/icon/generate_icon.py`, which writes `icon-1024.png`
+  directly; then `sh packaging/icon/make-icns.sh`, rebuild.
+
+No code changes either way. Fine detail (the red stitching, the small
+dissolving squares) washes out at the 16px menu-bar/Finder-list size, leaving
+a recognizable yellow-ball-on-navy — acceptable; `make-icns.sh` renders every
+size from the one 1024 source, so a distinct simplified small icon would be a
+pipeline change, not an artwork swap. Icon rules: no player names, no
+photographs of people, no SidelineHD-owned artwork — confirm any new master is
+yours to redistribute under the repo's MIT license before committing it.
 
 ## Troubleshooting
 

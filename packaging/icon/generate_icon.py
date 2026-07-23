@@ -1,15 +1,16 @@
-"""Draw the default app icon: an "SHD" monogram on the app's blue.
+"""Draw the *placeholder* app icon: an "SHD" monogram on the app's blue.
 
-Dev-time tool, run by hand — never by the build (M5 slice 68a). The build
-consumes the committed ``sidelinehd.icns``; this script exists so the default
-artwork is reproducible and the swap procedure is self-documenting: replace
-``icon-1024.png`` (by editing this script or with real artwork), re-run
-``make-icns.sh``, rebuild. See packaging/build-macos.md.
+Dev-time tool, run by hand — never by the build (M5 slice 68a). It is kept as
+the reproducible fallback: as of M8 (item 71) the **shipped** icon is the
+photographic softball derived by ``make_dock_icon.py`` from
+``softball-vision-dock-icon.png``, not this monogram. This script no longer
+describes the shipped artwork — it regenerates the modest default that
+preceded it, in case a neutral placeholder is ever wanted again.
 
-The artwork is deliberately modest — a rounded square in the web app's button
-blue carrying the "SHD" monogram the app has carried all along. It is
-expected to be replaced whenever real artwork exists. Never player names,
-photographs, or SidelineHD-owned artwork.
+The monogram is deliberately modest — a rounded square in the web app's
+button blue carrying the "SHD" monogram the app carried before real artwork
+existed. Whatever the source, the icon must never carry player names,
+photographs of people, or SidelineHD-owned artwork.
 
 Usage (needs Pillow and the macOS system fonts):
 

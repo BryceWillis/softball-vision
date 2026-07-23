@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
+
 PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 SPEC = PACKAGING / "sidelinehd.spec"
 ICON_DIR = PACKAGING / "icon"
@@ -45,3 +47,19 @@ def test_the_icns_is_actually_an_icns() -> None:
     # truncated or accidentally-text file would pass a bare size check.
     with (ICON_DIR / "sidelinehd.icns").open("rb") as fh:
         assert fh.read(4) == b"icns"
+
+
+def test_source_png_is_1024_rgba_with_transparent_corners() -> None:
+    # The item-71 defect this guards: the supplied master is 1254x1254 RGB
+    # with *opaque white* corners, and macOS masks nothing on a .icns, so a
+    # straight resize would paint four pale wedges into the Dock. The pipeline
+    # input must be the derived 1024 RGBA tile whose corners are fully
+    # transparent. Decoded with cv2 (a core dependency) rather than Pillow,
+    # which lives in the `ocr` extra and would ImportError on CI's [dev,web].
+    img = cv2.imread(str(ICON_DIR / "icon-1024.png"), cv2.IMREAD_UNCHANGED)
+    assert img is not None, "icon-1024.png is unreadable"
+    assert img.shape[:2] == (1024, 1024)
+    assert img.shape[2] == 4, "icon-1024.png has no alpha channel"
+    h, w = img.shape[:2]
+    corners = [img[0, 0], img[0, w - 1], img[h - 1, 0], img[h - 1, w - 1]]
+    assert all(int(px[3]) == 0 for px in corners), "a corner pixel is not transparent"
