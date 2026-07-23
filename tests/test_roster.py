@@ -1,14 +1,31 @@
+import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
-from sidelinehd_extractor.config import load_roster
+from sidelinehd_extractor.config import load_roster, write_project_config, ProjectConfig
 from sidelinehd_extractor.roster import (
+    UnknownRoster,
+    configured_roster_path,
     default_roster_path,
+    existing_roster_path,
+    is_configured_default,
     parse_team_list,
     parse_team_list_line,
+    roster_csv_path,
     write_roster_csv,
 )
+
+
+@contextmanager
+def _working_directory(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class RosterBuilderTests(unittest.TestCase):
@@ -95,6 +112,51 @@ class RosterBuilderTests(unittest.TestCase):
             default_roster_path("Smash It Sports 12U"),
             Path("rosters") / "smash_it_sports_12u.csv",
         )
+
+
+class RosterSlugHelperTests(unittest.TestCase):
+    """The slug/default helpers the web routes and CLI admin commands share (70e)."""
+
+    def test_roster_csv_path_resolves_a_valid_slug_under_rosters(self):
+        self.assertEqual(roster_csv_path("blue_thunder"), Path("rosters") / "blue_thunder.csv")
+
+    def test_roster_csv_path_rejects_slugs_slugify_would_not_produce(self):
+        # The traversal guard both surfaces rely on: anything but [a-z0-9_].
+        for bad in ("../roster", "foo/bar", "/etc/passwd", "Blue Thunder", "team.csv", ""):
+            with self.assertRaises(UnknownRoster):
+                roster_csv_path(bad)
+
+    def test_existing_roster_path_raises_for_a_valid_but_missing_slug(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with _working_directory(Path(directory)):
+                with self.assertRaises(UnknownRoster):
+                    existing_roster_path("no_such_team")
+
+    def test_existing_roster_path_returns_a_present_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with _working_directory(root):
+                path = default_roster_path("Blue Thunder")
+                write_roster_csv(parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), path)
+                self.assertEqual(existing_roster_path("blue_thunder"), path)
+
+    def test_configured_default_tracks_the_config_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with _working_directory(root):
+                path = default_roster_path("Blue Thunder")
+                write_roster_csv(parse_team_list("#7 Zoe H.\n", team_name="Blue Thunder"), path)
+                other = default_roster_path("Red Storm")
+                write_roster_csv(parse_team_list("#3 Emma B.\n", team_name="Red Storm"), other)
+
+                # No config yet: nothing is the default.
+                self.assertIsNone(configured_roster_path())
+                self.assertFalse(is_configured_default(path))
+
+                write_project_config(ProjectConfig(roster=path, team_name="Blue Thunder"), cwd=root)
+                self.assertEqual(configured_roster_path(), path)
+                self.assertTrue(is_configured_default(path))
+                self.assertFalse(is_configured_default(other))
 
 
 if __name__ == "__main__":

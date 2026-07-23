@@ -22,13 +22,20 @@ from sidelinehd_extractor.crops import extract_crop_from_video, save_crop
 from sidelinehd_extractor.config import (
     CONFIG_FILENAME,
     ProjectConfig,
+    load_configured_roster,
     load_overlay_template,
     load_project_config,
     load_project_config_values,
     load_roster,
+    set_default_roster_config,
     write_project_config,
 )
-from sidelinehd_extractor.corrections import apply_event_corrections, load_event_corrections
+from sidelinehd_extractor.corrections import (
+    apply_event_corrections,
+    load_event_corrections,
+    remove_event_correction,
+    write_event_corrections,
+)
 from sidelinehd_extractor.events import DetectionConfig, detect_events_file, load_events
 from sidelinehd_extractor.exports import export_at_bat_comment, export_youtube_chapters
 from sidelinehd_extractor.feedback import write_feedback_log
@@ -45,12 +52,23 @@ from sidelinehd_extractor.publish import write_publish_kit
 from sidelinehd_extractor.processing import SamplingOptions, process_video
 from sidelinehd_extractor.review import render_event_review
 from sidelinehd_extractor.review_report import write_review_report
-from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
+from sidelinehd_extractor.roster import (
+    default_roster_path,
+    existing_roster_path,
+    is_configured_default,
+    parse_team_list,
+    write_roster_csv,
+)
 from sidelinehd_extractor.serialization import to_plain_data
 from sidelinehd_extractor.state import parse_samples_file
 from sidelinehd_extractor.video import probe_video, read_frame_at
 from sidelinehd_extractor.workflow import export_paths as workflow_export_paths
-from sidelinehd_extractor.workflow import ExportOptions, run_game, run_youtube_game
+from sidelinehd_extractor.workflow import (
+    ExportOptions,
+    finalize_run_exports,
+    run_game,
+    run_youtube_game,
+)
 from sidelinehd_extractor.webapp.lifecycle import (
     ORIGIN_APP,
     ServerStateRegistration,
@@ -68,6 +86,11 @@ from sidelinehd_extractor.youtube import (
     YTDLPError,
     download_youtube_video,
 )
+
+
+#: The corrections file name written into every run dir (mirrors the web app's
+#: ``CORRECTIONS_FILENAME``); ``clear-corrections`` reads and rewrites it.
+CORRECTIONS_FILENAME = "corrections.csv"
 
 
 def _to_json(value: object) -> str:
@@ -448,6 +471,82 @@ def _cmd_setup_roster(args: argparse.Namespace) -> int:
         print("")
         print("Use your roster:")
         print(f"  {_format_roster_next_command(result.output_path)}")
+    return 0
+
+
+def _cmd_delete_roster(args: argparse.Namespace) -> int:
+    # 70e: the CLI half of POST /rosters/{slug}/delete. The slug guard and the
+    # default-roster fact come from the same helpers the route uses; the browser
+    # confirm becomes --yes (or an interactive prompt). UnknownRoster (a
+    # ValueError) bubbles to main() for a clean "Error: ..." on a bad/missing slug.
+    path = existing_roster_path(args.slug)
+    if not args.yes:
+        if is_configured_default(path):
+            consequence = (
+                f"'{args.slug}' is the configured default roster; deleting it means runs "
+                "will not match roster names until you set a new default."
+            )
+        else:
+            consequence = f"Delete roster '{args.slug}' ({path})?"
+        if not sys.stdin.isatty():
+            print(f"Error: {consequence} Re-run with --yes to confirm.", file=sys.stderr)
+            return 1
+        response = input(f"{consequence} Delete it? [y/N] ").strip().lower()
+        if response not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
+    path.unlink()
+    print(f"Deleted {path}")
+    return 0
+
+
+def _cmd_set_default_roster(args: argparse.Namespace) -> int:
+    # 70e: the CLI half of POST /rosters/{slug}/set-default, through the same
+    # config writer, so the template and any unmanaged key are preserved.
+    path = existing_roster_path(args.slug)
+    written = set_default_roster_config(path)
+    print(f"Default roster set to {path} (wrote {written})")
+    return 0
+
+
+def _cmd_clear_corrections(args: argparse.Namespace) -> int:
+    # 70e: the CLI half of POST /jobs/{job_id}/corrections/clear. Mirrors the
+    # route's granularity — the UI clears one (event_type, timestamp, field)
+    # correction; --all clears every one — then re-exports through the same tail
+    # so the on-disk artifacts and corrections.csv cannot disagree.
+    corrections_path = args.run / CORRECTIONS_FILENAME
+    if not corrections_path.exists():
+        print(f"No corrections file at {corrections_path}; nothing to clear.")
+        return 0
+
+    existing = load_event_corrections(corrections_path)
+    if args.all:
+        remaining: list = []
+    else:
+        if not args.timestamp or not args.field:
+            print(
+                "Error: specify --all, or both --timestamp and --field to identify the "
+                "correction to clear.",
+                file=sys.stderr,
+            )
+            return 1
+        key = (
+            (args.event_type or "").strip(),
+            round(parse_timestamp_value(args.timestamp), 3),
+            args.field.strip(),
+        )
+        remaining = remove_event_correction(existing, key)
+
+    if len(remaining) == len(existing):
+        # Absent file handled above; here the file exists but the selector
+        # matched nothing (or --all on an already-empty file). Idempotent no-op.
+        print("No matching corrections to clear.")
+        return 0
+
+    write_event_corrections(corrections_path, remaining)
+    finalize_run_exports(args.run, corrections=remaining, roster=load_configured_roster())
+    cleared = len(existing) - len(remaining)
+    print(f"Cleared {cleared} correction(s); {len(remaining)} remaining. Re-exported {args.run}.")
     return 0
 
 
@@ -1269,6 +1368,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_roster.add_argument("--output", "-o", type=Path, help="Override the default output path.")
     setup_roster.set_defaults(func=_cmd_setup_roster)
+
+    delete_roster = subparsers.add_parser(
+        "delete-roster",
+        help="Delete a roster CSV from rosters/ by its slug.",
+    )
+    delete_roster.add_argument(
+        "slug", help="Roster slug — the rosters/<slug>.csv filename stem, not a path."
+    )
+    delete_roster.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip the confirmation prompt (required to delete non-interactively).",
+    )
+    delete_roster.set_defaults(func=_cmd_delete_roster)
+
+    set_default_roster = subparsers.add_parser(
+        "set-default-roster",
+        help="Make a roster in rosters/ the configured default in sidelinehd.cfg.",
+    )
+    set_default_roster.add_argument(
+        "slug", help="Roster slug — the rosters/<slug>.csv filename stem, not a path."
+    )
+    set_default_roster.set_defaults(func=_cmd_set_default_roster)
+
+    clear_corrections = subparsers.add_parser(
+        "clear-corrections",
+        help="Clear saved corrections for a run and re-export it.",
+    )
+    clear_corrections.add_argument(
+        "--run", required=True, type=Path, help="Run directory holding corrections.csv."
+    )
+    clear_corrections.add_argument(
+        "--all", action="store_true", help="Clear every saved correction for the run."
+    )
+    clear_corrections.add_argument(
+        "--event-type",
+        default="",
+        help="Event type of the correction to clear (matches the corrections.csv column).",
+    )
+    clear_corrections.add_argument(
+        "--timestamp",
+        help="Timestamp of the correction to clear (seconds, M:SS, or H:MM:SS).",
+    )
+    clear_corrections.add_argument(
+        "--field", help="Field name of the correction to clear (e.g. label, player_name)."
+    )
+    clear_corrections.set_defaults(func=_cmd_clear_corrections)
 
     run_game_parser = subparsers.add_parser(
         "run-game",

@@ -94,6 +94,51 @@ def write_project_config(config: ProjectConfig, cwd: Optional[Path] = None) -> P
     return path
 
 
+def set_default_roster_config(
+    roster_path: Path,
+    *,
+    team_name: Optional[str] = None,
+    cwd: Optional[Path] = None,
+) -> Path:
+    """Point ``sidelinehd.cfg``'s default roster at ``roster_path``.
+
+    The one code path the web's set-default route and the CLI's
+    ``set-default-roster`` share (M7 / 70e): the template is preserved verbatim,
+    the team name is only overridden when one is supplied, and
+    ``write_project_config`` carries any unmanaged key (e.g. ``check_for_updates``)
+    through untouched.
+    """
+
+    values = load_project_config_values(cwd=cwd)
+    return write_project_config(
+        ProjectConfig(
+            roster=roster_path,
+            template=Path(values["template"]) if values.get("template") else None,
+            team_name=team_name or values.get("team_name"),
+        ),
+        cwd=cwd,
+    )
+
+
+def load_configured_roster() -> Optional[Roster]:
+    """The roster ``sidelinehd.cfg`` names as the default, or None.
+
+    Any failure — no config, no roster key, an unloadable file — degrades to
+    None so callers (the web review flags, the CLI re-export tail) work without
+    a configured roster rather than raising. Assumes jobs loaded the roster via
+    the same config, so re-deriving here matches the run unless it changed in
+    between.
+    """
+
+    try:
+        config = load_project_config()
+        if not config.roster:
+            return None
+        return load_roster(config.roster, team_name=config.team_name)
+    except Exception:  # noqa: BLE001 - callers must work without a config
+        return None
+
+
 def _project_config_path(value: Optional[str], root: Path, key: str) -> Optional[Path]:
     if not value:
         return None

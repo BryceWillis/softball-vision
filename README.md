@@ -561,6 +561,20 @@ When `detect-events --roster` is used, roster name-to-number lookup wins over OC
 jersey-number guesses. Raw OCR jersey numbers are still kept in `events.jsonl`
 metadata as `ocr_player_number` for audit.
 
+To make a roster the default `run-youtube 'URL'` uses, or to delete one, refer to
+it by its slug — the `rosters/<slug>.csv` filename stem (not a path):
+
+```sh
+sidelinehd-extractor set-default-roster your_team
+sidelinehd-extractor delete-roster old_team --yes
+```
+
+`set-default-roster` updates `sidelinehd.cfg`, keeping your template and other
+settings. `delete-roster` confirms first (or takes `--yes`); deleting the
+configured default warns that runs stop matching roster names until you set a new
+one. These are the command-line forms of the roster-management buttons in the web
+app, and reject any slug that is not a plain roster name.
+
 ## OCR
 
 The primary end-to-end commands, `run-game` and `run-youtube`, default to
@@ -706,6 +720,23 @@ sidelinehd-extractor export runs/YOUR_RUN \
   --corrections examples/corrections.example.csv \
   --output scratch/full_at_bats.txt
 ```
+
+Corrections saved for a run live in `runs/YOUR_RUN/corrections.csv`. To clear one
+(matching the web app's per-correction clear) or all of them and re-export the run
+in one step:
+
+```sh
+# Clear one correction, by its event type, timestamp, and field:
+sidelinehd-extractor clear-corrections --run runs/YOUR_RUN \
+  --event-type at_bat_start --timestamp 1:33:40 --field label
+
+# Clear every saved correction for the run:
+sidelinehd-extractor clear-corrections --run runs/YOUR_RUN --all
+```
+
+Clearing rewrites `corrections.csv` and re-runs the export tail, so the exported
+timestamps always agree with what corrections remain. Clearing a correction that
+does not exist (or a run with none) is a no-op, not an error.
 
 ## Publishing
 

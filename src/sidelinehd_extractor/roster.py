@@ -6,13 +6,75 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
+from sidelinehd_extractor.config import load_project_config_values
 from sidelinehd_extractor.models import Roster, RosterPlayer
 from sidelinehd_extractor.naming import slugify
 
 
 ROSTER_CSV_FIELDS = ["number", "full_name", "preferred_name", "display_name", "aliases"]
+
+#: The directory managed rosters live in, resolved relative to CWD (the same
+#: base the web app uses). Both the web routes and the CLI admin commands
+#: resolve ``rosters/<slug>.csv`` through the helpers below so their slug guard
+#: and default-roster logic are one implementation, not two (M7 / 70e).
+ROSTERS_DIRNAME = "rosters"
+
+#: Slugs are produced by ``slugify`` (lowercase alphanumerics and underscores),
+#: so anything else is not a roster we wrote — reject it before it can name a
+#: path outside ``rosters/``.
+_ROSTER_SLUG_PATTERN = re.compile(r"^[a-z0-9_]+$")
+
+
+class UnknownRoster(ValueError):
+    """A roster slug that is invalid or names no file under ``rosters/``.
+
+    A ``ValueError`` so the CLI's top-level handler renders it as a clean
+    error; the web routes catch it and translate to their 404.
+    """
+
+
+def roster_csv_path(slug: str) -> Path:
+    """Resolve a roster slug to its ``rosters/<slug>.csv`` path.
+
+    Raises :class:`UnknownRoster` for anything ``slugify`` would not produce —
+    the traversal guard both surfaces share.
+    """
+
+    if not _ROSTER_SLUG_PATTERN.match(slug):
+        raise UnknownRoster(f"{slug!r} is not a valid roster name")
+    return Path(ROSTERS_DIRNAME) / f"{slug}.csv"
+
+
+def existing_roster_path(slug: str) -> Path:
+    """Resolve a slug to an existing roster CSV, else raise :class:`UnknownRoster`."""
+
+    path = roster_csv_path(slug)
+    if not path.exists():
+        raise UnknownRoster(f"no roster named {slug!r} under {ROSTERS_DIRNAME}/")
+    return path
+
+
+def configured_roster_path() -> Optional[Path]:
+    """The raw roster path from ``sidelinehd.cfg``, unvalidated (expanduser only)."""
+
+    value = load_project_config_values().get("roster")
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
+def is_configured_default(path: Path) -> bool:
+    """Whether ``path`` is the roster ``sidelinehd.cfg`` names as the default."""
+
+    configured = configured_roster_path()
+    if configured is None:
+        return False
+    try:
+        return configured.resolve() == path.resolve()
+    except OSError:
+        return False
 
 #: Item 52: leading comment line that round-trips the pretty team name
 #: ("St. Mary's 12U") which the slugged filename cannot carry. Readers fall

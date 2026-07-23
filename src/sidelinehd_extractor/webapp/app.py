@@ -24,12 +24,9 @@ from fastapi.templating import Jinja2Templates
 
 from sidelinehd_extractor.calibration import parse_timestamp_value
 from sidelinehd_extractor.config import (
-    ProjectConfig,
-    load_project_config,
-    load_project_config_values,
-    load_roster,
+    load_configured_roster,
     load_roster_csv,
-    write_project_config,
+    set_default_roster_config,
 )
 from sidelinehd_extractor.corrections import (
     EventCorrection,
@@ -53,7 +50,16 @@ from sidelinehd_extractor.preflight import preflight_dependencies
 from sidelinehd_extractor.publish import PUBLISH_KIT_COPY_SCRIPT, render_publish_kit_fragment
 from sidelinehd_extractor.review import collect_event_review_rows
 from sidelinehd_extractor.review_triage import summarize_triage, triage_review_rows
-from sidelinehd_extractor.roster import default_roster_path, parse_team_list, write_roster_csv
+from sidelinehd_extractor.roster import (
+    ROSTERS_DIRNAME,
+    UnknownRoster,
+    configured_roster_path,
+    default_roster_path,
+    existing_roster_path,
+    is_configured_default,
+    parse_team_list,
+    write_roster_csv,
+)
 from sidelinehd_extractor.review_report import summarize_review_report_text
 from sidelinehd_extractor.webapp.history import rehydrate_jobs_from_runs
 from sidelinehd_extractor.webapp.jobs import Job, JobRunner, JobStore
@@ -310,23 +316,6 @@ def _feedback_context(job: Job, entry: int, note: str) -> dict:
     }
 
 
-def load_configured_roster() -> Optional[Roster]:
-    """The roster the job ran with, re-derived from the project config.
-
-    Assumption (flagged in the item 49 design): jobs load the roster via the
-    same project config, so re-deriving here matches what the run used unless
-    the config changed in between. Any failure degrades to roster-less flags.
-    """
-
-    try:
-        config = load_project_config()
-        if not config.roster:
-            return None
-        return load_roster(config.roster, team_name=config.team_name)
-    except Exception:  # noqa: BLE001 - review must work without a config
-        return None
-
-
 def _load_run_corrections(run_dir: Path) -> list:
     corrections_path = run_dir / CORRECTIONS_FILENAME
     if not corrections_path.exists():
@@ -436,46 +425,21 @@ def _correction_from_form(
     )
 
 
-ROSTERS_DIRNAME = "rosters"
-
-# Slugs are produced by ``slugify`` (lowercase alphanumerics and underscores),
-# so anything else in the URL is not a roster we wrote — reject it before it
-# can name a path outside ``rosters/``.
-_ROSTER_SLUG_PATTERN = re.compile(r"^[a-z0-9_]+$")
-
 _ROSTER_ROW_KEY_PATTERN = re.compile(r"^number_(\d+)$")
 
 
-def _roster_csv_path(slug: str) -> Path:
-    if not _ROSTER_SLUG_PATTERN.match(slug):
-        raise HTTPException(status_code=404, detail="Unknown roster")
-    return Path(ROSTERS_DIRNAME) / f"{slug}.csv"
-
-
 def _existing_roster_path(slug: str) -> Path:
-    path = _roster_csv_path(slug)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Unknown roster")
-    return path
+    """Resolve a slug to an existing roster CSV, 404-ing on the shared guard.
 
+    The slug validation and path resolution live in ``roster`` so the CLI's
+    ``delete-roster`` / ``set-default-roster`` share exactly this guard (70e);
+    the route keeps its 404 by translating the plain error at the boundary.
+    """
 
-def _configured_roster_path() -> Optional[Path]:
-    """The raw roster path from ``sidelinehd.cfg``, unvalidated."""
-
-    value = load_project_config_values().get("roster")
-    if not value:
-        return None
-    return Path(value).expanduser()
-
-
-def _is_configured_default(path: Path) -> bool:
-    configured = _configured_roster_path()
-    if configured is None:
-        return False
     try:
-        return configured.resolve() == path.resolve()
-    except OSError:
-        return False
+        return existing_roster_path(slug)
+    except UnknownRoster:
+        raise HTTPException(status_code=404, detail="Unknown roster")
 
 
 def list_roster_summaries() -> list:
@@ -500,7 +464,7 @@ def list_roster_summaries() -> list:
             summary.update(
                 team_name=roster.team_name,
                 player_count=len(roster.players),
-                is_default=_is_configured_default(csv_path),
+                is_default=is_configured_default(csv_path),
             )
         summaries.append(summary)
     return summaries
@@ -692,7 +656,7 @@ def create_app(
         """Configured-roster summary for the game page's roster panel."""
 
         roster = load_configured_roster()
-        path = _configured_roster_path()
+        path = configured_roster_path()
         edit_url = None
         if path is not None and path.suffix == ".csv" and path.parent == Path(ROSTERS_DIRNAME):
             edit_url = f"/rosters/{path.stem}"
@@ -927,7 +891,7 @@ def create_app(
                 "slug": slug,
                 "team_name": roster.team_name,
                 "rows": rows if rows is not None else _roster_row_dicts(roster.players),
-                "is_default": _is_configured_default(path),
+                "is_default": is_configured_default(path),
                 "error": error,
             },
             status_code=status_code,
@@ -1023,17 +987,11 @@ def create_app(
         return RedirectResponse(url="/rosters", status_code=303)
 
     def _write_default_roster_config(path: Path, team_name: Optional[str] = None) -> None:
-        # Reuse the item 28 config writer; preserve the other keys verbatim.
-        # The 54c one-click path passes the just-typed team name so the pretty
-        # name survives (the CSV itself only stores the stem until item 52).
-        values = load_project_config_values()
-        write_project_config(
-            ProjectConfig(
-                roster=path,
-                template=Path(values["template"]) if values.get("template") else None,
-                team_name=team_name or values.get("team_name"),
-            )
-        )
+        # The one config-writing path CLI set-default-roster also uses (70e):
+        # preserves the template and any unmanaged key, and only overrides the
+        # team name when the 54c one-click path passes the just-typed one (so
+        # the pretty name survives; the CSV stores only the stem until item 52).
+        set_default_roster_config(path, team_name=team_name)
 
     @app.post("/rosters/{slug}/set-default", response_class=HTMLResponse)
     def set_default_roster(slug: str) -> RedirectResponse:
