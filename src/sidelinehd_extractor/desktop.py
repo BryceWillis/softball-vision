@@ -42,11 +42,20 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple
 
+from dataclasses import dataclass
+
 from sidelinehd_extractor.build_info import build_stamp, stamp_label
 from sidelinehd_extractor.updates import (
     RELEASES_PAGE_URL,
+    UPDATES_DIRNAME,
+    ReleaseUpdate,
     UpdateCheck,
-    available_update,
+    UpdateInstaller,
+    available_release,
+    clear_update_staging,
+    installability_now,
+    render_swap_script,
+    spawn_swap_helper,
     update_menu_title,
 )
 
@@ -231,6 +240,13 @@ class ServerController:
         runner = JobRunner(store, **runner_kwargs)
         self.store = store
         return create_app(store=store, runner=runner, data_root=data_dir)
+
+    @property
+    def data_dir(self) -> Optional[Path]:
+        """The data root this controller serves against (69c reads it for the
+        updater's staging dir). ``None`` for a from-source or test controller."""
+
+        return self._data_dir
 
     @property
     def url(self) -> str:
@@ -937,8 +953,31 @@ def _status_line(url: str) -> str:
     return f"Running on {url}"
 
 
+def _update_entry(
+    update_tag: Optional[str], update_entry: Optional[MenuEntry]
+) -> Optional[MenuEntry]:
+    """The update menu row to append, if any.
+
+    69c generalized this from a bare tag to a full ``(title, kind)`` entry so
+    the row can be the installer's ``Update to …``/``Downloading …``/``Restart
+    to finish …`` states, not just 67d's Releases-page link. ``update_entry``
+    wins when given; ``update_tag`` keeps 67d's callers (and their tests)
+    working by rendering the Releases-page item.
+    """
+
+    if update_entry is not None:
+        return update_entry
+    if update_tag is not None:
+        return (update_menu_title(update_tag), ENTRY_ACTION)
+    return None
+
+
 def app_menu_entries(
-    url: str, stamp: str, update_tag: Optional[str] = None
+    url: str,
+    stamp: str,
+    update_tag: Optional[str] = None,
+    *,
+    update_entry: Optional[MenuEntry] = None,
 ) -> List[MenuEntry]:
     """The app menu: About, Open (⌘O), Open in Browser, status + stamp, update, Quit."""
 
@@ -954,14 +993,20 @@ def app_menu_entries(
         # the menu (a frozen app has no git checkout to ask).
         (stamp, ENTRY_DISPLAY_ONLY),
     ]
-    if update_tag is not None:
-        entries.append((update_menu_title(update_tag), ENTRY_ACTION))
+    entry = _update_entry(update_tag, update_entry)
+    if entry is not None:
+        entries.append(entry)
     entries.append(("", ENTRY_SEPARATOR))
     entries.append((QUIT_MENU_TITLE, ENTRY_ACTION))
     return entries
 
 
-def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEntry]:
+def dock_menu_entries(
+    url: str,
+    update_tag: Optional[str] = None,
+    *,
+    update_entry: Optional[MenuEntry] = None,
+) -> List[MenuEntry]:
     """The Dock right-click menu: Open, Open in Browser, status, update when one exists.
 
     Never a Quit entry — macOS appends its own Quit to every Dock menu, and
@@ -973,9 +1018,161 @@ def dock_menu_entries(url: str, update_tag: Optional[str] = None) -> List[MenuEn
         (OPEN_BROWSER_MENU_TITLE, ENTRY_ACTION),
         (_status_line(url), ENTRY_DISPLAY_ONLY),
     ]
-    if update_tag is not None:
-        entries.append((update_menu_title(update_tag), ENTRY_ACTION))
+    entry = _update_entry(update_tag, update_entry)
+    if entry is not None:
+        entries.append(entry)
     return entries
+
+
+# --- The self-updater's model (item 69c) -------------------------------------
+#
+# Pure functions over the update situation, pinned by test, so the AppKit layer
+# in run_dock_app is thin render code — the same shape 70c used for the badge.
+# The four menu states (D6) plus the prompt predicate and the swap-script
+# planner all live here; the copy is pinned by test per the 70c precedent.
+
+#: The four roles an update row can take, keyed to what clicking it does.
+UPDATE_ROLE_RELEASES = "releases"  # not installable → open the Releases page (67d)
+UPDATE_ROLE_INSTALL = "install"  # installable, idle → start the download
+UPDATE_ROLE_DOWNLOADING = "downloading"  # in flight → display-only percentage
+UPDATE_ROLE_RESTART = "restart"  # staged → quit, which swaps and relaunches
+
+
+@dataclass(frozen=True)
+class UpdateMenuItem:
+    """The single update row's title, kind (action/display-only), and role."""
+
+    title: str
+    kind: str
+    role: str
+
+
+def install_menu_title(tag: str) -> str:
+    return f"Update to {tag}…"
+
+
+def downloading_menu_title(tag: str, percent: Optional[int]) -> str:
+    if percent is None:
+        return f"Downloading {tag}…"
+    return f"Downloading {tag}… {percent}%"
+
+
+def restart_menu_title(tag: str) -> str:
+    return f"Restart to finish updating to {tag}"
+
+
+def update_menu_item(
+    *,
+    release: Optional[ReleaseUpdate],
+    installable: bool,
+    phase: str,
+    percent: Optional[int],
+) -> Optional[UpdateMenuItem]:
+    """The update row for the current situation, or ``None`` for no row (D6).
+
+    ``installable`` folds together "the machine can self-update" and "the
+    release actually has a downloadable asset" — when either is false the row
+    is 67d's Releases-page fallback, verbatim. Otherwise the row tracks the
+    installer's phase: idle offers the install, downloading shows a display-only
+    percentage (which is also what makes a second click a no-op), staged offers
+    the restart that performs the swap.
+    """
+
+    if release is None:
+        return None
+    tag = release.tag
+    if not installable:
+        return UpdateMenuItem(update_menu_title(tag), ENTRY_ACTION, UPDATE_ROLE_RELEASES)
+    if phase == UpdateInstaller.PHASE_DOWNLOADING:
+        return UpdateMenuItem(
+            downloading_menu_title(tag, percent),
+            ENTRY_DISPLAY_ONLY,
+            UPDATE_ROLE_DOWNLOADING,
+        )
+    if phase == UpdateInstaller.PHASE_STAGED:
+        return UpdateMenuItem(restart_menu_title(tag), ENTRY_ACTION, UPDATE_ROLE_RESTART)
+    # idle, or failed-and-reset: offer the (re)install.
+    return UpdateMenuItem(install_menu_title(tag), ENTRY_ACTION, UPDATE_ROLE_INSTALL)
+
+
+def should_prompt_update(
+    *, has_installable_update: bool, job_active: bool, already_prompted: bool
+) -> bool:
+    """Whether to raise the once-per-launch update prompt now (D6).
+
+    Only when there is an installable update, no read is in flight (a 40-minute
+    job must not be interrupted by a modal), and we have not already asked this
+    launch. Re-evaluated at show time, so a job that starts between the check
+    completing and the tick correctly suppresses the prompt (menu-only).
+    """
+
+    return has_installable_update and not job_active and not already_prompted
+
+
+#: The update prompt (D6): plain language, names both versions, states the
+#: reopen contract. Copy pinned by test per the 70c precedent.
+UPDATE_PROMPT_MESSAGE = "A newer version is ready"
+UPDATE_PROMPT_ACCEPT_TITLE = "Update Now"
+UPDATE_PROMPT_DECLINE_TITLE = "Not Now"
+
+
+def update_prompt_body(new_tag: str, current_tag: str) -> str:
+    return (
+        f"{APP_NAME} {new_tag} is available (you have {current_tag}). "
+        "Download and install it now? The app will reopen by itself when it "
+        "finishes."
+    )
+
+
+#: The one loud failure surface (69c): shown only after the user clicked Update
+#: Now, never for a failed *check*. It promises nothing changed and offers the
+#: manual path, which is the CLI-parity form.
+UPDATE_FAILURE_MESSAGE = "The update didn't work."
+UPDATE_FAILURE_RELEASES_TITLE = "Open Releases Page"
+UPDATE_FAILURE_OK_TITLE = "OK"
+
+
+def update_failure_body(current_tag: str) -> str:
+    return (
+        f"Nothing has been changed — you're still on {current_tag}. You can "
+        "download the new version yourself from the releases page."
+    )
+
+
+def update_swap_script(
+    *,
+    staged_app: Optional[Path],
+    phase: str,
+    app_path: Optional[Path],
+    data_dir: Optional[Path],
+    interactive: bool,
+    pid: int,
+) -> Optional[str]:
+    """The ``/bin/sh`` swap script to spawn on quit, or ``None`` if none should be.
+
+    Returns a script only when a verified update is actually staged and the
+    machine can perform the swap — otherwise ``None``, so a quit with nothing
+    staged spawns nothing. ``interactive`` (69b/D5) becomes the helper's reopen
+    flag: an interactive quit reopens the new version; ``stop``'s SIGTERM
+    (``interactive=False``) swaps but does not reopen.
+    """
+
+    if (
+        phase != UpdateInstaller.PHASE_STAGED
+        or staged_app is None
+        or app_path is None
+        or data_dir is None
+    ):
+        return None
+    app_path = Path(app_path)
+    park_path = Path(data_dir) / UPDATES_DIRNAME / f"previous-{app_path.name}"
+    return render_swap_script(
+        pid=pid,
+        staged_app=str(staged_app),
+        target_app=str(app_path),
+        park_path=str(park_path),
+        reopen=interactive,
+    )
 
 
 def run_dock_app(
@@ -1024,7 +1221,11 @@ def run_dock_app(
             return "presentWindow:", delegate
         if title == OPEN_BROWSER_MENU_TITLE:
             return "openBrowser:", delegate
-        return "openReleases:", delegate  # the update item is the only other action
+        # The update row is the only other action, and its selector/target
+        # depend on the current phase (open Releases, start the install, or
+        # restart to swap). `update_ui["action"]` is set to match whenever the
+        # row is (re)computed, just before the menu is rendered.
+        return update_ui["action"] or ("openReleases:", delegate)
 
     def render_menu(entries: List[MenuEntry]):
         menu = AppKit.NSMenu.alloc().initWithTitle_(APP_NAME)
@@ -1076,12 +1277,14 @@ def run_dock_app(
         main_menu.setSubmenu_forItem_(submenu, item)
         return submenu
 
-    def install_app_menu(update_tag: Optional[str] = None) -> None:
+    def install_app_menu(update_entry: Optional[MenuEntry] = None) -> None:
         main_menu = AppKit.NSMenu.alloc().initWithTitle_("MainMenu")
         add_submenu(
             main_menu,
             APP_NAME,
-            render_menu(app_menu_entries(controller.url, stamp, update_tag)),
+            render_menu(
+                app_menu_entries(controller.url, stamp, update_entry=update_entry)
+            ),
         )
         # 70b: the Edit menu is what makes ⌘C work inside the web view — see
         # edit_menu_entries. The Window menu carries ⌘W, which closes the
@@ -1113,6 +1316,166 @@ def run_dock_app(
     badge_state: dict = {"label": None}
     seen_job_statuses: Dict[str, str] = {}
     notifier: dict = {"center": None}
+
+    # --- The self-updater (item 69c) ---
+    #
+    # `installability` is decided once at launch (it cannot change under a
+    # running app), and the data dir the staging area lives in comes from the
+    # controller. `installer` runs the download/verify/stage on its own daemon
+    # thread; everything else here is main-thread render/decision code driven by
+    # the poll timer. All of it is best-effort: a failure in the update path
+    # must never disturb a run or a quit (the M1 rule), and the one loud surface
+    # is the post-click failure alert.
+    update_data_dir = controller.data_dir
+    installability = installability_now()
+    installer = UpdateInstaller()
+    current_version_tag = f"v{build_stamp().version}"
+    #: `action` mirrors the current update row's selector/target for `action_for`;
+    #: `installed_title` dedupes menu rebuilds the way `badge_state` dedupes the
+    #: Dock tile. `prompted` latches the once-per-launch prompt; `stage_handled`
+    #: makes the auto-restart-on-stage decision exactly once per staged update.
+    update_ui: dict = {"action": None, "installed_title": None}
+    update_flow: dict = {"prompted": False, "stage_handled": False}
+
+    def a_job_is_active() -> bool:
+        return any(not job.is_terminal for job in current_jobs())
+
+    def update_percent() -> Optional[int]:
+        if installer.progress is None:
+            return None
+        return max(0, min(100, int(installer.progress * 100)))
+
+    def current_update_entry() -> Optional[MenuEntry]:
+        """The update row to render now, and set `update_ui["action"]` to match.
+
+        Reads the check result, the fixed installability, and the installer's
+        live phase/percent. Returns ``(title, kind)`` for ``render_menu`` or
+        ``None`` for no row.
+        """
+
+        release = update_check.result if update_check is not None else None
+        installable = bool(
+            installability.installable
+            and release is not None
+            and release.asset_url is not None
+        )
+        item = update_menu_item(
+            release=release,
+            installable=installable,
+            phase=installer.phase,
+            percent=update_percent(),
+        )
+        if item is None:
+            update_ui["action"] = ("openReleases:", delegate)
+            return None
+        if item.role == UPDATE_ROLE_RESTART:
+            # Restart takes the ordinary quit path — confirmation and all —
+            # and applicationShouldTerminate_ spawns the swap helper on the way.
+            update_ui["action"] = ("terminate:", app)
+        elif item.role == UPDATE_ROLE_INSTALL:
+            update_ui["action"] = ("startUpdate:", delegate)
+        else:  # releases fallback, or the display-only downloading row
+            update_ui["action"] = ("openReleases:", delegate)
+        return (item.title, item.kind)
+
+    def refresh_update_menu() -> None:
+        """Rebuild the app menu only when the update row's title changes."""
+
+        entry = current_update_entry()
+        title = entry[0] if entry is not None else None
+        if title == update_ui["installed_title"]:
+            return
+        update_ui["installed_title"] = title
+        install_app_menu(entry)
+
+    def begin_install(release: "ReleaseUpdate") -> None:
+        if update_data_dir is None or installability.app_path is None:
+            return
+        # Latch the prompt: once an install is underway — whether from the
+        # prompt or the menu item — the once-per-launch prompt must not later
+        # pop up over the download (it can otherwise, if a job was active when
+        # the check completed and only cleared after the menu start).
+        update_flow["prompted"] = True
+        installer.start(
+            release, data_dir=update_data_dir, running_app=installability.app_path
+        )
+
+    def prompt_update(release: "ReleaseUpdate") -> bool:
+        """The once-per-launch Update Now / Not Now prompt. True → Update Now."""
+
+        try:
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_(UPDATE_PROMPT_MESSAGE)
+            alert.setInformativeText_(
+                update_prompt_body(release.tag, current_version_tag)
+            )
+            alert.addButtonWithTitle_(UPDATE_PROMPT_ACCEPT_TITLE)
+            alert.addButtonWithTitle_(UPDATE_PROMPT_DECLINE_TITLE)
+            app.activateIgnoringOtherApps_(True)
+            response = alert.runModal()
+            # 69b/CR-96: `stop` dismissing this dialog (NSModalResponseAbort)
+            # reads as Not Now — the safe, non-destructive answer.
+            if response == AppKit.NSModalResponseAbort:
+                return False
+            return response == AppKit.NSAlertFirstButtonReturn
+        except Exception:
+            return False
+
+    def show_update_failure_alert() -> None:
+        """The one loud surface: a post-click install failure. Best-effort."""
+
+        try:
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_(UPDATE_FAILURE_MESSAGE)
+            alert.setInformativeText_(update_failure_body(current_version_tag))
+            alert.addButtonWithTitle_(UPDATE_FAILURE_RELEASES_TITLE)
+            alert.addButtonWithTitle_(UPDATE_FAILURE_OK_TITLE)
+            app.activateIgnoringOtherApps_(True)
+            response = alert.runModal()
+            if response == AppKit.NSModalResponseAbort:
+                return
+            if response == AppKit.NSAlertFirstButtonReturn:
+                webbrowser.open(RELEASES_PAGE_URL)
+        except Exception:
+            pass
+
+    def drive_update() -> None:
+        """One poll tick of the update lifecycle (prompt, failure, stage, menu).
+
+        Runs on the main-thread poll timer. Every branch is idempotent and
+        cheap once settled, so this can fire every second for the app's life.
+        """
+
+        if update_check is None or not update_check.done:
+            return
+        release = update_check.result
+        if release is not None and not update_flow["prompted"]:
+            has_installable = bool(
+                installability.installable and release.asset_url is not None
+            )
+            if should_prompt_update(
+                has_installable_update=has_installable,
+                job_active=a_job_is_active(),
+                already_prompted=False,
+            ):
+                update_flow["prompted"] = True
+                if prompt_update(release):
+                    begin_install(release)
+        if installer.phase == UpdateInstaller.PHASE_FAILED:
+            show_update_failure_alert()
+            installer.reset()
+            update_flow["stage_handled"] = False
+        elif (
+            installer.phase == UpdateInstaller.PHASE_STAGED
+            and not update_flow["stage_handled"]
+        ):
+            # Staging just finished. With nothing running, do the swap now
+            # (terminate → applicationShouldTerminate_ spawns the helper); with
+            # a read in flight, hold — the Restart row waits for the next quit.
+            update_flow["stage_handled"] = True
+            if not a_job_is_active():
+                app.terminate_(None)
+        refresh_update_menu()
 
     def current_jobs() -> List["Job"]:
         """Job state for the badge and the confirmation, or [] if invisible.
@@ -1375,8 +1738,10 @@ def run_dock_app(
 
         def applicationDockMenu_(self, _app):
             # Rebuilt per show, so the update item needs no mutation path.
-            tag = update_check.result if update_check is not None else None
-            return render_menu(dock_menu_entries(controller.url, tag))
+            # 69c: the row can be install/downloading/restart/releases, so it
+            # comes from the same model the app menu uses.
+            entry = current_update_entry()
+            return render_menu(dock_menu_entries(controller.url, update_entry=entry))
 
         def applicationShouldTerminate_(self, _app):
             # The single hook that makes ⌘Q, app menu → Quit, Dock → Quit,
@@ -1396,6 +1761,24 @@ def run_dock_app(
             controller.stop()
             if on_quit is not None:
                 on_quit()
+            # 69c/D5: if a verified update is staged, hand off to the detached
+            # swap helper on the way out — after the server is stopped, before
+            # the process exits. reopen is keyed to whether this quit was
+            # interactive (⌘Q reopens the new version; `stop`'s SIGTERM does
+            # not). A failed spawn must never block the quit (M1).
+            script = update_swap_script(
+                staged_app=installer.staged_app_path,
+                phase=installer.phase,
+                app_path=installability.app_path,
+                data_dir=update_data_dir,
+                interactive=quit_context.interactive,
+                pid=os.getpid(),
+            )
+            if script is not None:
+                try:
+                    spawn_swap_helper(script)
+                except Exception:
+                    pass
             return AppKit.NSTerminateNow
 
         def updateDockBadge_(self, _timer):
@@ -1421,16 +1804,30 @@ def run_dock_app(
         def openReleases_(self, _sender):
             webbrowser.open(RELEASES_PAGE_URL)
 
-        def pollUpdateCheck_(self, timer):
-            # Item 67d: the check runs on its own daemon thread, but menus
-            # must only be touched from the main thread — where this timer
-            # fires. Poll until the check finishes, then stop; the menu is
-            # rebuilt from the model only when an update actually exists.
-            if update_check is None or not update_check.done:
+        def startUpdate_(self, _sender):
+            # 69c: the installable "Update to …" row. Download/verify/stage runs
+            # on the installer's daemon thread; the menu goes display-only while
+            # it does, which is what makes a second click a no-op.
+            release = update_check.result if update_check is not None else None
+            if (
+                release is None
+                or not installability.installable
+                or release.asset_url is None
+            ):
                 return
-            timer.invalidate()
-            if update_check.result is not None:
-                install_app_menu(update_check.result)
+            begin_install(release)
+
+        def pollUpdateCheck_(self, timer):
+            # Item 67d + 69c: the check and the install both run on daemon
+            # threads, but menus and dialogs must only be touched from the main
+            # thread — where this timer fires. Unlike 67d's one-shot poll, 69c's
+            # timer runs for the app's life to drive the whole update lifecycle
+            # (prompt, download percentage, failure alert, staged restart). All
+            # failures are swallowed: the update path is a courtesy (M1).
+            try:
+                drive_update()
+            except Exception:
+                pass
 
     delegate = _DockDelegate.alloc().init()
     app.setDelegate_(delegate)
@@ -1578,15 +1975,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     port = find_open_port()
     controller = ServerController(port=port, data_dir=data_dir)
     controller.start()
+    # Item 69c: clear the update staging dir now that the server is up. It holds
+    # only staged downloads and — on the launch a swap just produced — the
+    # parked previous bundle, so this doubles as "delete the old version once
+    # the new one demonstrably launched". Best-effort; a launcher never fails
+    # over metadata (M1). --selftest returns above and never reaches this.
+    clear_update_staging(data_dir)
     # Item 70a: only once the server is actually up — the record says "a
     # server is running here", and until start() returns that is not true.
     record = register_server_record(controller, data_dir)
-    # Item 67d: only after the server is up, and on a daemon thread — the
+    # Item 67d/69c: only after the server is up, and on a daemon thread — the
     # check must never block launch, and --selftest never reaches this path.
     # 70f: bind the config opt-out to the data dir, since the entrypoint no
     # longer chdirs into it — otherwise `check_for_updates = false` would be
-    # read from the launcher's CWD (`/`) and silently ignored.
-    update_check = UpdateCheck(check=partial(available_update, cwd=data_dir))
+    # read from the launcher's CWD (`/`) and silently ignored. 69c uses the
+    # richer `available_release` (tag + asset) the self-updater needs.
+    update_check = UpdateCheck(check=partial(available_release, cwd=data_dir))
     update_check.start()
     # Item 70b (D4): no `webbrowser.open` here any more. A double-click is
     # answered by the app's *own* window, which run_dock_app presents; the

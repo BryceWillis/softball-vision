@@ -202,6 +202,34 @@ because the bundle is single-arch.
    `sidelinehd-extractor status` still names exactly one server. Do the same
    with a CLI server up first (`sidelinehd-extractor start`, then launch the
    `.app`): same hand-off, and the CLI server keeps running untouched.
+8. **Self-update (item 69c).** This needs *two* Developer-ID-signed builds with
+   different versions — a `workflow_dispatch` run of `package-macos.yml` on two
+   commits (bump `version` in `pyproject.toml`) gives you a signed-but-not-yet
+   notarized pair, which is exactly what the runtime gate is designed to accept.
+   Install the **older** one into `/Applications`, publish the newer one as the
+   `releases/latest` asset (or point the check at it), and launch the old app:
+   - The **Update Now / Not Now** prompt appears once. **Update Now** →
+     progress shows in the menu → the app quits and **reopens by itself** as the
+     new version. Confirm: the app menu + web footer show the new stamp,
+     `sidelinehd-extractor status` names the new server, exactly one record
+     exists, and `~/Library/Application Support/SidelineHD Extractor/updates/`
+     is empty after the relaunch settles.
+   - **Substitute a corrupted zip** for the release asset: the failure alert
+     appears (*"The update didn't work. Nothing has been changed …"*), the app
+     keeps running, the installed bundle is byte-for-byte untouched, and the
+     staging dir is cleaned.
+   - **Substitute a bundle re-signed with a *different* identity**: the team
+     gate must **refuse** it — same clean, nothing-changed outcome. This is the
+     security check; it must be *seen* to refuse, not assumed to.
+   - **Update Now while a read is in flight**: no restart. The menu shows
+     **Restart to finish updating**; the read runs to completion untouched, and
+     quitting afterward performs the swap.
+   - **`sidelinehd-extractor stop` with an update staged**: the app stops, `stop`
+     prints the graceful message, the swap happens, and **nothing reopens** —
+     the next manual launch is the new version.
+   - A **source run** (`python -m sidelinehd_extractor.desktop`, with
+     `SIDELINEHD_CHECK_FOR_UPDATES=1`): the menu shows the Releases-page
+     fallback, never the installer — a source tree updates with `git pull`.
 
 ## App icon
 

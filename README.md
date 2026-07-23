@@ -65,18 +65,41 @@ programs mangle app bundles, and the copy that arrives will not open. The
 other coach then follows the same steps above: unzip, drag to Applications,
 double-click, and click **Open** on the one-time confirmation.
 
-### How the app checks for updates
+### Updating
 
 Each time it launches, the app asks GitHub **once** whether a newer release
 exists — a single anonymous request to `api.github.com` that carries nothing
 about you or your games, gives up after 3 seconds, and does nothing at all
-when you're offline. If a newer version exists, an
-**Update available … Download…** item appears in the app's menus — the
-**SidelineHD Extractor** menu at the top of the screen, and the Dock icon's
-right-click menu — and opens the Releases page; download
-the new zip and replace the app yourself (the app never replaces itself).
-The fresh download opens with the same one-time confirmation described in
-step 4 above. When you're up to date, no update item appears.
+when you're offline. When you're up to date, nothing appears.
+
+When a newer version **is** available, the app offers to install it for you:
+
+- A one-time prompt asks **Update Now** or **Not Now**. Choosing **Update
+  Now** downloads the new version in the background — the app stays usable —
+  and when it finishes, the app quits and **reopens by itself** as the new
+  version. Nothing is downloaded or replaced until you say so.
+- If you dismiss the prompt, an **Update to …** item stays in the app's menus
+  (the **SidelineHD Extractor** menu at the top of the screen, and the Dock
+  icon's right-click menu) so you can start it whenever you like. While it
+  downloads, that item shows the progress; once it's ready it becomes
+  **Restart to finish updating**.
+- If you're in the middle of reading a game, the update waits — it never
+  interrupts a read. It finishes the next time you quit the app.
+
+The app only ever replaces its **own** copy, in place, and only with a build
+that carries the same Apple signature as the one you're running — a download
+that doesn't verify is discarded and nothing changes. If anything goes wrong,
+the app tells you plainly that nothing was changed and points you at the
+Releases page.
+
+**The manual path still works, and is the command-line equivalent.** You can
+always update by hand instead: open the
+[Releases page](https://github.com/BryceWillis/softball-vision/releases/latest),
+download `SidelineHD-Extractor-macos-arm64.zip`, and replace the app in your
+Applications folder (the same drag you did when you first installed it). This
+is the same thing a `git pull` does for a source install, and it's the only
+way to update the **very first** notarized release onto the auto-update track —
+one last manual swap, after which the app keeps itself current.
 
 To turn the check off entirely, add this to `sidelinehd.cfg` in the app's
 data folder — in Finder, press `Cmd+Shift+G` and go to

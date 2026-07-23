@@ -445,9 +445,13 @@ def test_main_binds_the_update_check_to_the_data_dir(monkeypatch, tmp_path):
     """Item 70f / CR-98: the update opt-out must be read from the app's data
     dir, not the launcher's CWD (`/` in a Finder-launched bundle). `main()`
     hands `UpdateCheck` a `check` bound to that data dir; pin the binding so a
-    refactor back to a bare `UpdateCheck()` / `available_update` cannot
+    refactor back to a bare `UpdateCheck()` / `available_release` cannot
     silently reinstate the read-from-`/` bug with the suite green. The seam
-    test in test_updates.py covers the forwarding this binding depends on."""
+    test in test_updates.py covers the forwarding this binding depends on.
+
+    69c switched the bound check from 67d's tag-only `available_update` to the
+    richer `available_release` (tag + asset) — the binding property is the same,
+    only the function changed."""
 
     events = []
     captured = {}
@@ -461,11 +465,11 @@ def test_main_binds_the_update_check_to_the_data_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "run_dock_app", lambda *a, **kw: None)
 
     # `_patch_main_launch` makes `prepare_data_dir` return `tmp_path`, so the
-    # data dir main() binds is `tmp_path`. Spy `available_update` and prove the
+    # data dir main() binds is `tmp_path`. Spy `available_release` and prove the
     # bound check forwards that dir as its cwd when invoked.
     seen = []
     monkeypatch.setattr(
-        desktop, "available_update", lambda *a, **kw: seen.append(kw.get("cwd")) or None
+        desktop, "available_release", lambda *a, **kw: seen.append(kw.get("cwd")) or None
     )
 
     assert desktop.main([]) == 0
@@ -1537,3 +1541,213 @@ def test_desktop_module_keeps_gui_frameworks_out_of_module_scope():
     assert top_level.isdisjoint(
         {"AppKit", "Cocoa", "WebKit", "UserNotifications", "objc", "rumps"}
     )
+
+
+# --- The self-updater's model (item 69c) -------------------------------------
+#
+# The AppKit prompt, the installer thread, and the swap spawn are exercised in
+# test_updates.py through injected seams; here we pin the pure model the GUI
+# renders — the four menu states, the prompt predicate, the copy, and the
+# swap-script planner — plus main()'s launch-time staging cleanup.
+
+from sidelinehd_extractor.updates import ReleaseUpdate, UpdateInstaller  # noqa: E402
+
+
+def _release(tag="v0.6.0", asset=True):
+    return ReleaseUpdate(
+        tag=tag,
+        asset_url="https://example.com/app.zip" if asset else None,
+        asset_size=4096 if asset else None,
+    )
+
+
+def test_update_menu_titles():
+    assert desktop.install_menu_title("v0.6.0") == "Update to v0.6.0…"
+    assert desktop.restart_menu_title("v0.6.0") == "Restart to finish updating to v0.6.0"
+    assert desktop.downloading_menu_title("v0.6.0", 42) == "Downloading v0.6.0… 42%"
+    # No count yet → no percentage, not "0%".
+    assert desktop.downloading_menu_title("v0.6.0", None) == "Downloading v0.6.0…"
+
+
+def test_update_menu_item_none_without_a_release():
+    assert (
+        desktop.update_menu_item(
+            release=None, installable=True, phase=UpdateInstaller.PHASE_IDLE, percent=None
+        )
+        is None
+    )
+
+
+def test_update_menu_item_falls_back_to_releases_when_not_installable():
+    # A source run, an assetless release, or a translocated app all land here:
+    # the 67d Releases-page item, verbatim.
+    item = desktop.update_menu_item(
+        release=_release(), installable=False, phase=UpdateInstaller.PHASE_IDLE,
+        percent=None,
+    )
+    assert item.title == update_menu_title("v0.6.0")
+    assert item.kind == ENTRY_ACTION
+    assert item.role == desktop.UPDATE_ROLE_RELEASES
+
+
+def test_update_menu_item_installable_states():
+    idle = desktop.update_menu_item(
+        release=_release(), installable=True, phase=UpdateInstaller.PHASE_IDLE,
+        percent=None,
+    )
+    assert idle.title == "Update to v0.6.0…"
+    assert idle.kind == ENTRY_ACTION and idle.role == desktop.UPDATE_ROLE_INSTALL
+
+    downloading = desktop.update_menu_item(
+        release=_release(), installable=True,
+        phase=UpdateInstaller.PHASE_DOWNLOADING, percent=42,
+    )
+    assert downloading.title == "Downloading v0.6.0… 42%"
+    # Display-only is what makes a second click a no-op.
+    assert downloading.kind == ENTRY_DISPLAY_ONLY
+    assert downloading.role == desktop.UPDATE_ROLE_DOWNLOADING
+
+    staged = desktop.update_menu_item(
+        release=_release(), installable=True, phase=UpdateInstaller.PHASE_STAGED,
+        percent=None,
+    )
+    assert staged.title == "Restart to finish updating to v0.6.0"
+    assert staged.kind == ENTRY_ACTION and staged.role == desktop.UPDATE_ROLE_RESTART
+
+
+def test_update_menu_item_failed_offers_a_retry():
+    # After a failure the installer resets to idle, so the row offers the
+    # install again rather than a dead end.
+    item = desktop.update_menu_item(
+        release=_release(), installable=True, phase=UpdateInstaller.PHASE_IDLE,
+        percent=None,
+    )
+    assert item.role == desktop.UPDATE_ROLE_INSTALL
+
+
+@pytest.mark.parametrize(
+    ("installable", "job", "prompted", "expected"),
+    [
+        (True, False, False, True),   # the one show condition
+        (False, False, False, False),  # nothing installable
+        (True, True, False, False),   # a read is in flight — never interrupt it
+        (True, False, True, False),   # already asked this launch
+    ],
+)
+def test_should_prompt_update(installable, job, prompted, expected):
+    assert (
+        desktop.should_prompt_update(
+            has_installable_update=installable,
+            job_active=job,
+            already_prompted=prompted,
+        )
+        is expected
+    )
+
+
+def test_update_prompt_copy_names_both_versions_and_the_reopen_contract():
+    assert desktop.UPDATE_PROMPT_MESSAGE == "A newer version is ready"
+    body = desktop.update_prompt_body("v0.6.0", "v0.5.0")
+    assert "v0.6.0 is available" in body
+    assert "you have v0.5.0" in body
+    assert "reopen by itself" in body
+    assert desktop.UPDATE_PROMPT_ACCEPT_TITLE == "Update Now"
+    assert desktop.UPDATE_PROMPT_DECLINE_TITLE == "Not Now"
+
+
+def test_update_failure_copy_promises_nothing_changed():
+    assert desktop.UPDATE_FAILURE_MESSAGE == "The update didn't work."
+    body = desktop.update_failure_body("v0.5.0")
+    assert "Nothing has been changed" in body
+    assert "still on v0.5.0" in body
+    assert desktop.UPDATE_FAILURE_RELEASES_TITLE == "Open Releases Page"
+
+
+def test_menu_entry_accepts_a_full_update_entry():
+    # 69c: the update row can be any (title, kind), not just the tag link.
+    entry = ("Restart to finish updating to v0.6.0", ENTRY_ACTION)
+    app_rows = app_menu_entries("http://x", "v0.5.0", update_entry=entry)
+    assert entry in app_rows
+    dock_rows = dock_menu_entries("http://x", update_entry=entry)
+    assert entry in dock_rows
+    # The tag-only 67d form still works for its callers.
+    tag_rows = app_menu_entries("http://x", "v0.5.0", "v0.6.0")
+    assert (update_menu_title("v0.6.0"), ENTRY_ACTION) in tag_rows
+
+
+# --- The swap-script planner (item 69c / D5) ---------------------------------
+
+
+def test_update_swap_script_renders_only_when_staged():
+    script = desktop.update_swap_script(
+        staged_app=Path("/data/updates/extracted/SidelineHD Extractor.app"),
+        phase=UpdateInstaller.PHASE_STAGED,
+        app_path=Path("/Applications/SidelineHD Extractor.app"),
+        data_dir=Path("/data"),
+        interactive=True,
+        pid=999,
+    )
+    assert script is not None
+    assert "/usr/bin/open" in script  # interactive → reopen
+    # The parked path is under the data dir's updates/ folder.
+    assert "'/data/updates/previous-SidelineHD Extractor.app'" in script
+
+
+def test_update_swap_script_reopen_keyed_to_interactive():
+    # `stop`'s SIGTERM (interactive=False) swaps but must not relaunch.
+    script = desktop.update_swap_script(
+        staged_app=Path("/data/updates/extracted/App.app"),
+        phase=UpdateInstaller.PHASE_STAGED,
+        app_path=Path("/Applications/App.app"),
+        data_dir=Path("/data"),
+        interactive=False,
+        pid=1,
+    )
+    assert script is not None
+    assert "/usr/bin/open" not in script
+
+
+@pytest.mark.parametrize(
+    ("phase", "staged", "app_path", "data_dir"),
+    [
+        (UpdateInstaller.PHASE_IDLE, "/s.app", "/a.app", "/d"),        # nothing staged
+        (UpdateInstaller.PHASE_DOWNLOADING, "/s.app", "/a.app", "/d"),  # still downloading
+        (UpdateInstaller.PHASE_STAGED, None, "/a.app", "/d"),          # no staged path
+        (UpdateInstaller.PHASE_STAGED, "/s.app", None, "/d"),          # not installable
+        (UpdateInstaller.PHASE_STAGED, "/s.app", "/a.app", None),      # no data dir
+    ],
+)
+def test_update_swap_script_is_none_without_a_verified_stage(phase, staged, app_path, data_dir):
+    assert (
+        desktop.update_swap_script(
+            staged_app=Path(staged) if staged else None,
+            phase=phase,
+            app_path=Path(app_path) if app_path else None,
+            data_dir=Path(data_dir) if data_dir else None,
+            interactive=True,
+            pid=1,
+        )
+        is None
+    )
+
+
+def test_main_clears_update_staging_after_the_server_is_up(monkeypatch, tmp_path):
+    """69c: the staging dir is cleared at launch, once the server is up — which
+    is also how the previous bundle is deleted after a swap's relaunch."""
+
+    events = []
+    seen = {}
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    monkeypatch.setattr(
+        desktop, "run_dock_app", lambda *a, **k: events.append("dock-app")
+    )
+    monkeypatch.setattr(
+        desktop,
+        "clear_update_staging",
+        lambda data_dir: (events.append("clear-staging"), seen.update(dir=data_dir))[0],
+    )
+
+    assert desktop.main([]) == 0
+    assert events.index("server-start") < events.index("clear-staging")
+    assert events.index("clear-staging") < events.index("dock-app")
+    assert seen["dir"] == tmp_path

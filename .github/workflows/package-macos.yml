@@ -38,6 +38,9 @@ jobs:
     timeout-minutes: 45
     env:
       APP_PATH: dist/SidelineHD Extractor.app
+      # Must stay identical to RELEASE_ASSET_NAME in
+      # src/sidelinehd_extractor/updates.py — CI uploads the release asset under
+      # this name and the self-updater (69c) looks it up by it.
       ZIP_NAME: SidelineHD-Extractor-macos-arm64.zip
     steps:
       - uses: actions/checkout@v4

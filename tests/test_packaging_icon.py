@@ -42,6 +42,16 @@ def test_icon_assets_exist_and_are_non_empty() -> None:
     assert source_png.is_file() and source_png.stat().st_size > 0
 
 
+def test_spec_does_not_enable_file_quarantine() -> None:
+    # M6 slice 69c/D1: the self-updater's downloads must stay quarantine-free.
+    # The quarantine xattr is applied by apps that opt in via
+    # LSFileQuarantineEnabled; this app must not, or an auto-swapped bundle
+    # could arrive re-quarantined. Pinned so a future plist edit cannot
+    # silently break the property the updater leans on.
+    text = SPEC.read_text(encoding="utf-8")
+    assert "LSFileQuarantineEnabled" not in text
+
+
 def test_the_icns_is_actually_an_icns() -> None:
     # The Apple Icon Image format opens with the magic bytes "icns"; a
     # truncated or accidentally-text file would pass a bare size check.
