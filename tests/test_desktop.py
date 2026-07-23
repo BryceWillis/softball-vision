@@ -766,6 +766,147 @@ def test_quit_context_stays_interactive_without_a_signal():
     assert desktop.QuitContext().interactive
 
 
+# --- Signals survive an open modal (item 69b / CR-96) ------------------------
+#
+# The heartbeat is what gives a pending SIGTERM a chance to run; in the default
+# run-loop mode it is starved the moment a modal alert takes the loop, and
+# `stop` escalated to SIGKILL after 12 s. 69b moves the heartbeat into the
+# common modes and has the handler dismiss the open modal before quitting.
+
+
+def test_heartbeat_timer_is_installed_in_the_common_run_loop_modes():
+    """The regression CR-96 asks a test for: the heartbeat must keep firing
+    while a modal runs the loop in the modal-panel mode. That means the common
+    run-loop modes — ``timerWithTimeInterval_`` built, then ``addTimer_forMode_``
+    with ``NSRunLoopCommonModes`` — never ``scheduledTimerWithTimeInterval_``,
+    which installs in the default mode only and is exactly what starved it."""
+
+    calls = {}
+    sentinel_timer = object()
+
+    class _StubRunLoop:
+        def addTimer_forMode_(self, timer, mode):
+            calls["added_timer"] = timer
+            calls["mode"] = mode
+
+    class _StubNSRunLoop:
+        @staticmethod
+        def currentRunLoop():
+            return _StubRunLoop()
+
+    class _StubNSTimer:
+        @staticmethod
+        def timerWithTimeInterval_target_selector_userInfo_repeats_(
+            interval, target, selector, user_info, repeats
+        ):
+            calls["ctor"] = {
+                "interval": interval,
+                "target": target,
+                "selector": selector,
+                "repeats": repeats,
+            }
+            return sentinel_timer
+
+        @staticmethod
+        def scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(*_a):
+            raise AssertionError(
+                "the heartbeat must not be scheduled in the default mode only"
+            )
+
+    class _StubAppKit:
+        NSTimer = _StubNSTimer
+        NSRunLoop = _StubNSRunLoop
+        NSRunLoopCommonModes = "<common-modes>"
+
+    delegate = object()
+    returned = desktop.install_heartbeat_timer(_StubAppKit, delegate)
+
+    assert returned is sentinel_timer
+    assert calls["added_timer"] is sentinel_timer
+    assert calls["mode"] == _StubAppKit.NSRunLoopCommonModes
+    assert calls["ctor"]["target"] is delegate
+    assert calls["ctor"]["selector"] == "heartbeat:"
+    assert calls["ctor"]["repeats"] is True
+    assert calls["ctor"]["interval"] == 1.0
+
+
+def test_dismiss_active_modal_aborts_only_when_a_modal_is_up():
+    """The dismissal must not fire on the no-dialog `stop` path (that path has
+    to stay byte-for-byte what it was), and must fire when a dialog is up."""
+
+    class _App:
+        def __init__(self, modal):
+            self._modal = modal
+            self.aborted = 0
+
+        def modalWindow(self):
+            return self._modal
+
+        def abortModal(self):
+            self.aborted += 1
+
+    up = _App(modal=object())
+    desktop.dismiss_active_modal(up)
+    assert up.aborted == 1
+
+    down = _App(modal=None)
+    desktop.dismiss_active_modal(down)
+    assert down.aborted == 0
+
+
+def test_dismiss_active_modal_swallows_appkit_oddities():
+    """`abortModal` can raise if the modal session is gone the instant we look.
+    Dismissal is a courtesy and the quit is the contract, so the exception must
+    not escape and stall the SIGTERM path — worst case is the pre-fix behavior
+    for that one quit."""
+
+    class _App:
+        def modalWindow(self):
+            return object()
+
+        def abortModal(self):
+            raise RuntimeError("no modal session")
+
+    desktop.dismiss_active_modal(_App())  # must not raise
+
+
+def test_sigterm_handler_dismisses_an_open_modal_before_terminating():
+    """Ordering is the contract: the non-interactive flag is set first, then
+    the open modal is dismissed, then terminate. Dismissing before terminating
+    is what unwinds the dialog so the re-entered applicationShouldTerminate: is
+    not stacked on a live runModal."""
+
+    context = desktop.QuitContext()
+    order = []
+    handler = desktop.install_sigterm_quit_handler(
+        lambda: order.append("terminate"),
+        context,
+        dismiss_modals=lambda: order.append("dismiss"),
+        install=lambda signum, fn: None,
+    )
+
+    handler(signal.SIGTERM, None)
+    assert order == ["dismiss", "terminate"]
+    assert not context.interactive
+
+
+def test_sigterm_handler_without_dismiss_modals_still_quits_gracefully():
+    """The dismissal is optional plumbing; a handler built without it — the
+    pre-69b call shape the existing tests use — must terminate exactly as
+    before and set the flag."""
+
+    context = desktop.QuitContext()
+    terminated = []
+    desktop.install_sigterm_quit_handler(
+        lambda: terminated.append("terminate"),
+        context,
+        install=lambda signum, fn: None,
+    )(signal.SIGTERM, None)
+
+    assert terminated == ["terminate"]
+    assert not context.interactive
+
+
 def test_server_controller_start_raises_when_port_is_taken():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
         taken.bind(("127.0.0.1", 0))

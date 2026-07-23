@@ -400,6 +400,7 @@ def install_sigterm_quit_handler(
     terminate: Callable[[], None],
     quit_context: QuitContext,
     *,
+    dismiss_modals: Optional[Callable[[], None]] = None,
     install: Optional[Callable[[int, Callable], object]] = None,
 ) -> Callable[[int, object], None]:
     """Route SIGTERM into the app's own graceful quit. Returns the handler.
@@ -411,14 +412,80 @@ def install_sigterm_quit_handler(
     Its companion is the heartbeat timer in ``run_dock_app``: a Python signal
     handler only runs when Python bytecode next executes, and once the 67d
     poll timer invalidates itself, nothing else on the main run loop does.
+
+    ``dismiss_modals`` (69b/CR-96) is invoked *after* the non-interactive flag
+    is set and *before* ``terminate``. Now that 69b's common-mode heartbeat
+    lets the handler run while a modal alert is up, ``applicationShouldTerminate:``
+    would be re-entered with ``runModal`` on the stack; dismissing the open
+    modal first (``NSApp.abortModal()``) unwinds that dialog so the quit isn't
+    stalled behind it. It is a courtesy — the quit is the contract — so the
+    callable swallows its own failures and the handler calls it unconditionally
+    (the "is a modal actually up?" decision lives inside the callable).
     """
 
     def _handle(signum: int, frame: object) -> None:
         quit_context.mark_non_interactive()
+        if dismiss_modals is not None:
+            dismiss_modals()
         terminate()
 
     (install or signal.signal)(signal.SIGTERM, _handle)
     return _handle
+
+
+def dismiss_active_modal(app: object) -> None:
+    """Abort any modal alert that is currently up (69b/CR-96). GUI-adjacent.
+
+    Called from the SIGTERM handler so a `stop` arriving while a confirmation
+    dialog is on screen dismisses that dialog on its way to a graceful quit,
+    rather than being starved behind it. Aborting a modal makes its blocked
+    ``NSAlert.runModal`` return ``NSModalResponseAbort`` — which every caller
+    treats as its safe, non-destructive answer (see ``run_dock_app``).
+
+    Guarded throughout: dismissal is a courtesy and the quit is the contract,
+    so a missing modal session (``modalWindow`` set but ``abortModal`` raising,
+    an AppKit oddity) or any other failure is swallowed and the quit proceeds.
+    ``abortModal`` is only sent when a modal is actually reported present, so
+    the no-dialog SIGTERM path is byte-for-byte what it was before 69b.
+
+    Takes ``app`` (the shared ``NSApplication``) as a parameter so the branch
+    is unit-testable headless with a stub in place of AppKit.
+    """
+
+    try:
+        if app.modalWindow() is not None:
+            app.abortModal()
+    except Exception:
+        pass
+
+
+def install_heartbeat_timer(
+    appkit: object, delegate: object, *, interval: float = 1.0
+) -> object:
+    """Register the once-a-second heartbeat timer in the common run-loop modes.
+
+    69b/CR-96. ``scheduledTimerWithTimeInterval_…`` installs a timer in
+    ``NSDefaultRunLoopMode`` only, so while a modal alert runs the loop in
+    ``NSModalPanelRunLoopMode`` the heartbeat is starved — and with it the
+    Python SIGTERM handler it exists to keep reachable, which is exactly how
+    `stop` escalated to ``SIGKILL`` after 12 s with a dialog up. Building the
+    timer with ``timerWithTimeInterval_…`` and adding it under
+    ``NSRunLoopCommonModes`` keeps it firing across the modal, so the signal
+    stays deliverable.
+
+    Only the heartbeat gets this: the badge and update-poll timers are
+    cosmetic behind a modal (a frozen badge costs nothing), while a starved
+    signal costs the graceful quit. Factored out so a stub AppKit can assert
+    ``addTimer_forMode_`` was called with ``NSRunLoopCommonModes``.
+    """
+
+    timer = appkit.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
+        interval, delegate, "heartbeat:", None, True
+    )
+    appkit.NSRunLoop.currentRunLoop().addTimer_forMode_(
+        timer, appkit.NSRunLoopCommonModes
+    )
+    return timer
 
 
 # --- Single instance and port truth (item 70d) ------------------------------
@@ -1139,6 +1206,18 @@ def run_dock_app(
             # for free, so the reflex that reaches for ⎋ keeps the run.
             alert.addButtonWithTitle_(QUIT_CONFIRM_CANCEL_TITLE)
             app.activateIgnoringOtherApps_(True)
+            # 69b/CR-96 — the cross-slice contract on the aborted response.
+            # When `stop`'s SIGTERM lands while this dialog is up, the handler
+            # dismisses it with `NSApp.abortModal()`, and `runModal` returns
+            # `NSModalResponseAbort` (not `NSAlertFirstButtonReturn`). Every
+            # `runModal` caller must read that as its *safe*, non-destructive
+            # answer, and 69c's dialogs will follow the same rule:
+            #   - here it reads as Cancel (keep the run) — harmless, because the
+            #     terminate that the same handler runs next carries
+            #     interactive=False and so never re-asks;
+            #   - the load-failure alert reads it as "do nothing" (below).
+            # This falls out for free from `== NSAlertFirstButtonReturn`, but is
+            # stated because it is a contract other slices must not break.
             return alert.runModal() == AppKit.NSAlertFirstButtonReturn
         except Exception:
             return True
@@ -1214,7 +1293,16 @@ def run_dock_app(
         )
         alert.addButtonWithTitle_(OPEN_BROWSER_MENU_TITLE)
         alert.addButtonWithTitle_(QUIT_MENU_TITLE)
-        if alert.runModal() == AppKit.NSAlertFirstButtonReturn:
+        response = alert.runModal()
+        # 69b/CR-96: an aborted session (SIGTERM dismissed this dialog on its
+        # way to quitting) is the safe answer — do nothing. The terminate the
+        # handler runs next is the real action; taking the Quit branch here too
+        # would be redundant, and treating abort as Quit would make abort a
+        # *destructive* answer, which the cross-slice contract forbids. See the
+        # note in confirm_quit_mid_run above.
+        if response == AppKit.NSModalResponseAbort:
+            return
+        if response == AppKit.NSAlertFirstButtonReturn:
             webbrowser.open(controller.url)
         else:
             app.terminate_(None)
@@ -1352,7 +1440,16 @@ def run_dock_app(
     # gives the interpreter a chance to deliver the signal at all.
     # `quit_context` (built above) is what applicationShouldTerminate_ reads to
     # skip 70c's confirmation on this one path.
-    install_sigterm_quit_handler(lambda: app.terminate_(None), quit_context)
+    #
+    # 69b/CR-96: the handler dismisses any open modal before quitting, so a
+    # `stop` arriving while a confirmation dialog is up isn't starved behind it.
+    # This works only in concert with the common-mode heartbeat below, which is
+    # what lets the handler run at all while the modal owns the run loop.
+    install_sigterm_quit_handler(
+        lambda: app.terminate_(None),
+        quit_context,
+        dismiss_modals=lambda: dismiss_active_modal(app),
+    )
     # Item 70c: best-effort, and never a precondition for anything.
     try:
         prepare_notifications()
@@ -1362,9 +1459,11 @@ def run_dock_app(
     # main()'s `webbrowser.open` — a Dock app that opens a different
     # application is the shape this milestone exists to retire.
     present_window()
-    AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        1.0, delegate, "heartbeat:", None, True
-    )
+    # 69b/CR-96: the heartbeat lives in the common run-loop modes, not just the
+    # default mode, so it keeps firing while a modal alert runs the loop in the
+    # modal-panel mode — which is what keeps the SIGTERM handler above reachable
+    # (and `stop` graceful) with a dialog on screen.
+    install_heartbeat_timer(AppKit, delegate)
     # Item 70c: the Dock tile's only source of truth about a run in flight.
     # Permanent, like the heartbeat — a read can start at any point in the
     # app's life, including with the window closed, which is the whole case.
