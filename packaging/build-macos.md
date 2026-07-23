@@ -164,7 +164,15 @@ because the bundle is single-arch.
      CLI's 12-second wait and `stop` prints `Stopped (PID …)`, not the
      force-stopped message.
 6. Quit — Dock right-click → **Quit**, or ⌘Q — stops the server and exits:
-   the port is freed (`lsof -i :8000` clean) and no process survives.
+   the port is freed (`lsof -i` on the port the app's menus showed — the real
+   port floats off `:8000` if another app holds it) and no process survives.
+7. **Second launch (item 70d):** with the app already running, open a second
+   copy of the `.app`. It must **not** start a rival server: a one-button
+   notice says what is already running and since when, opens that server in the
+   default browser, and the second instance exits — no new Dock entry, and
+   `sidelinehd-extractor status` still names exactly one server. Do the same
+   with a CLI server up first (`sidelinehd-extractor start`, then launch the
+   `.app`): same hand-off, and the CLI server keeps running untouched.
 
 ## App icon
 

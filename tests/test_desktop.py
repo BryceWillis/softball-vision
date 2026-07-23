@@ -336,6 +336,12 @@ def _patch_main_launch(monkeypatch, events, tmp_path):
     monkeypatch.setattr(
         "sidelinehd_extractor.webapp.lifecycle.default_data_dir", lambda: tmp_path
     )
+    # Item 70d: the present-path alert is the one thing a headless test must
+    # never actually run. Recorded as "notice" so the present tests can assert
+    # it fired; harmless on every other path, which never reaches it.
+    monkeypatch.setattr(
+        desktop, "_present_notice_modal", lambda title, body: events.append("notice")
+    )
 
 
 class _NoopCheck:
@@ -445,27 +451,99 @@ def test_main_removes_the_record_even_when_the_gui_never_reaches_quit(
     assert not (tmp_path / "webapp.json").exists()
 
 
-def test_the_app_does_not_erase_a_live_cli_servers_record(monkeypatch, tmp_path, capsys):
-    """The honest interim until 70d presents the running server instead of
-    starting a rival: serve, say so, and leave `status` naming the CLI one."""
+def test_the_app_presents_a_live_recorded_server_instead_of_starting_a_rival(
+    monkeypatch, tmp_path
+):
+    """Item 70d (D6): with a live, healthy server already recorded, a second
+    launch presents *that* server — opens it in the browser and exits, having
+    started nothing and touched no record. This replaces 70a's honest interim
+    (serve-unregistered): the copied-`.app` case and the running-CLI-server
+    case now both hand off rather than start a rival."""
 
     from sidelinehd_extractor.webapp import lifecycle
 
     events = []
-    # An arbitrary *foreign* PID with the liveness check injected — never a real
-    # one. CR-93: `is_pid_alive` probes with `os.kill(pid, 0)`, which on Windows
-    # is not a probe but `TerminateProcess`, so handing it a genuinely live PID
-    # would kill pytest's parent on the windows-latest CI leg. os.getpid() would
-    # read as "our own record" and be rewritten, which is the other case.
     incumbent = lifecycle.new_server_state(
         "127.0.0.1", 8000, pid=777, version="0.test", data_dir="/checkout"
     )
     lifecycle.write_server_state(incumbent, tmp_path / "webapp.json")
 
-    # CR-91's seam, earning its keep: `claim_server_record` resolves `alive` at
-    # call time, so this replacement is reachable. The `asked` list is what makes
-    # a bypass loud rather than silent — an unasserted monkeypatch is how CR-91
-    # hid for a whole review pass.
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    # The health probe is injected, so no test binds a socket or probes a PID.
+    monkeypatch.setattr(desktop, "server_is_healthy", lambda record: True)
+
+    def _must_not_start(*args, **kwargs):
+        raise AssertionError("the present path must not start a server or a GUI")
+
+    monkeypatch.setattr(desktop, "run_dock_app", _must_not_start)
+
+    assert desktop.main([]) == 0
+
+    # It handed off and got out of the way: notice shown, browser opened, and
+    # no server ever started.
+    assert "notice" in events
+    assert "browser" in events
+    assert "server-start" not in events
+    # The running server's record is left exactly as it was — the present
+    # instance neither claims nor removes it.
+    assert lifecycle.read_server_state(tmp_path / "webapp.json") == incumbent
+
+
+def test_a_dead_or_wedged_record_is_cleared_and_the_app_starts(monkeypatch, tmp_path):
+    """Item 70d (D6): a record whose server is alive-but-wedged (PID up, `GET /`
+    failing) is cleared so this launch can take over — proven by the app's own
+    record replacing it. Without the clear, `claim_server_record` would decline
+    to overwrite a live PID and the app would serve unregistered instead."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    events = []
+    seen = {}
+    wedged = lifecycle.new_server_state(
+        "127.0.0.1", 8000, pid=999, version="0.old", data_dir="/gone"
+    )
+    lifecycle.write_server_state(wedged, tmp_path / "webapp.json")
+
+    def fake_dock_app(controller, update_check=None, on_quit=None):
+        # Capture the record before main()'s finally removes it on the way out.
+        seen["record"] = lifecycle.read_server_state(tmp_path / "webapp.json")
+
+    _patch_main_launch(monkeypatch, events, tmp_path)
+    # Alive (so an un-cleared claim would decline) but wedged (so the decision
+    # is clear-and-start, not present).
+    monkeypatch.setattr(lifecycle, "is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(desktop, "server_is_healthy", lambda record: False)
+    monkeypatch.setattr(desktop, "run_dock_app", fake_dock_app)
+
+    assert desktop.main([]) == 0
+    assert "server-start" in events
+
+    record = seen["record"]
+    assert record is not None
+    assert record.origin == lifecycle.ORIGIN_APP
+    assert record.port == 8123  # our port, not the wedged record's 8000
+    assert record.pid == os.getpid()  # ours replaced pid 999 — the clear worked
+
+
+def test_register_server_record_declines_a_live_foreign_record(
+    monkeypatch, tmp_path, capsys
+):
+    """The defence-in-depth behind 70d's present path: even if a live foreign
+    server appears between the launch decision and the claim, registration
+    refuses to erase its record and serves unregistered instead (item 70a).
+
+    Kept as a direct unit test now that 70d's present path means main() no
+    longer reaches this branch on the ordinary CLI-server collision. CR-93: the
+    PID is a foreign literal with the liveness check injected — never a real
+    one, which on Windows `os.kill` would `TerminateProcess`."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    incumbent = lifecycle.new_server_state(
+        "127.0.0.1", 8000, pid=777, version="0.test", data_dir="/checkout"
+    )
+    lifecycle.write_server_state(incumbent, tmp_path / "webapp.json")
+
     asked = []
 
     def _alive(pid):
@@ -474,15 +552,12 @@ def test_the_app_does_not_erase_a_live_cli_servers_record(monkeypatch, tmp_path,
 
     monkeypatch.setattr(lifecycle, "is_pid_alive", _alive)
 
-    _patch_main_launch(monkeypatch, events, tmp_path)
-    monkeypatch.setattr(
-        desktop, "run_dock_app", lambda controller, update_check=None, on_quit=None: None
+    result = desktop.register_server_record(
+        _FakeController(8123), tmp_path, path=tmp_path / "webapp.json"
     )
 
-    assert desktop.main([]) == 0
-
+    assert result is None  # declined — served unregistered
     assert asked == [777], "the injected liveness check was bypassed"
-    # Untouched, including through our own quit-time cleanup.
     assert lifecycle.read_server_state(tmp_path / "webapp.json") == incumbent
     err = capsys.readouterr().err
     assert "already running" in err
@@ -800,6 +875,191 @@ def test_navigation_action_url_survives_an_action_with_no_url():
     assert desktop.navigation_opens_in_window("", _APP_URL)
 
 
+# --- Single instance and port truth (item 70d, D6) --------------------------
+#
+# The launch decision and the notice are pure functions — the alert and the
+# browser call are the thin render layer around them — so the whole contract
+# is tested here without binding a socket or presenting a modal.
+
+
+class _FakeResponse:
+    """A stand-in for the urlopen context manager the health probe uses."""
+
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _record(origin=None, data_dir="/checkout", pid=777, version="0.5.0",
+            started_at="2026-07-22T09:14:00Z"):
+    from sidelinehd_extractor.webapp import lifecycle
+
+    return lifecycle.new_server_state(
+        "127.0.0.1",
+        8000,
+        pid=pid,
+        version=version,
+        started_at=started_at,
+        origin=origin or lifecycle.ORIGIN_CLI,
+        data_dir=data_dir,
+    )
+
+
+def test_launch_decision_starts_when_there_is_no_record():
+    def _must_not_probe(record):
+        raise AssertionError("no record means no probe")
+
+    assert desktop.launch_decision(None, _must_not_probe) == desktop.LAUNCH_START
+
+
+def test_launch_decision_presents_a_live_healthy_server():
+    assert (
+        desktop.launch_decision(_record(), lambda record: True)
+        == desktop.LAUNCH_PRESENT
+    )
+
+
+def test_launch_decision_clears_a_dead_or_wedged_record():
+    assert (
+        desktop.launch_decision(_record(), lambda record: False)
+        == desktop.LAUNCH_CLEAR_AND_START
+    )
+
+
+def test_launch_decision_ignores_data_dir_and_presents_regardless():
+    """The regression guard for the rule this slice corrected (D6): a record
+    whose data dir differs from ours must still resolve to *present*. Branching
+    on data_dir is what made the CLI-server collision unreachable in the first
+    draft — the CLI's data dir is its CWD and the app's never is."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    foreign = _record(origin=lifecycle.ORIGIN_CLI, data_dir="/some/other/checkout")
+    assert (
+        desktop.launch_decision(foreign, lambda record: True)
+        == desktop.LAUNCH_PRESENT
+    )
+
+
+def test_server_is_healthy_needs_both_a_live_pid_and_a_200(monkeypatch):
+    from sidelinehd_extractor.webapp import lifecycle
+
+    record = _record(pid=4242)
+
+    # Dead PID: never even probed over the network.
+    monkeypatch.setattr(lifecycle, "is_pid_alive", lambda pid: False)
+
+    def _must_not_probe(*args, **kwargs):
+        raise AssertionError("a dead PID must not be probed")
+
+    monkeypatch.setattr(desktop.urllib.request, "urlopen", _must_not_probe)
+    assert desktop.server_is_healthy(record) is False
+
+    # Alive + 200 → healthy.
+    monkeypatch.setattr(lifecycle, "is_pid_alive", lambda pid: True)
+    monkeypatch.setattr(
+        desktop.urllib.request, "urlopen", lambda url, timeout=None: _FakeResponse(200)
+    )
+    assert desktop.server_is_healthy(record) is True
+
+    # Alive but wedged (non-200) → not healthy: PID-alive alone is not enough.
+    monkeypatch.setattr(
+        desktop.urllib.request, "urlopen", lambda url, timeout=None: _FakeResponse(503)
+    )
+    assert desktop.server_is_healthy(record) is False
+
+    # Alive but the probe raises (connection refused, timeout) → not healthy.
+    def _boom(*args, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(desktop.urllib.request, "urlopen", _boom)
+    assert desktop.server_is_healthy(record) is False
+
+
+def test_present_notice_always_names_the_version_and_start_time():
+    notice = desktop.present_notice(_record(version="0.5.0"), "/our/data")
+    assert "0.5.0" in notice
+    assert "2026-07-22 09:14" in notice  # the ISO record, made readable
+    assert "Opening it in your browser" in notice
+
+
+def test_present_notice_names_the_folder_only_when_it_differs():
+    from sidelinehd_extractor.webapp import lifecycle
+
+    differs = desktop.present_notice(_record(data_dir="/checkout"), "/our/data")
+    assert "serving" in differs
+    assert lifecycle.display_path("/checkout") in differs
+
+    same = desktop.present_notice(_record(data_dir="/our/data"), "/our/data")
+    assert "serving" not in same
+
+
+def test_present_notice_remedy_varies_with_origin():
+    from sidelinehd_extractor.webapp import lifecycle
+
+    cli = desktop.present_notice(_record(origin=lifecycle.ORIGIN_CLI), "/our/data")
+    assert "Terminal" in cli
+    assert "sidelinehd-extractor stop" in cli
+
+    # The app case, asserted against a matching data dir (the acceptance path):
+    # the folder clause is absent, so the remedy is the only thing left to be
+    # wrong — and it must name the Dock and ⌘Q, and *neither* a Terminal nor
+    # the CLI command a downloaded `.app` has no way to run.
+    app = desktop.present_notice(
+        _record(origin=lifecycle.ORIGIN_APP, data_dir="/our/data"), "/our/data"
+    )
+    assert "Dock" in app
+    assert "⌘Q" in app
+    assert "Terminal" not in app
+    assert "sidelinehd-extractor" not in app
+    assert "serving" not in app
+
+
+def test_present_notice_survives_an_old_format_record():
+    """70a tolerates a record with `origin` and `data_dir` missing (defaulted);
+    the notice must too — no crash, the CLI sentence (nothing before 70a wrote
+    an app record), and the version and start time still shown."""
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    old = _record(origin=lifecycle.ORIGIN_CLI, data_dir="", version="0.4.0")
+    notice = desktop.present_notice(old, "/our/data")
+    assert "0.4.0" in notice
+    assert "2026-07-22 09:14" in notice
+    assert "serving" not in notice  # no data_dir to name
+    assert "sidelinehd-extractor stop" in notice  # the CLI remedy
+
+
+def test_friendly_started_at_falls_back_to_the_raw_string():
+    # A launcher must never fail over metadata: an unparseable timestamp is
+    # shown as-is rather than raising.
+    assert desktop._friendly_started_at("not-a-timestamp") == "not-a-timestamp"
+    assert desktop._friendly_started_at("2026-07-22T09:14:00Z") == "2026-07-22 09:14"
+
+
+def test_present_running_server_hands_off_even_if_the_alert_cannot_show(
+    monkeypatch,
+):
+    """The M1 rule: a modal that cannot be presented must not become a hand-off
+    that cannot happen. The browser opens either way."""
+
+    opened = []
+
+    def _broken_modal(title, body):
+        raise RuntimeError("no GUI session")
+
+    monkeypatch.setattr(desktop, "_present_notice_modal", _broken_modal)
+    monkeypatch.setattr(desktop.webbrowser, "open", lambda url: opened.append(url))
+
+    desktop.present_running_server(_record(), "/our/data")
+    assert opened == ["http://127.0.0.1:8000"]
+
+
 # --- Long-run visibility (item 70c) ------------------------------------------
 #
 # The Dock badge and the quit-mid-run confirmation are pure functions over job
@@ -944,7 +1204,16 @@ def test_newly_finished_ignores_a_job_first_seen_already_terminal():
 def test_newly_finished_announces_failures_too():
     seen = {}
     desktop.newly_finished([_job(status="running")], seen)
-    assert desktop.newly_finished([_job(status="error")], seen)
+    error = _job(status="error")
+    assert desktop.newly_finished([error], seen) == [error]
+    # CR-95 (ride-along): the `error` half must announce exactly *once*, like
+    # the `done` half above. An `error` job stays terminal on every 1s badge
+    # tick, so if `error` ever fell out of `_TERMINAL_STATUSES` (e.g. narrowed
+    # to `{"done"}`, or a third terminal status added to `Job.is_terminal` and
+    # not here) it would post "that game didn't finish" once a second forever —
+    # the notification storm the slice's own edge case forbids. This second
+    # call is the assertion that kills that mutant.
+    assert desktop.newly_finished([error], seen) == []
 
 
 def test_completion_notification_is_honest_about_a_failed_run():

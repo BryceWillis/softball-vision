@@ -1,4 +1,4 @@
-"""Dock-first desktop launcher for the local web app (items 54d, 68b, 70a–70c).
+"""Dock-first desktop launcher for the local web app (items 54d, 68b, 70a–70d).
 
 Runs the same FastAPI app as ``sidelinehd-extractor start`` but as a normal
 macOS Dock app (AppKit, via PyObjC) instead of a terminal process: launch
@@ -390,6 +390,189 @@ def install_sigterm_quit_handler(
 
     (install or signal.signal)(signal.SIGTERM, _handle)
     return _handle
+
+
+# --- Single instance and port truth (item 70d) ------------------------------
+#
+# `find_open_port`'s silent float to 8001 is correct for a terminal tool and
+# wrong for an app: it can yield two servers with two in-memory job stores over
+# the same `runs/`. With 70a's record available, launch checks it (D6) — one
+# recorded server per machine. A live, healthy recorded server means this
+# launch *presents* that server (opens it in the browser) and exits instead of
+# starting a rival; a dead or wedged record is cleared and launch proceeds.
+#
+# "Present" means the default browser, then exit — not a window. The window is
+# a frame around *our* server (D2), and on this path there isn't one: the
+# server belongs to another process whose lifetime we neither own nor can end.
+# So the presenting instance starts no server, claims no record, installs no
+# signal handler, and never enters the application lifecycle at all. The notice
+# carries the whole explanation, because on that path nothing else is on screen
+# to carry it.
+
+#: How long the launch health probe waits for `GET /` (item 70d). A healthy
+#: loopback server answers in milliseconds; the cap is only so a *wedged* one
+#: cannot make launch feel hung. Short on purpose.
+HEALTH_PROBE_TIMEOUT_SECONDS = 2.0
+
+#: What `launch_decision` returns. Start normally; present the running server
+#: and exit; or clear a dead/wedged record and start.
+LAUNCH_START = "start"
+LAUNCH_PRESENT = "present"
+LAUNCH_CLEAR_AND_START = "clear-and-start"
+
+#: The 'already running' modal's heading (item 70d). The body — version, start
+#: time, folder, and the remedy — is `present_notice`.
+PRESENT_NOTICE_TITLE = f"{APP_NAME} is already running."
+
+#: The remedy differs by who started the running server (D6). A CLI server has
+#: a Terminal and the `stop` command; a double-clicked `.app` has neither —
+#: only the Dock and ⌘Q. Getting this wrong is a fails-review item: telling a
+#: coach who opened a downloaded copy to "run `sidelinehd-extractor stop`" names
+#: a command they do not have.
+PRESENT_REMEDY_CLI = (
+    "To use your usual games folder instead, stop that server first — in the "
+    "Terminal window it is running in, or with `sidelinehd-extractor stop`."
+)
+PRESENT_REMEDY_APP = (
+    "To use this copy instead, quit the one that's running first — click its "
+    "icon in the Dock and press ⌘Q."
+)
+
+
+def server_is_healthy(
+    record: "ServerState", *, timeout: float = HEALTH_PROBE_TIMEOUT_SECONDS
+) -> bool:
+    """True when the recorded server is both alive *and* actually answering.
+
+    PID-alive alone is not enough (item 70d, D6): a wedged process keeps its
+    PID and its port while serving nothing, and presenting a user to a page
+    that never loads is worse than starting fresh. So both must hold — the PID
+    is alive and ``GET /`` returns 200 within a short timeout. Any failure of
+    the probe reads as unhealthy: the safe default is to clear and start.
+    """
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    if not lifecycle.is_pid_alive(record.pid):
+        return False
+    try:
+        with urllib.request.urlopen(f"{record.url}/", timeout=timeout) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def launch_decision(
+    record: Optional["ServerState"], healthy: Callable[["ServerState"], bool]
+) -> str:
+    """What a launching instance does about an existing record (item 70d, D6).
+
+    - No record → ``LAUNCH_START``.
+    - A record whose server is live and healthy → ``LAUNCH_PRESENT``: the caller
+      opens its URL in the browser and exits, **whatever data dir it names**.
+    - A dead or wedged record → ``LAUNCH_CLEAR_AND_START``.
+
+    The decision keys on the record alone. ``data_dir`` is shown to the user
+    (``present_notice``), never branched on — branching on it is exactly what
+    made the already-running-CLI-server case unreachable in the first draft of
+    this slice, since the CLI's data dir is its CWD and the app's never is.
+
+    ``healthy`` is injected so no test binds a socket.
+    """
+
+    if record is None:
+        return LAUNCH_START
+    if healthy(record):
+        return LAUNCH_PRESENT
+    return LAUNCH_CLEAR_AND_START
+
+
+def _friendly_started_at(started_at: str) -> str:
+    """A readable ``YYYY-MM-DD HH:MM`` from the record's ISO timestamp.
+
+    The raw string is returned unchanged if it does not parse — a launcher must
+    never fail over metadata, and a slightly ugly timestamp beats a crash.
+    """
+
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return started_at
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def present_notice(record: "ServerState", our_data_dir: str) -> str:
+    """The 'already running' modal's body (item 70d, D6).
+
+    It carries the whole explanation, because on the present path there is
+    nothing else on screen to carry it. It names **what is running, since
+    when**, and **where its files are** — the last only when that folder
+    differs from ours — and closes with **the remedy, which differs by who
+    started the running server** (``record.origin``).
+
+    An old-format record whose ``origin`` defaulted to the CLI correctly gets
+    the CLI sentence: nothing before 70a wrote a record from the app, so the
+    default is not a guess. Version and start time are always shown, because a
+    second launch is most often someone opening a newly downloaded copy while
+    an older one is still serving — item 65's stale-server failure exactly, and
+    this is the one moment the app is placed to name it.
+    """
+
+    from sidelinehd_extractor.webapp import lifecycle
+
+    serving = ""
+    if record.data_dir and record.data_dir != our_data_dir:
+        serving = f", serving {lifecycle.display_path(record.data_dir)}"
+    remedy = (
+        PRESENT_REMEDY_APP
+        if record.origin == lifecycle.ORIGIN_APP
+        else PRESENT_REMEDY_CLI
+    )
+    return (
+        f"Version {record.version}, started "
+        f"{_friendly_started_at(record.started_at)}{serving}.\n"
+        "Opening it in your browser.\n\n"
+        f"{remedy}"
+    )
+
+
+def _present_notice_modal(title: str, body: str) -> None:
+    """Show the one-button 'already running' alert (item 70d). GUI-only.
+
+    Factored out so ``main()``'s present path can be tested headless — the
+    modal is the one thing a test must not actually run.
+    """
+
+    import AppKit
+
+    app = AppKit.NSApplication.sharedApplication()
+    alert = AppKit.NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(body)
+    alert.addButtonWithTitle_("OK")
+    app.activateIgnoringOtherApps_(True)
+    alert.runModal()
+
+
+def present_running_server(record: "ServerState", our_data_dir: str) -> None:
+    """Hand off to the already-running server and get out of the way (D6).
+
+    Shows the notice, opens the running server's URL in the **default
+    browser**, and returns so ``main()`` can exit. This instance starts no
+    server, claims no record, installs no signal handler, and never enters the
+    application lifecycle. A failure to present the alert must not block the
+    hand-off (the M1 rule): the browser opens either way.
+    """
+
+    try:
+        _present_notice_modal(
+            PRESENT_NOTICE_TITLE, present_notice(record, our_data_dir)
+        )
+    except Exception:
+        pass
+    webbrowser.open(record.url)
 
 
 # --- Long-run visibility (item 70c) ------------------------------------------
@@ -1246,6 +1429,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_selftest()
 
     data_dir = prepare_data_dir()
+    # Item 70d (D6): one recorded server per machine. If a live, healthy one is
+    # already recorded — a copied `.app`, or a CLI server already on 8000 —
+    # present it rather than starting a rival: open it in the browser and exit,
+    # having started nothing and claimed nothing. A dead or wedged record is
+    # cleared first so the claim below can take over.
+    from sidelinehd_extractor.webapp import lifecycle
+
+    existing = lifecycle.read_server_state()
+    decision = launch_decision(existing, server_is_healthy)
+    if decision == LAUNCH_PRESENT:
+        present_running_server(existing, str(data_dir))
+        return 0
+    if decision == LAUNCH_CLEAR_AND_START:
+        # Clear exactly the record we saw. `expected_pid` leaves a record that
+        # changed underneath us for `claim_server_record` to adjudicate rather
+        # than blindly erasing whatever is there now.
+        lifecycle.remove_server_state(expected_pid=existing.pid)
+
     port = find_open_port()
     controller = ServerController(port=port)
     controller.start()
