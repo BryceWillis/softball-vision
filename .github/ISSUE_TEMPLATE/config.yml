@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Send feedback from inside the app (recommended)
+    url: https://github.com/BryceWillis/softball-vision#sending-feedback
+    about: The app's Send Feedback button strips player names for you before anything leaves your machine.
+  - name: Report a leaked player name — privately
+    url: https://github.com/BryceWillis/softball-vision/security/advisories/new
+    about: Never report a real name in a public issue — a public report re-publishes the leak. Use this private channel.

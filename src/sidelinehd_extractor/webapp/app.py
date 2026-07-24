@@ -314,10 +314,23 @@ _HANDOFF_TRUNCATION_NOTICE = (
     "button on the feedback page to paste the complete log.]_"
 )
 
+# The repo disables blank issues (M9/72a), so a bare issues/new?body=… prefill
+# would be redirected to the template chooser with the body silently dropped.
+# The handoff therefore targets the feedback issue form and carries the log in
+# that form's textarea field, keyed by the field id — issue forms accept query
+# parameters keyed by field id. The filename and field id must match
+# .github/ISSUE_TEMPLATE/feedback.yml; a guard test pins the pairing.
+FEEDBACK_TEMPLATE_FILENAME = "feedback.yml"
+FEEDBACK_TEMPLATE_LOG_FIELD = "log"
+
 
 def _github_issue_url(body: str) -> str:
     return f"{PROJECT_URL.rstrip('/')}/issues/new?" + urlencode(
-        {"title": FEEDBACK_ISSUE_TITLE, "body": body}
+        {
+            "template": FEEDBACK_TEMPLATE_FILENAME,
+            "title": FEEDBACK_ISSUE_TITLE,
+            FEEDBACK_TEMPLATE_LOG_FIELD: body,
+        }
     )
 
 

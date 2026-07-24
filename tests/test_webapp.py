@@ -548,9 +548,11 @@ def _decoded_feedback_bodies(response_text):
             flags=re.S,
         ).group(1)
     )
+    # The GitHub handoff targets the feedback issue form, which carries the
+    # log in the form's field parameter (keyed by field id), not in ``body=``.
     return {
         "preview": preview_body,
-        "github": parse_qs(urlparse(github_href).query)["body"][0],
+        "github": parse_qs(urlparse(github_href).query)["log"][0],
         "email": parse_qs(urlparse(mailto_href).query)["body"][0],
         "copy": preview_body,
         "github_href": github_href,
@@ -745,6 +747,12 @@ def test_feedback_preview_and_handoff_bodies_are_sanitized(tmp_path):
     assert bodies["github_href"].startswith(
         "https://github.com/BryceWillis/softball-vision/issues/new?"
     )
+    # With blank issues disabled (M9/72a), a body= prefill would be dropped on
+    # the template chooser — the handoff must target the feedback form and
+    # carry the log in its field parameter instead.
+    github_params = parse_qs(urlparse(bodies["github_href"]).query)
+    assert github_params["template"] == ["feedback.yml"]
+    assert "body" not in github_params
     for channel in ("preview", "github", "email", "copy"):
         body = bodies[channel]
         assert "Charlotte" not in body
@@ -775,6 +783,12 @@ def _issue_body(url):
     return parse_qs(urlparse(url).query)["body"][0]
 
 
+def _github_form_log(url):
+    # The GitHub handoff prefills the feedback issue form's ``log`` field;
+    # ``body=`` belongs to the retired blank-issue prefill and to mailto.
+    return parse_qs(urlparse(url).query)["log"][0]
+
+
 def test_handoff_urls_are_capped_for_long_feedback_logs():
     from sidelinehd_extractor.webapp.app import (
         _HANDOFF_URL_MAX_CHARS,
@@ -788,7 +802,7 @@ def test_handoff_urls_are_capped_for_long_feedback_logs():
     links = _feedback_handoff_links(big)
 
     assert len(links["github_issue_url"]) <= _HANDOFF_URL_MAX_CHARS
-    body = _issue_body(links["github_issue_url"])
+    body = _github_form_log(links["github_issue_url"])
     assert body != big
     assert body.startswith("line of sanitized feedback detail")
     # The truncation notice points the user at the full-fidelity path.
@@ -803,8 +817,24 @@ def test_handoff_urls_keep_short_logs_verbatim():
     small = "## Review Flags\n- one short sanitized line\n"
     links = _feedback_handoff_links(small)
 
-    assert _issue_body(links["github_issue_url"]) == small
-    assert "truncated" not in _issue_body(links["github_issue_url"])
+    assert _github_form_log(links["github_issue_url"]) == small
+    assert "truncated" not in _github_form_log(links["github_issue_url"])
+
+
+def test_github_handoff_targets_the_feedback_issue_form():
+    from sidelinehd_extractor.webapp.app import _feedback_handoff_links
+
+    links = _feedback_handoff_links("one sanitized line\n")
+    params = parse_qs(urlparse(links["github_issue_url"]).query)
+
+    # With blank issues disabled, GitHub redirects a body= prefill to the
+    # template chooser and silently drops the body — the log must travel in
+    # the feedback form's own field parameter.
+    assert params["template"] == ["feedback.yml"]
+    assert "log" in params
+    assert "body" not in params
+    # mailto has no template concept and keeps the plain body.
+    assert "body" in parse_qs(urlparse(links["mailto_url"]).query)
 
 
 def test_feedback_not_done_links_back_unknown_id_404_and_no_outbound_http(

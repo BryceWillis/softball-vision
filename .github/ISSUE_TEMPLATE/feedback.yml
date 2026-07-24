@@ -1,0 +1,26 @@
+name: App feedback
+description: Where the app's Send Feedback button lands. Carries the sanitized feedback log.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste rosters, run output, review reports, or screenshots that show real player names — this is a public repository.**
+
+        If you arrived here from the app's Send Feedback button, the log below
+        is already filled in and already sanitized — player names were removed
+        before it left your machine. If the log box is empty, use the
+        Copy for email button on the app's feedback page and paste the log here.
+  - type: textarea
+    id: log
+    attributes:
+      label: Sanitized feedback log
+      description: The pseudonymized log from the app's feedback page. Jersey numbers stay; names are already stripped.
+    validations:
+      required: true
+  - type: checkboxes
+    id: no-real-names
+    attributes:
+      label: Name safety
+      options:
+        - label: This report contains no real player names — no rosters, no run output, no screenshots with names.
+          required: true

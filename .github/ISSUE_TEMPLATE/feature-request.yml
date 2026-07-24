@@ -1,0 +1,29 @@
+name: Feature request
+description: Something the app should do, or do better.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste rosters, run output, review reports, or screenshots that show real player names — this is a public repository.**
+
+        A feature request that quotes a real at-bat or a real lineup is the
+        same leak as a bug report that does.
+  - type: textarea
+    id: what
+    attributes:
+      label: What should it do
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it would help
+    validations:
+      required: false
+  - type: checkboxes
+    id: no-real-names
+    attributes:
+      label: Name safety
+      options:
+        - label: This report contains no real player names — no rosters, no run output, no screenshots with names.
+          required: true

@@ -374,8 +374,13 @@ run's `exports/` folder with:
 - One-click copy buttons in the HTML file.
 - A short posting checklist.
 
-To send a diagnostic log for help without sharing player names, generate and
-preview a sanitized Markdown feedback file:
+### Sending feedback
+
+If something doesn't work, the app's **Send feedback** button builds a
+sanitized log — player and team names are removed before anything leaves your
+machine — and hands it to a GitHub issue, an email, or your clipboard. From
+the command line, generate and preview the same sanitized Markdown feedback
+file:
 
 ```sh
 sidelinehd-extractor feedback runs/YOUR_RUN --note "Home score looked empty"

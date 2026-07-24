@@ -1,0 +1,43 @@
+name: Bug report
+description: Something broke, or the app read a game wrong.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste rosters, run output, review reports, or screenshots that show real player names — this is a public repository.**
+
+        The app's Send Feedback button strips names automatically and is the
+        preferred way to report a problem with a run.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: what-you-expected
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: The version shown in the app's footer or the About window.
+    validations:
+      required: false
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+    validations:
+      required: false
+  - type: checkboxes
+    id: no-real-names
+    attributes:
+      label: Name safety
+      options:
+        - label: This report contains no real player names — no rosters, no run output, no screenshots with names.
+          required: true
