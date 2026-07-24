@@ -598,6 +598,7 @@ def _isolate_glyph_mask(candidate_mask):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     height, width = mask.shape
     kept = []
+    right_edge_pending = []
     had_tall_candidates = False
     for index in range(1, count):
         x, y, w, h, area = stats[index]
@@ -608,11 +609,23 @@ def _isolate_glyph_mask(candidate_mask):
             continue
         if w > _GLYPH_ISOLATE_MAX_WIDTH_FRACTION * width:
             continue
-        if x <= 1 or x + w >= width - 1:
-            # Clipped at the crop edge: a neighboring element bleeding in
-            # (the inning arrow next to left_score) or banner text.
+        if x <= 1:
+            # Clipped at the left crop edge: the inning arrow beside
+            # left_score bleeding in. Never a score digit.
+            continue
+        if x + w >= width - 1:
+            # Touching the right edge could be a real trailing digit (a
+            # wide leading digit shifts a two-digit score's second glyph
+            # flush against the edge — "20" read as "2") or banner text
+            # bleeding in. Keep it only if another digit-height glyph sits
+            # to its left; a lone right-edge fragment is the banner case.
+            right_edge_pending.append(index)
             continue
         kept.append(index)
+    for index in right_edge_pending:
+        x = stats[index][0]
+        if any(stats[other][0] < x for other in kept):
+            kept.append(index)
     if not kept or len(kept) > _GLYPH_ISOLATE_MAX_COMPONENTS:
         return None, had_tall_candidates
 

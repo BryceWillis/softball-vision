@@ -359,6 +359,16 @@ _SCORE_DECREASE_CONFIRMATIONS = 3
 _SCORE_JUMP_CONFIRMATIONS = 2
 _SCORE_MAX_UNCONFIRMED_JUMP = 4
 
+# A confirmed decrease is normally trustworthy (a scorekeeper correction, or a
+# bad initial read overtaken by the truth). But confirmation alone cannot vouch
+# for a *large* drop, because a systematic OCR misread confirms itself: a
+# two-digit score that loses a digit reads the same wrong value every frame
+# (measured: "20" read as "2" for the rest of a game, which the old guard
+# accepted as a 15-run "correction"). Real corrections and single-digit-read
+# recoveries never exceed 9 runs; a dropped tens digit costs 10 or more. So a
+# decrease beyond this bound is rejected however many reads repeat it.
+_SCORE_MAX_CONFIRMED_DECREASE = 9
+
 
 def _smooth_score_sequence(values: List[Optional[int]]) -> List[Optional[int]]:
     """Reject non-monotonic score reads unless consecutive reads confirm them.
@@ -377,7 +387,10 @@ def _smooth_score_sequence(values: List[Optional[int]]) -> List[Optional[int]]:
             established = value
             continue
         if value < established:
-            if _confirmed_by_consecutive_reads(values, index, _SCORE_DECREASE_CONFIRMATIONS):
+            if established - value > _SCORE_MAX_CONFIRMED_DECREASE:
+                # Too drastic to be a correction — a dropped-digit misread.
+                result[index] = established
+            elif _confirmed_by_consecutive_reads(values, index, _SCORE_DECREASE_CONFIRMATIONS):
                 established = value
             else:
                 result[index] = established

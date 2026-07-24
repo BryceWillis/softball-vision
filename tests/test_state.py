@@ -688,6 +688,30 @@ class SmoothScoreSequenceTests(unittest.TestCase):
     def test_operator_correction_persisting_is_accepted(self):
         self.assertEqual(self._smooth([3, 3, 2, 2, 2, 2]), [3, 3, 2, 2, 2, 2])
 
+    def test_persistent_two_digit_dropped_digit_is_rejected(self):
+        # The live-fire failure: the score reaches 20 and the tens digit is
+        # dropped for the rest of the game, reading "2" every frame. A
+        # systematic misread confirms itself, so the confirmation window is
+        # not enough — the 18-run reversal is implausible and must be held.
+        self.assertEqual(
+            self._smooth([17, 20, 20, 2, 2, 2, 2, 2]),
+            [17, 20, 20, 20, 20, 20, 20, 20],
+        )
+
+    def test_large_confirmed_decrease_is_rejected_however_many_reads_repeat(self):
+        self.assertEqual(
+            self._smooth([17, 17, 17, 2, 2, 2, 2]),
+            [17, 17, 17, 17, 17, 17, 17],
+        )
+
+    def test_decrease_at_the_plausible_bound_is_accepted_when_confirmed(self):
+        # A drop of exactly the max (9) stays acceptable: the recovery of a
+        # bad single-digit initial read must not be suppressed with it.
+        self.assertEqual(self._smooth([12, 12, 3, 3, 3]), [12, 12, 3, 3, 3])
+
+    def test_decrease_one_past_the_bound_is_rejected_even_when_confirmed(self):
+        self.assertEqual(self._smooth([13, 13, 3, 3, 3]), [13, 13, 13, 13, 13])
+
     def test_normal_increments_pass_through(self):
         self.assertEqual(self._smooth([0, 1, 1, 3, 3, 4]), [0, 1, 1, 3, 3, 4])
 

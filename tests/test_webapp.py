@@ -771,6 +771,42 @@ def test_feedback_preview_post_includes_note_in_all_handoff_paths(tmp_path):
         assert "Charlotte" not in bodies[channel]
 
 
+def _issue_body(url):
+    return parse_qs(urlparse(url).query)["body"][0]
+
+
+def test_handoff_urls_are_capped_for_long_feedback_logs():
+    from sidelinehd_extractor.webapp.app import (
+        _HANDOFF_URL_MAX_CHARS,
+        _feedback_handoff_links,
+    )
+
+    # A full game's sanitized log runs to tens of KB; the whole thing in the
+    # URL overruns Safari's max length and GitHub's prefill limit, so the
+    # button opens to an "address can't be found" error.
+    big = "line of sanitized feedback detail\n" * 4000
+    links = _feedback_handoff_links(big)
+
+    assert len(links["github_issue_url"]) <= _HANDOFF_URL_MAX_CHARS
+    body = _issue_body(links["github_issue_url"])
+    assert body != big
+    assert body.startswith("line of sanitized feedback detail")
+    # The truncation notice points the user at the full-fidelity path.
+    assert "Copy for email" in body
+    # mailto carries the same trimmed body, so it stays openable too.
+    assert _issue_body(links["mailto_url"]) == body
+
+
+def test_handoff_urls_keep_short_logs_verbatim():
+    from sidelinehd_extractor.webapp.app import _feedback_handoff_links
+
+    small = "## Review Flags\n- one short sanitized line\n"
+    links = _feedback_handoff_links(small)
+
+    assert _issue_body(links["github_issue_url"]) == small
+    assert "truncated" not in _issue_body(links["github_issue_url"])
+
+
 def test_feedback_not_done_links_back_unknown_id_404_and_no_outbound_http(
     tmp_path, monkeypatch
 ):

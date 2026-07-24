@@ -453,6 +453,36 @@ class ScorebugGlyphIsolationTests(unittest.TestCase):
         self.assertEqual(processed.dtype, np.uint8)
         self.assertTrue((processed < 128).any())
 
+    def test_two_digit_score_keeps_trailing_digit_at_right_edge(self):
+        import cv2
+        import numpy as np
+
+        # A wide leading digit shifts a two-digit score's second glyph flush
+        # against the crop's right edge. The isolate pass must keep it: the
+        # live-fire failure was "20" reading as "2" once the score passed 19,
+        # because the trailing "0" was discarded for touching the edge.
+        crop = np.full((23, 32, 3), 40, dtype=np.uint8)
+        crop[4:19, 8:15] = 235  # leading digit, interior
+        crop[4:19, 25:32] = 235  # trailing digit, flush against the right edge
+        processed = preprocess_for_ocr(crop, "left_score")
+
+        self.assertTrue((processed < 128).any())  # not blanked to an empty read
+        ink = (processed < 128).astype(np.uint8)
+        component_count = cv2.connectedComponentsWithStats(ink)[0] - 1
+        self.assertEqual(component_count, 2)
+
+    def test_lone_right_edge_fragment_is_still_rejected(self):
+        import numpy as np
+
+        # A single glyph flush against the right edge with nothing to its
+        # left is banner text bleeding in, not a score — the relaxed edge
+        # must not resurrect it.
+        crop = np.full((23, 32, 3), 40, dtype=np.uint8)
+        crop[4:19, 25:32] = 235
+        processed = preprocess_for_ocr(crop, "left_score")
+
+        self.assertTrue((processed == 255).all())
+
 
 class BatterCardNumberOCRTests(unittest.TestCase):
     def _card_number_crop(self, text="#24"):

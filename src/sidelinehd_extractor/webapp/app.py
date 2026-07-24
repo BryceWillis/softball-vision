@@ -300,12 +300,53 @@ def _render_feedback_markdown(run_dir: Path, note: Optional[str]) -> str:
     return render_feedback_log(log)
 
 
+# The GitHub and mailto handoffs carry the whole feedback log in the URL query
+# string. A full game's log runs to tens of KB, which overruns GitHub's
+# issues/new prefill limit (a 414) and, before that, the browser's own maximum
+# URL length — Safari rejects the over-long link as an invalid address rather
+# than opening it. Cap the encoded URL to a length every target accepts; the
+# complete log stays available through the page's "Copy for email" button and
+# the visible preview. urlencode's expansion ratio depends on the content, so
+# the body is trimmed against the *measured* encoded length, not a raw guess.
+_HANDOFF_URL_MAX_CHARS = 7000
+_HANDOFF_TRUNCATION_NOTICE = (
+    "\n\n_[Feedback log truncated to fit this link. Use the “Copy for email” "
+    "button on the feedback page to paste the complete log.]_"
+)
+
+
+def _github_issue_url(body: str) -> str:
+    return f"{PROJECT_URL.rstrip('/')}/issues/new?" + urlencode(
+        {"title": FEEDBACK_ISSUE_TITLE, "body": body}
+    )
+
+
+def _body_within_url_budget(markdown: str) -> str:
+    """Trim ``markdown`` so its GitHub issue URL stays under the length cap.
+
+    Returns the body unchanged when it already fits. The GitHub URL has the
+    longer prefix, so a body that fits it also fits the shorter mailto URL.
+    """
+
+    if len(_github_issue_url(markdown)) <= _HANDOFF_URL_MAX_CHARS:
+        return markdown
+    low, high = 0, len(markdown)
+    while low < high:
+        mid = (low + high + 1) // 2
+        candidate = markdown[:mid].rstrip() + _HANDOFF_TRUNCATION_NOTICE
+        if len(_github_issue_url(candidate)) <= _HANDOFF_URL_MAX_CHARS:
+            low = mid
+        else:
+            high = mid - 1
+    return markdown[:low].rstrip() + _HANDOFF_TRUNCATION_NOTICE
+
+
 def _feedback_handoff_links(markdown: str) -> dict:
+    body = _body_within_url_budget(markdown)
     return {
-        "github_issue_url": f"{PROJECT_URL.rstrip('/')}/issues/new?"
-        + urlencode({"title": FEEDBACK_ISSUE_TITLE, "body": markdown}),
+        "github_issue_url": _github_issue_url(body),
         "mailto_url": "mailto:?"
-        + urlencode({"subject": FEEDBACK_ISSUE_TITLE, "body": markdown}),
+        + urlencode({"subject": FEEDBACK_ISSUE_TITLE, "body": body}),
     }
 
 
