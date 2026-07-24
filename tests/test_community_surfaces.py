@@ -1,4 +1,4 @@
-"""Guard the GitHub community surfaces added by M9 slice 72a.
+"""Guard the GitHub community surfaces added by M9 slices 72a and 72b.
 
 The repository is public, and every inbound GitHub surface — issues, PRs —
 is a channel through which a real player name could be published. These files
@@ -37,6 +37,19 @@ NO_NAMES_CHECKBOX_LABEL = (
 
 ISSUE_FORMS = ("bug-report.yml", "feature-request.yml", "feedback.yml")
 
+#: The posture sentence (72b). The project is developed under a private
+#: spec-and-review cycle with no PR step, and ``CONTRIBUTING.md`` must keep
+#: saying so — a rewrite into stock OSS boilerplate would invite a
+#: fork-and-open-a-PR process that does not exist.
+CLOSED_POSTURE_SENTENCE = (
+    "External pull requests are not currently part of this project's workflow "
+    "and may be declined."
+)
+
+#: The name-safety bar a PR must clear, pinned for the same reason the issue
+#: forms' warning is: it is the one thing in this file that is not negotiable.
+CONTRIBUTING_NO_NAMES_SENTENCE = "No real player names anywhere in the diff."
+
 COMMUNITY_FILES = (
     ISSUE_TEMPLATE_DIR / "bug-report.yml",
     ISSUE_TEMPLATE_DIR / "feature-request.yml",
@@ -44,11 +57,19 @@ COMMUNITY_FILES = (
     ISSUE_TEMPLATE_DIR / "config.yml",
     REPO_ROOT / ".github" / "pull_request_template.md",
     REPO_ROOT / "SECURITY.md",
+    REPO_ROOT / "CONTRIBUTING.md",
 )
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _flatten(text: str) -> str:
+    """Collapse hard wraps and emphasis so a pinned sentence does not depend on
+    where a line happens to break or whether it is bolded."""
+
+    return " ".join(text.replace("**", "").split())
 
 
 def test_community_files_exist_and_are_nonempty():
@@ -89,9 +110,7 @@ def test_chooser_config_disables_blank_issues_and_offers_both_contact_links():
 
 def test_security_policy_leads_with_the_name_leak_channel():
     text = _read(REPO_ROOT / "SECURITY.md")
-    # Normalize hard wraps so the pinned sentences do not depend on where a
-    # line happens to break.
-    flat = " ".join(text.replace("**", "").split())
+    flat = _flatten(text)
     assert "no real player name may ever appear in this repository" in flat
     assert "do not open a public issue" in flat
     assert "Report a vulnerability" in text
@@ -107,6 +126,45 @@ def test_pull_request_template_carries_the_no_names_checkbox():
     assert "not currently part of this project's workflow" in text
     # The template is advisory; the real gate is CI, and it must say so.
     assert "name-safety test" in text
+
+
+def test_contributing_states_the_closed_posture_and_the_no_names_bar():
+    """72b's pinned sentences. A future rewrite into standard OSS boilerplate
+    goes red here rather than quietly inviting a process that does not exist,
+    or quietly dropping the one bar an outside diff has to clear."""
+
+    flat = _flatten(_read(REPO_ROOT / "CONTRIBUTING.md"))
+    assert CLOSED_POSTURE_SENTENCE in flat, (
+        "CONTRIBUTING.md no longer states that external pull requests are not "
+        "part of the workflow — the file would be describing a process this "
+        "project does not run"
+    )
+    assert CONTRIBUTING_NO_NAMES_SENTENCE in flat, (
+        "CONTRIBUTING.md no longer states the no-real-names bar for a diff"
+    )
+
+
+def test_contributing_points_at_the_sanitized_feedback_path_first():
+    """The in-app path is the one that strips names; a contributor sent to the
+    issue forms first would be composing by hand with names in front of them."""
+
+    flat = _flatten(_read(REPO_ROOT / "CONTRIBUTING.md"))
+    send_feedback_at = flat.find("Send Feedback button")
+    issue_at = flat.find("file an issue")
+    assert send_feedback_at != -1, "CONTRIBUTING.md does not name the in-app path"
+    assert issue_at != -1, "CONTRIBUTING.md does not name the issue-form path"
+    assert send_feedback_at < issue_at, (
+        "the in-app Send Feedback path must be offered before the issue forms"
+    )
+
+
+def test_pull_request_template_pointer_resolves():
+    """The PR template tells a filer to see CONTRIBUTING.md; 72a shipped that
+    pointer one slice ahead of the file by the plan's own sanction, and 72b is
+    where it stops dangling."""
+
+    assert "CONTRIBUTING.md" in _read(REPO_ROOT / ".github" / "pull_request_template.md")
+    assert (REPO_ROOT / "CONTRIBUTING.md").is_file()
 
 
 def test_feedback_form_matches_the_webapp_handoff_target():
