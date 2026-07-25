@@ -11,6 +11,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
 from typing import Callable, Optional
@@ -30,6 +31,14 @@ STOP_TIMEOUT_SECONDS = 12.0
 #: relaunch an `.app` it did not start, so it has to be able to tell.
 ORIGIN_CLI = "cli"
 ORIGIN_APP = "app"
+
+#: Windows liveness probe (CR-94). ``PROCESS_QUERY_LIMITED_INFORMATION`` is the
+#: access right that exists for exactly this — asking after a process you have
+#: no intention of touching — so the probe needs no privilege the launcher
+#: would not already have. ``STILL_ACTIVE`` is what ``GetExitCodeProcess``
+#: reports while the process is running.
+_WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WINDOWS_STILL_ACTIVE = 259
 
 
 @dataclass(frozen=True)
@@ -176,7 +185,86 @@ def remove_server_state(path: Optional[Path] = None, *, expected_pid: Optional[i
         pass
 
 
-def is_pid_alive(pid: int) -> bool:
+@lru_cache(maxsize=1)
+def _windows_kernel32():
+    """``kernel32`` with the three probe signatures declared, built once.
+
+    The declarations are not decoration: ``OpenProcess`` returns a ``HANDLE``,
+    and leaving ctypes' default ``c_int`` restype in place truncates it on
+    64-bit Windows, so the handle would be wrong and ``CloseHandle`` would leak
+    it. Cached because ``wait_until_dead`` polls this up to 120 times per stop.
+
+    Imported inside the function because of ``ctypes.WinDLL``, which exists
+    only on Windows. ``ctypes.wintypes`` itself imports fine on POSIX — which
+    is what lets the tests stub this function and run the probe's decision
+    table on any OS.
+    """
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, wintypes.LPDWORD)
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _is_pid_alive_windows(pid: int) -> bool:
+    """Ask after a process on Windows **without signalling it** (CR-94).
+
+    The POSIX branch's ``os.kill(pid, 0)`` is the correct idiom there and a
+    live round of ammunition here: Python documents that on Windows any ``sig``
+    other than ``CTRL_C_EVENT`` / ``CTRL_BREAK_EVENT`` causes the target "to be
+    unconditionally killed by the TerminateProcess API, and the exit code will
+    be set to sig". So ``status`` — a read-only command — killed the very
+    server it was reporting on, and killed an unrelated process outright when
+    the record was stale and its PID had been reused.
+
+    Two steps, because a handle can outlive the process it names: ``OpenProcess``
+    failing means gone, and a handle that opens on an already-exited process
+    yields its real exit code rather than ``STILL_ACTIVE``.
+
+    A failure to open is reported as *gone* — including the access-denied case,
+    where the process exists but belongs to another user. That is deliberate
+    and it is the safe direction for the callers: ``stop_recorded_server``
+    treats "not alive" as a stale record to clear, so the worst outcome is a
+    forgotten record, where reporting it alive would aim a ``TerminateProcess``
+    at a stranger's process. The POSIX branch's ``PermissionError -> True`` is
+    the opposite reading, and it stays as it is — nothing about this fix should
+    change behaviour on the platform where the probe was never broken.
+    """
+
+    if pid <= 0:
+        # DWORD cannot carry it, and neither the CLI nor the app ever records
+        # one; POSIX would read it as a process *group*, which is not a thing
+        # to hand a Windows probe.
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = _windows_kernel32()
+    handle = kernel32.OpenProcess(
+        _WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == _WINDOWS_STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _is_pid_alive_posix(pid: int) -> bool:
+    """The signal-0 probe — correct on POSIX, and unchanged by CR-94."""
+
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -186,6 +274,20 @@ def is_pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def is_pid_alive(pid: int) -> bool:
+    """Is this PID a running process? **Asking must never change the answer.**
+
+    The two branches are not two spellings of one idea — see
+    :func:`_is_pid_alive_windows` for why the POSIX form is destructive on
+    Windows (CR-94). Selected on ``os.name``, matching this module's existing
+    ``hasattr(signal, "SIGKILL")`` style of feature test.
+    """
+
+    if os.name == "nt":
+        return _is_pid_alive_windows(pid)
+    return _is_pid_alive_posix(pid)
 
 
 def claim_server_record(

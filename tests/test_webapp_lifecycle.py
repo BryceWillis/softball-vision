@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import ctypes
 import json
+import os
 import signal
+import subprocess
+import sys
+from ctypes import wintypes
 from datetime import datetime, timezone
+
+import pytest
 
 from sidelinehd_extractor import desktop
 from sidelinehd_extractor.webapp import lifecycle
@@ -272,7 +279,13 @@ def test_new_server_state_defaults_to_the_cli_and_the_current_directory(
 #
 # The record is a *live* server's identity, so overwriting one is how `status`
 # and `stop` start naming a server that is not the one running. `is_pid_alive`
-# is injected throughout: no test may spawn a process.
+# is injected throughout: no test in *this* section spawns a process, because
+# the guard's behaviour is a decision about a liveness answer, not about how
+# the answer was obtained — injection keeps it deterministic on every OS.
+#
+# The rule used to be absolute, and CR-94 is why it no longer is: handing the
+# real probe a live PID was unsafe on Windows, so the section below — which
+# exists to prove it is now safe — is the one place that does spawn.
 
 
 def test_claim_writes_when_no_record_exists(tmp_path):
@@ -362,3 +375,214 @@ def test_restart_decline_message_points_at_the_dock_not_the_terminal():
     assert "PID 999" in message
     assert "Dock" in message
     assert "sidelinehd-extractor stop" in message
+
+
+# --- The liveness probe (CR-94) ----------------------------------------------
+#
+# `is_pid_alive` backs `status`, `stop`, `restart`, and the desktop app's
+# single-instance check. It probed with `os.kill(pid, 0)` — the correct POSIX
+# idiom, and on Windows a `TerminateProcess` call, so `status` killed the
+# server it was reporting on and a stale record aimed it at whatever process
+# had inherited the PID.
+#
+# The real Win32 calls cannot be made here, but the Windows branch's *decisions*
+# can: `_windows_kernel32` is a seam, and stubbing the DLL rather than the
+# platform runs the whole table on macOS and Linux. So these tests carry the
+# branch selector, the unchanged POSIX probe, every path through the handle
+# probe, and — through the public function, on whatever OS is running — the
+# property the whole finding is about: **asking must not change the answer.**
+#
+# What is left unverified until CI's windows-latest leg is only the ctypes
+# bindings: whether the declared `argtypes`/`restype` match the real ABI.
+
+
+def _recorder(calls, name, result):
+    def _probe(pid):
+        calls.append((name, pid))
+        return result
+
+    return _probe
+
+
+def test_liveness_selector_uses_the_handle_probe_on_windows(monkeypatch):
+    calls = []
+    monkeypatch.setattr(lifecycle.os, "name", "nt")
+    monkeypatch.setattr(
+        lifecycle, "_is_pid_alive_windows", _recorder(calls, "nt", True)
+    )
+    monkeypatch.setattr(
+        lifecycle, "_is_pid_alive_posix", _recorder(calls, "posix", True)
+    )
+
+    assert lifecycle.is_pid_alive(4321) is True
+    # Not "both agree" — the signal probe must not be *reached* on Windows,
+    # since reaching it is what fires TerminateProcess.
+    assert calls == [("nt", 4321)]
+
+
+def test_liveness_selector_uses_the_signal_probe_elsewhere(monkeypatch):
+    calls = []
+    monkeypatch.setattr(lifecycle.os, "name", "posix")
+    monkeypatch.setattr(
+        lifecycle, "_is_pid_alive_windows", _recorder(calls, "nt", True)
+    )
+    monkeypatch.setattr(
+        lifecycle, "_is_pid_alive_posix", _recorder(calls, "posix", False)
+    )
+
+    assert lifecycle.is_pid_alive(4321) is False
+    assert calls == [("posix", 4321)]
+
+
+def test_handle_probe_refuses_a_non_positive_pid():
+    """The guard ahead of the ctypes call — it returns before `kernel32` is
+    reached at all, so it needs no stub. A negative PID is a POSIX process
+    *group*; DWORD cannot carry it."""
+
+    assert lifecycle._is_pid_alive_windows(0) is False
+    assert lifecycle._is_pid_alive_windows(-1) is False
+
+
+class _FakeKernel32:
+    """Stands in for `kernel32` so the Windows probe's decision table runs here.
+
+    The stub is the *DLL*, not the platform — `_windows_kernel32` is the seam,
+    and replacing it means no `os.name` patch is needed. `ctypes.wintypes`
+    imports and works on macOS and Linux; the one Windows-only symbol is
+    `ctypes.WinDLL`, and it lives behind this seam. What a stub cannot check is
+    the bindings themselves — whether `argtypes`/`restype` match the real
+    Win32 ABI — so that remains unverified until CI's windows-latest leg runs.
+    What it does check is every decision this change makes.
+    """
+
+    def __init__(self, *, handle, exit_code=None, get_exit_code_succeeds=True):
+        self.handle = handle
+        self._exit_code = exit_code
+        self._get_exit_code_succeeds = get_exit_code_succeeds
+        self.open_calls = []
+        self.closed = []
+
+    def OpenProcess(self, access, inherit_handle, pid):  # noqa: N802 - the Win32 name
+        self.open_calls.append((access, inherit_handle, pid))
+        return self.handle
+
+    def GetExitCodeProcess(self, handle, out_pointer):  # noqa: N802 - the Win32 name
+        if not self._get_exit_code_succeeds:
+            return 0
+        ctypes.cast(out_pointer, wintypes.LPDWORD)[0] = self._exit_code
+        return 1
+
+    def CloseHandle(self, handle):  # noqa: N802 - the Win32 name
+        self.closed.append(handle)
+        return 1
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_alive", "expected_closes"),
+    [
+        # OpenProcess failed: the process is gone, or belongs to another user
+        # and we may not ask. Both are reported as "not alive" by design — see
+        # the helper's docstring. Nothing was opened, so nothing is closed.
+        ({"handle": None}, False, 0),
+        ({"handle": 0}, False, 0),
+        # The handle opened, so the answer comes from the exit code. 259 is
+        # written out rather than read from the module: STILL_ACTIVE is Win32's
+        # number, not ours, and feeding the constant back in would make this
+        # row agree with whatever the module happened to say.
+        ({"handle": 77, "exit_code": 259}, True, 1),
+        ({"handle": 77, "exit_code": 0}, False, 1),
+        ({"handle": 77, "exit_code": 1}, False, 1),
+        # GetExitCodeProcess itself failed. Conservative direction, same as
+        # above — and the handle is still closed, which is what the `finally`
+        # is for.
+        ({"handle": 77, "get_exit_code_succeeds": False}, False, 1),
+    ],
+)
+def test_handle_probe_decision_table(monkeypatch, kwargs, expected_alive, expected_closes):
+    fake = _FakeKernel32(**kwargs)
+    monkeypatch.setattr(lifecycle, "_windows_kernel32", lambda: fake)
+
+    assert lifecycle._is_pid_alive_windows(4321) is expected_alive
+    assert fake.closed == [fake.handle] * expected_closes
+
+
+def test_handle_probe_asks_for_the_query_only_access_right(monkeypatch):
+    """The access right is the whole reason this probe is non-destructive: it
+    is the right to *ask after* a process and carries no right to touch it.
+    Widening it passes the table above, so it is pinned here.
+
+    `0x1000` is written out rather than read from the module for the same
+    reason 259 is above — `PROCESS_QUERY_LIMITED_INFORMATION` is Win32's
+    number. Asserting the module's own constant back at it would accept any
+    value the module chose, including `PROCESS_ALL_ACCESS`.
+    """
+
+    fake = _FakeKernel32(handle=77, exit_code=259)
+    monkeypatch.setattr(lifecycle, "_windows_kernel32", lambda: fake)
+
+    lifecycle._is_pid_alive_windows(4321)
+
+    assert fake.open_calls == [(0x1000, False, 4321)]
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="the signal probe is exactly what must not run on Windows"
+)
+def test_signal_probe_reads_a_live_process_and_a_reaped_one():
+    assert lifecycle._is_pid_alive_posix(os.getpid()) is True
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=30)
+
+    assert lifecycle._is_pid_alive_posix(child.pid) is False
+
+
+def test_liveness_probe_does_not_kill_the_process_it_is_asked_about():
+    """CR-94's regression test — and the test the defect itself forbade.
+
+    Every other caller of the real probe in this suite injects a fake, and
+    `test_webapp.py` says why in as many words: a live PID "would kill pytest's
+    parent on the windows-latest leg". That is the bug describing itself. With
+    the handle probe in place the test is safe to write, and on Windows it is
+    the only thing that actually proves the fix.
+
+    **The evidence is how the child died, not `poll()`** — CR-101. A fork/exec
+    child killed before it is ever scheduled leaves `poll()` returning `None`
+    at every point this test could consult it (the parent's non-blocking
+    `waitpid` keeps returning 0, and the resulting zombie still answers
+    `os.kill(pid, 0)`), so a `poll()`-based version of this test let a
+    destructive probe through on roughly ten runs in twelve, measured here.
+    The exit status has no such race: only `terminate()` may set it.
+
+    Fail it by making either branch destructive. SIGKILL on POSIX gives `-9`
+    where `terminate()` gives `-SIGTERM`; restoring `os.kill(pid, 0)` on
+    Windows gives exit code `0`, because that call is
+    `TerminateProcess(handle, 0)`, where `terminate()` gives `1`.
+    """
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert lifecycle.is_pid_alive(child.pid) is True
+
+        # `wait_until_dead` polls this up to 120 times in a single `stop`, so a
+        # probe that only kills on a later call is no better than one that
+        # kills on the first — and a leaked handle would show up here too.
+        for _ in range(5):
+            assert lifecycle.is_pid_alive(child.pid) is True
+
+        # Positive proof the child outlived the probing, rather than the
+        # assertions above having been answered by a corpse.
+        with pytest.raises(subprocess.TimeoutExpired):
+            child.wait(timeout=0.5)
+    finally:
+        child.terminate()
+        returncode = child.wait(timeout=30)
+
+    # The load-bearing assertion: the child died of `terminate()` and of
+    # nothing else. Anything the probe did to it lands here instead.
+    expected = 1 if os.name == "nt" else -signal.SIGTERM
+    assert returncode == expected, "the child did not die of terminate() — the probe killed it"
+
+    # And it still reports a genuinely dead process as dead, which is what
+    # lets `status` and `stop` clear a stale record.
+    assert lifecycle.is_pid_alive(child.pid) is False
