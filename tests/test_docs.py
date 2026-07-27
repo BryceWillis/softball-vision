@@ -36,8 +36,10 @@ shape it was always meant to have.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -402,12 +404,30 @@ def _inert_suppression(line: str, selected: list[str]) -> str | None:
 # trailing, where ruff honours none of them, and one of those rows recorded
 # `honoured` for a line that suppressed nothing.
 #
-# `flagged` is what the *guard* must say, which is not always what ruff does:
-# the two blanket rows are honoured by ruff and flagged anyway, deliberately,
-# because a directive naming no code cannot name an enabled one and would
-# swallow a real future violation too (CR-107). Those two are marked in place.
-# Every other flagged row is inert in the plain sense — it reads as a
+# `flagged` is what the *guard* must say, which is not always what ruff does.
+# **Six** of the flagged rows are honoured by ruff, in two shapes, and all six
+# are marked in place below (CR-113):
+#
+#   * the **blanket forms** — the bare token trailing code, and the file-level
+#     qualifier carrying no code on its own line, in each of its three
+#     spellings. Ruff honours every one; the guard flags them anyway,
+#     deliberately, because a directive naming no code cannot name an enabled
+#     one and would swallow a real future violation too (CR-107).
+#   * the **multi-code forms** — an enabled code and a disabled one in the same
+#     trailing directive, comma- or space-separated. Ruff honours the enabled
+#     code; the guard flags the line for the one it does not enable.
+#
+# Every *other* flagged row is inert in the plain sense — it reads as a
 # suppression and silences nothing.
+#
+# That paragraph said "two" from CR-107 until CR-113 measured it, and it was
+# wrong in two ways at once: it undercounted, and it missed the multi-code
+# category entirely, so its closing clause was a false statement about ruff for
+# four rows. A reader deciding whether a flagged directive is dead weight would
+# have deleted one that was doing work. It is a claim about the table, so the
+# table now carries it as data — `_HONOURED_BUT_FLAGGED` below, checked against
+# the real linter rather than against a restatement of the same belief. A
+# comment cannot fail; that tuple can.
 #
 # The directive text is dropped into a comment at run time rather than spelled
 # out, for the same reason the pattern is assembled from parts: a literal one in
@@ -415,19 +435,33 @@ def _inert_suppression(line: str, selected: list[str]) -> str | None:
 # at the foot of this file, which reads this module along with every other.
 _TRAILING = "trailing"
 _OWN_LINE = "own-line"
+
+# CR-114. A row may carry a fourth field: a distinctive fragment of the reason
+# the guard must give for it. Most rows do not need one — the verdict is the
+# whole of what they pin — but where two rules could both fire on a row, only
+# the reason says which one did, and the order they are judged in is the
+# substance of CR-111's second edit. A fragment rather than the whole message,
+# so the table pins the branch without becoming a change-detector for wording.
+_CASING_REASON = "not a prefix ruff reads"
+_POSITION_REASON = "must appear on their own line"
 _SPELLINGS = (
     # Line-level forms, in the position where ruff honours them.
     ("noqa: E402", _TRAILING, False),  # honoured, and E4 is selected — the ordinary case
     ("NOQA: E402", _TRAILING, False),  # honoured too: the token is case-insensitive
     ("NOQA: BLE001", _TRAILING, True),  # CR-109's first uncovered form
+    # CR-113's first multi-code row: ruff honours the E402 and leaves 2 of the 3
+    # standing, so this one is *not* inert in the plain sense — it is flagged
+    # for the code it names that the select does not enable.
     ("NoQa: E402, BLE001", _TRAILING, True),  # and CR-107's, in the new casing
     ("noqa: e402", _TRAILING, True),  # refused by ruff as invalid: suppresses nothing
-    ("noqa", _TRAILING, True),  # honoured; flagged anyway — CR-107's blanket rule
+    ("noqa", _TRAILING, True),  # honoured (1 of 3); flagged anyway — CR-107's blanket
     ("noqa: E402 F401", _TRAILING, False),  # the whitespace separator, unchanged
-    ("noqa: E402 BLE001", _TRAILING, True),
+    ("noqa: E402 BLE001", _TRAILING, True),  # honoured too (2 of 3) — the space form
     # File-level forms on their own line, which is the only place ruff reads
     # them. Measured: `ruff: ⟨token⟩` leaves 0 of the 3 diagnostics standing,
     # `ruff: ⟨token⟩: E402` leaves 2, `flake8:` behaves identically to `ruff:`.
+    # The three blanket spellings here are all honoured (0 of 3 — the whole
+    # module) and all flagged, which is three of CR-113's six.
     ("ruff: noqa", _OWN_LINE, True),  # silences the module; flagged as a blanket
     ("ruff:noqa", _OWN_LINE, True),  # which ruff reads with or without the space
     ("ruff: noqa: BLE001", _OWN_LINE, True),  # reaches ruff, and names nothing enabled
@@ -437,14 +471,19 @@ _SPELLINGS = (
     ("flake8: noqa: E402", _OWN_LINE, False),  # the flake8 spelling, pinned honest too
     # ...and the same forms trailing code, where ruff refuses them outright.
     # This is CR-110: each of these reads as a suppression and silences nothing.
-    ("ruff: noqa", _TRAILING, True),
-    ("ruff: noqa: E402", _TRAILING, True),  # the row that used to record `honoured`
-    ("flake8: noqa", _TRAILING, True),  # refused identically, warning and all
+    # All three name the position reason, so the rule that produces it cannot be
+    # deleted and leave them passing on the blanket rule underneath it.
+    ("ruff: noqa", _TRAILING, True, _POSITION_REASON),
+    ("ruff: noqa: E402", _TRAILING, True, _POSITION_REASON),  # used to record `honoured`
+    ("flake8: noqa", _TRAILING, True, _POSITION_REASON),  # refused identically, and warned
     # Ignored by ruff in every position tested — so it is inert wherever it
     # sits, and the guard is stricter than ruff on purpose. Both positions are
     # pinned, since "inert everywhere" is the claim being made.
-    ("RUFF: NOQA", _OWN_LINE, True),
-    ("RUFF: NOQA", _TRAILING, True),
+    # Both name the casing reason (CR-114), because both are also reachable by
+    # a rule that does not look at casing at all — the blanket rule, since they
+    # name no code. That is how the first version of this pair pinned nothing.
+    ("RUFF: NOQA", _OWN_LINE, True, _CASING_REASON),
+    ("RUFF: NOQA", _TRAILING, True, _CASING_REASON),
     # CR-111. The same capitalised qualifier carrying a *code*, which is what
     # makes these rows load-bearing where the two above are not: those reach
     # `inert` through the blanket rule, which never looks at casing, so they
@@ -452,9 +491,16 @@ _SPELLINGS = (
     # these three was green before the casing rule and is red after it. They sit
     # on their own line, the position where ruff honours the lower-cased
     # spelling — so nothing but the capitalisation is doing the work.
-    ("RUFF: NOQA: E402", _OWN_LINE, True),
-    ("Ruff: noqa: E402", _OWN_LINE, True),
-    ("FLAKE8: noqa: E402", _OWN_LINE, True),
+    ("RUFF: NOQA: E402", _OWN_LINE, True, _CASING_REASON),
+    ("Ruff: noqa: E402", _OWN_LINE, True, _CASING_REASON),
+    ("FLAKE8: noqa: E402", _OWN_LINE, True, _CASING_REASON),
+    # CR-114. The same spelling *trailing* code, which is the row the ordering
+    # turns on and the one the table was missing. Both rules match it: the
+    # casing rule, which is right — ruff ignores a capitalised qualifier in
+    # silence — and the position rule, whose message quotes a warning ruff does
+    # not emit for this form. Only the reason can tell them apart, so without
+    # this row and the one above it, judging casing after position stayed green.
+    ("RUFF: NOQA: E402", _TRAILING, True, _CASING_REASON),
     # ...and the control that keeps the rule aimed at the qualifier rather than
     # at capitals generally: the *token* upper-cased behind a lower-cased
     # qualifier is honoured by ruff (measured, 2 of 3), so it must stay green.
@@ -467,10 +513,88 @@ _SPELLINGS = (
     ("a comment that carries no directive at all", _TRAILING, False),  # the control
 )
 
+# The table with its optional fourth field filled in, so every case the test
+# receives has the same shape. `_SPELLINGS` stays the thing a reader edits.
+_ROWS = tuple(row if len(row) == 4 else (*row, None) for row in _SPELLINGS)
 
-@pytest.mark.parametrize(("directive", "position", "inert"), _SPELLINGS)
+# CR-113. The flagged rows ruff honours anyway — the claim the header paragraph
+# above makes, written where it can fail. Six, in the two shapes that paragraph
+# names: three file-level blankets that silence the whole module, one
+# line-level blanket that silences its line, and two multi-code directives
+# whose enabled code ruff honours while the guard flags the line for the code
+# it does not enable. Every flagged row absent from here silences nothing at
+# all, which is the rest of the claim.
+#
+# Measured, not reasoned: the test below rebuilds each row as a real module and
+# puts it to the pinned ruff, so this tuple is checked against the linter. The
+# surviving-diagnostic counts in the comments are from a scratch module that
+# reports three with no directive present.
+_HONOURED_BUT_FLAGGED = (
+    ("noqa", _TRAILING),  # 1 of 3 — the line-level blanket takes its whole line
+    ("NoQa: E402, BLE001", _TRAILING),  # 2 of 3 — the E402 is genuinely suppressed
+    ("noqa: E402 BLE001", _TRAILING),  # 2 of 3 — the same, space-separated
+    ("ruff: noqa", _OWN_LINE),  # 0 of 3 — the file-level blanket takes the module
+    ("ruff:noqa", _OWN_LINE),  # 0 of 3 — read with or without the space
+    ("flake8: noqa", _OWN_LINE),  # 0 of 3 — the other spelling, identically
+)
+
+# The module each row is measured against: an unused import, a statement, and a
+# second import that is therefore both unused and out of place. Three
+# diagnostics with no directive present at all — the same scratch shape every
+# measurement recorded in this section was taken on.
+_SCRATCH_MODULE = ("import os", "X = 1", "import sys")
+_SCRATCH_DIAGNOSTICS = 3
+
+
+def _scratch_source(directive: str, position: str) -> str:
+    """``_SCRATCH_MODULE`` with ``directive`` dropped in at ``position``.
+
+    Assembled at run time for the same reason the table stores directive text
+    rather than spelling it out: a literal here would be read as a real
+    suppression, by ruff and by the repository-wide sweep at the foot of this
+    file, which reads this module along with every other.
+    """
+
+    first, statement, offender = _SCRATCH_MODULE
+    if position == _OWN_LINE:
+        return f"{first}\n{statement}\n# {directive}\n{offender}\n"
+    return f"{first}\n{statement}\n{offender}  # {directive}\n"
+
+
+def _ruff_diagnostics(source: str, module: Path, selected: list[str]) -> int:
+    """How many diagnostics ruff reports for ``source`` under ``selected``.
+
+    Run ``--isolated`` against a scratch file outside the repository, with the
+    select passed explicitly, so the measurement follows the *declared* rule set
+    — widen `select` and these rows are re-measured against the wider one — and
+    nothing about the project's own configuration or cache can colour it.
+    """
+
+    module.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "ruff", "check", "--isolated", "--no-cache",
+            "--output-format", "json", "--select", ",".join(selected), str(module),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    # 0 is a clean file and 1 is diagnostics found; anything else is ruff itself
+    # failing, and reading that as "honoured nothing" would quietly turn this
+    # guard vacuous. Empty output is checked too, because a failure to *start*
+    # ruff also exits 1 — and it is the one shape that would otherwise reach
+    # the JSON parser rather than this message.
+    if result.returncode not in (0, 1) or not result.stdout.strip():
+        pytest.fail(
+            "ruff could not lint the scratch module, so nothing here was measured "
+            f"(exit {result.returncode}; it said: {result.stderr.strip()})"
+        )
+    return len(json.loads(result.stdout))
+
+
+@pytest.mark.parametrize(("directive", "position", "inert", "reason"), _ROWS)
 def test_the_suppression_check_reads_every_spelling_ruff_honours(
-    directive: str, position: str, inert: bool
+    directive: str, position: str, inert: bool, reason: str | None
 ) -> None:
     """CR-109. The guard's property is *any suppression names a rule the select
     enables* — so a spelling the guard cannot read is a hole in it, however
@@ -489,7 +613,14 @@ def test_the_suppression_check_reads_every_spelling_ruff_honours(
     so they were judged by the blanket rule and would have survived the casing
     check being deleted outright. A row that reaches the right verdict for an
     unrelated reason pins nothing, and that is the second time in this table it
-    has happened. CR-112 adds the line-level forms on their own line."""
+    has happened. CR-112 adds the line-level forms on their own line.
+
+    CR-114 is the third time, and the first where the verdict column could not
+    have caught it: where two rules both match a row, *which* of them fired is
+    invisible to `verdict is not None`, so the ordering CR-111's second edit
+    exists to fix was reachable again with this test green. The rows that
+    compete now name a fragment of the reason they must be given, and the
+    ordering fails here when it is wrong instead of merely being right."""
 
     selected = _selected_prefixes(_pyproject_text())
     assert selected, "the select array parsed to nothing — the guard would be vacuous"
@@ -506,6 +637,84 @@ def test_the_suppression_check_reads_every_spelling_ruff_honours(
         )
     else:
         assert verdict is None, verdict
+    if reason is not None:
+        assert inert, "only a flagged row has a reason for the guard to give"
+        # CR-114. The verdict is right either way here; the reason is what says
+        # the right rule reached it. The position message quotes ruff's warning
+        # verbatim, and ruff does not warn about a capitalised qualifier in any
+        # position — so a casing row explained that way attributes a real
+        # quotation to a case ruff has never spoken about.
+        assert reason in verdict, (
+            f"flagged for the wrong defect ({position}): expected a reason naming "
+            f"{reason!r}, got: {verdict}"
+        )
+
+
+def test_the_flagged_rows_ruff_honours_are_exactly_the_six_recorded(
+    tmp_path: Path,
+) -> None:
+    """CR-113. The header above claims a property of the table — which flagged
+    rows ruff honours anyway — and a comment cannot fail. That one was wrong for
+    three reviews: it said two where the answer is six, and it missed the
+    multi-code category outright, so its closing clause ("silences nothing") was
+    a false statement about ruff for four rows. The direction was benign, which
+    is why it did not block; the failure mode is a reader deciding a flagged
+    directive is dead weight, deleting it, and turning a green tree red.
+
+    The fix is not a better sentence. Every flagged row is rebuilt here as a
+    real module and put to the pinned ruff, and the rows that silence something
+    have to be exactly `_HONOURED_BUT_FLAGGED` — so the claim is checked against
+    the linter rather than against a restatement of the same belief. A row added
+    tomorrow that ruff honours fails here until it is recorded, and a row that
+    stops being honoured fails too.
+
+    Skipped when the dev extra is absent, matching the pin check above: without
+    the pinned binary there is nothing to measure against, and the version that
+    would answer is the wrong one.
+    """
+
+    try:
+        version("ruff")
+    except PackageNotFoundError:
+        pytest.skip("the dev extra is not installed")
+
+    selected = _selected_prefixes(_pyproject_text())
+    assert selected, "the select array parsed to nothing — the guard would be vacuous"
+
+    module = tmp_path / "scratch.py"
+    first, statement, offender = _SCRATCH_MODULE
+    baseline = _ruff_diagnostics(f"{first}\n{statement}\n{offender}\n", module, selected)
+    assert baseline == _SCRATCH_DIAGNOSTICS, (
+        f"the scratch module reports {baseline} diagnostics rather than "
+        f"{_SCRATCH_DIAGNOSTICS} under select={selected}, so every row below would "
+        "measure as honouring nothing and this guard would pass on nothing at all"
+    )
+
+    flagged = [
+        (directive, position) for directive, position, inert, _ in _ROWS if inert
+    ]
+    assert len(flagged) > len(_HONOURED_BUT_FLAGGED), (
+        f"only {len(flagged)} flagged rows — the table has stopped being the thing "
+        "this guard reads"
+    )
+    for row in _HONOURED_BUT_FLAGGED:
+        assert row in flagged, (
+            f"{row} is recorded as honoured-but-flagged but is not a flagged row of "
+            "the table — the two have drifted apart"
+        )
+
+    honoured = [
+        row
+        for row in flagged
+        if _ruff_diagnostics(_scratch_source(*row), module, selected) < baseline
+    ]
+    unrecorded = [row for row in honoured if row not in _HONOURED_BUT_FLAGGED]
+    stale = [row for row in _HONOURED_BUT_FLAGGED if row not in honoured]
+    assert not unrecorded and not stale, (
+        "the header's honoured-but-flagged claim no longer matches ruff.\n"
+        f"  honoured by ruff and not recorded: {unrecorded}\n"
+        f"  recorded but silencing nothing now: {stale}"
+    )
 
 
 def test_the_win32_stub_keeps_its_reason_and_carries_no_inert_suppression() -> None:
