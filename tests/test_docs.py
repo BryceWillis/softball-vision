@@ -15,10 +15,17 @@ and linted against a different rule set — the step was red on every leg for
 twelve pushes, which meant a *real* lint regression could no longer be seen.
 Both halves are guarded here as text, not by importing a TOML parser: 3.10 has
 no ``tomllib``, and the surrounding suite already reads these files as text.
+
+CR-106 adds the third half, which is the same drift seen from inside a source
+file: an in-file suppression naming a rule the declared set does not enable
+suppresses nothing, while reading to every future maintainer as though it does.
+That is a documentation defect rather than a lint one — nothing goes red either
+way — so it needs a text check too.
 """
 
 from __future__ import annotations
 
+import re
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -27,6 +34,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 README = _REPO_ROOT / "README.md"
 PYPROJECT = _REPO_ROOT / "pyproject.toml"
+LIFECYCLE_TESTS = _REPO_ROOT / "tests" / "test_webapp_lifecycle.py"
 
 
 def _readme_text() -> str:
@@ -142,3 +150,60 @@ def test_the_pin_names_the_ruff_that_is_actually_installed() -> None:
     assert f'"ruff=={installed}"' in _dev_extra(_pyproject_text()), (
         f"pyproject pins a different ruff than the {installed} installed here"
     )
+
+
+# --- Suppressions must name a rule the declared set enables (CR-106) ---------
+
+# The `_FakeKernel32` methods that mirror Win32 names, and so break the
+# pep8-naming convention deliberately.
+_WIN32_STUB_METHODS = ("OpenProcess", "GetExitCodeProcess", "CloseHandle")
+
+# Assembled from parts rather than written out: ruff scans comments for its own
+# directive, so spelling it here would turn this line into one.
+_SUPPRESSION = re.compile(r"#\s*" + "noqa" + r"\s*:\s*(?P<code>[A-Z]+[0-9]+)")
+
+
+def _selected_prefixes(text: str) -> list[str]:
+    """The rule prefixes named in ``[tool.ruff.lint] select``."""
+    return re.findall(r'"([A-Z]+[0-9]*)"', _select_array(text))
+
+
+def test_the_win32_stub_keeps_its_reason_and_carries_no_inert_suppression() -> None:
+    """CR-106. The three stub methods are camel-cased on purpose — they stand in
+    for real Win32 entry points — so they break a naming rule knowingly, and the
+    reason has to stay on the line. What must *not* stay is a suppression naming
+    a rule the declared select never enables: it silences nothing and misreads as
+    load-bearing, which is exactly the mistake CR-106 records. A prefix in some
+    release's default select does not mean every rule under it is enabled (0.16.0
+    lists `N`, enables only N999), and selecting a rule on the command line
+    proves only that it fires when selected.
+
+    Written against the select array rather than against a hardcoded rule name,
+    so widening the rule set re-permits the directive on its own instead of
+    leaving a stale assertion behind.
+    """
+
+    selected = _selected_prefixes(_pyproject_text())
+    assert selected, "the select array parsed to nothing — the guard would be vacuous"
+
+    lines = [
+        line
+        for line in LIFECYCLE_TESTS.read_text(encoding="utf-8").splitlines()
+        if any(line.lstrip().startswith(f"def {name}(") for name in _WIN32_STUB_METHODS)
+    ]
+    assert len(lines) == len(_WIN32_STUB_METHODS), (
+        f"expected one definition per Win32 stub method, found {lines}"
+    )
+
+    for line in lines:
+        assert "the Win32 name" in line, (
+            f"the reason for the deliberate casing was dropped from: {line.strip()}"
+        )
+        found = _SUPPRESSION.search(line)
+        if found is None:
+            continue
+        code = found.group("code")
+        assert any(code.startswith(prefix) for prefix in selected), (
+            f"{code} is not enabled by select={selected}, so this suppression is "
+            f"inert and only reads as though it matters: {line.strip()}"
+        )

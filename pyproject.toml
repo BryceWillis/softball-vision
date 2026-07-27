@@ -70,5 +70,17 @@ target-version = "py310"
 # a change of its own, with its own review and its own diff — not something a
 # version bump should do silently. Selecting E4 explicitly also keeps the four
 # E402 suppressions in the test suite load-bearing rather than inert.
+#
+# CR-106, before you widen this list: a prefix appearing in some release's
+# default `select` does not mean every rule under it is enabled. 0.16.0's
+# default lists `N` and enables exactly one rule from that family (N999) — a
+# fact that was got backwards once, which left three in-file suppressions
+# reading as load-bearing while they suppressed nothing. Selecting a rule on
+# the command line proves only that it fires when selected; the check that
+# settles what is actually enabled is
+#     ruff check --isolated --show-settings <file>
+# and grepping its `linter.rules.enabled` block for the rule itself. Under the
+# pinned 0.15.20 that block is diff-identical with and without this file's
+# select, which is what makes the declaration a repair and not a narrowing.
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]

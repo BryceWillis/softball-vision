@@ -469,17 +469,17 @@ class _FakeKernel32:
         self.open_calls = []
         self.closed = []
 
-    def OpenProcess(self, access, inherit_handle, pid):  # noqa: N802 - the Win32 name
+    def OpenProcess(self, access, inherit_handle, pid):  # the Win32 name
         self.open_calls.append((access, inherit_handle, pid))
         return self.handle
 
-    def GetExitCodeProcess(self, handle, out_pointer):  # noqa: N802 - the Win32 name
+    def GetExitCodeProcess(self, handle, out_pointer):  # the Win32 name
         if not self._get_exit_code_succeeds:
             return 0
         ctypes.cast(out_pointer, wintypes.LPDWORD)[0] = self._exit_code
         return 1
 
-    def CloseHandle(self, handle):  # noqa: N802 - the Win32 name
+    def CloseHandle(self, handle):  # the Win32 name
         self.closed.append(handle)
         return 1
 
