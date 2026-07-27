@@ -15,9 +15,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# CR-103: `ruff` is pinned exactly, not floored. It is a dev tool whose entire
+# value is that the implementer's local run and CI's agree — an unpinned floor
+# meant CI resolved 0.16.0 while this machine had 0.15.20, the Lint step was red
+# on all six legs for twelve consecutive pushes, and every handoff's "ruff clean"
+# meant only "clean against whatever version I happened to have". Bumping it is
+# now a deliberate edit with a review, which is the point. (This does not
+# contradict the recorded decision declining a `yt-dlp` cap: that is a runtime
+# dependency whose newest release is what keeps downloads working, and its
+# in-repo record is `KNOWN_GOOD_YTDLP_VERSION` in `youtube.py` instead.)
 dev = [
     "pytest>=8.0",
-    "ruff>=0.4",
+    "ruff==0.15.20",
     "httpx>=0.27",
 ]
 web = [
@@ -52,3 +61,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+# CR-103: the rule set is named here rather than inherited from whatever the
+# resolved `ruff` happens to default to. These four are exactly the historical
+# default (`E4`, `E7`, `E9`, `F`) that the codebase has always been clean
+# against; 0.16.0 widened its default to ~35 prefixes, which is what produced
+# 968 errors on CI against code no one had changed. Adopting a wider rule set is
+# a change of its own, with its own review and its own diff — not something a
+# version bump should do silently. Selecting E4 explicitly also keeps the four
+# E402 suppressions in the test suite load-bearing rather than inert.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

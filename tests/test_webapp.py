@@ -1608,9 +1608,13 @@ def test_cli_restart_declines_to_relaunch_the_desktop_app(monkeypatch, tmp_path,
     calls = []
     _patch_restart_environment(monkeypatch, tmp_path, calls)
     _write_record(tmp_path, pid=777, origin=lifecycle_module.ORIGIN_APP)
-    # CR-93: never a real PID. `is_pid_alive` probes with `os.kill(pid, 0)`,
-    # which on Windows terminates the target instead of asking after it, so a
-    # live PID here would kill pytest's parent on the windows-latest leg.
+    # Never a real PID — the liveness answer is injected. CR-93's reason was
+    # that `is_pid_alive` probed with `os.kill(pid, 0)`, which on Windows
+    # terminated the target instead of asking after it; CR-94 replaced that
+    # with a handle probe, so that reason is now historical (CR-105). The rule
+    # stands on its own footing: what this test asserts is a decision about a
+    # liveness *answer*, not about how the answer was obtained, and injecting
+    # it keeps that deterministic on every OS without spawning anything.
     # `_cmd_restart` consults the name bound into cli's own namespace, as the
     # stale-record sibling below already does with `lambda pid: False`.
     asked = []

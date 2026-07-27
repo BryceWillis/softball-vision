@@ -8,6 +8,7 @@ itself, not merely the display of the result.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -571,8 +572,20 @@ def test_installability_happy_path():
         # No enclosing .app.
         (True, "/usr/local/bin/python3", True),
         # App-Translocated: a read-only randomized mount, no in-place swap.
-        (True, "/private/var/folders/AppTranslocation/A/SidelineHD Extractor.app/"
-               "Contents/MacOS/x", True),
+        # CR-104: macOS-only, and skipped rather than generalized — the check is
+        # `"/AppTranslocation/" in str(app_path)`, so on Windows `Path` renders
+        # the separators as `\` and the substring cannot match. App
+        # Translocation is a Gatekeeper behaviour that exists nowhere else, so
+        # there is no Windows equivalent to assert instead.
+        pytest.param(
+            True,
+            "/private/var/folders/AppTranslocation/A/SidelineHD Extractor.app/"
+            "Contents/MacOS/x",
+            True,
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="App Translocation is a macOS path shape"
+            ),
+        ),
         # Parent directory not writable.
         (True, "/Applications/SidelineHD Extractor.app/Contents/MacOS/x", False),
     ],
@@ -762,6 +775,9 @@ def test_swap_script_reopen_flag_is_honored_both_ways():
     assert "/usr/bin/open" not in _swap_script(reopen=False)
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="shells out to /bin/sh, which Windows has not got"
+)
 def test_swap_script_is_valid_shell_for_both_reopen_values():
     # CR-99: with reopen=False the reopen line was the only statement in the
     # success `then`, leaving it empty — a POSIX `sh` syntax error that aborted

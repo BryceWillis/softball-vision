@@ -632,9 +632,12 @@ def test_register_server_record_declines_a_live_foreign_record(
     refuses to erase its record and serves unregistered instead (item 70a).
 
     Kept as a direct unit test now that 70d's present path means main() no
-    longer reaches this branch on the ordinary CLI-server collision. CR-93: the
-    PID is a foreign literal with the liveness check injected — never a real
-    one, which on Windows `os.kill` would `TerminateProcess`."""
+    longer reaches this branch on the ordinary CLI-server collision. The PID is
+    a foreign literal with the liveness check injected — never a real one.
+    CR-93's reason for that was that `os.kill` would `TerminateProcess` on
+    Windows; CR-94 replaced the probe with a handle query, so that reason is
+    historical (CR-105). Injection stays because the branch under test is a
+    decision about a liveness *answer*, not about how it was obtained."""
 
     from sidelinehd_extractor.webapp import lifecycle
 
@@ -1678,6 +1681,11 @@ def test_menu_entry_accepts_a_full_update_entry():
 # --- The swap-script planner (item 69c / D5) ---------------------------------
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="the swap script is a macOS `/bin/sh` helper moving an `.app`; the "
+    "POSIX literals it is asserted against render with `\\` on Windows",
+)
 def test_update_swap_script_renders_only_when_staged():
     script = desktop.update_swap_script(
         staged_app=Path("/data/updates/extracted/SidelineHD Extractor.app"),

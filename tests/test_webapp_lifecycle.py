@@ -8,6 +8,7 @@ import subprocess
 import sys
 from ctypes import wintypes
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -257,8 +258,14 @@ def test_status_omits_the_serving_clause_for_an_old_format_record(tmp_path):
 def test_display_path_abbreviates_the_home_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle.Path, "home", classmethod(lambda cls: tmp_path))
 
-    assert lifecycle.display_path(str(tmp_path / "Library" / "Games")) == (
-        "~/Library/Games"
+    # CR-104: the expectation is built with `Path` rather than hardcoded as
+    # "~/Library/Games", because the abbreviated form follows the platform's
+    # separator. The old literal was a macOS assumption that failed on the
+    # windows-latest leg — and it failed against a genuinely wrong answer, the
+    # mixed "~/Library\Games", not merely against a differently-spelled right
+    # one. On POSIX this is the same string it always was.
+    assert lifecycle.display_path(str(tmp_path / "Library" / "Games")) == str(
+        Path("~") / "Library" / "Games"
     )
     assert lifecycle.display_path(str(tmp_path)) == "~"
     assert lifecycle.display_path("/elsewhere/games") == "/elsewhere/games"

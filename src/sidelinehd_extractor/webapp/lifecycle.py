@@ -465,7 +465,16 @@ def humanized_age(started_at: str, *, now: Optional[datetime] = None) -> str:
 
 
 def display_path(raw: str) -> str:
-    """A path a person can read: ``~`` for home, the raw string otherwise."""
+    """A path a person can read: ``~`` for home, the raw string otherwise.
+
+    The separator follows the platform (CR-104). The abbreviated form used to
+    join with a hardcoded ``/`` while the rest of the path kept the platform's,
+    so on Windows it emitted the mixed ``~/Library\\Games`` — readable as
+    neither shape. The fall-through below returns ``raw`` untouched, which is
+    always platform-native, so the ``~`` branch matching it is what makes the
+    function self-consistent. On POSIX ``os.sep`` is ``/`` and the output is
+    byte-identical to before.
+    """
 
     if not raw:
         return ""
@@ -474,7 +483,7 @@ def display_path(raw: str) -> str:
     if path == home:
         return "~"
     try:
-        return f"~/{path.relative_to(home)}"
+        return f"~{os.sep}{path.relative_to(home)}"
     except ValueError:
         return raw
 
