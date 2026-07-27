@@ -429,6 +429,20 @@ def _inert_suppression(line: str, selected: list[str]) -> str | None:
 # the real linter rather than against a restatement of the same belief. A
 # comment cannot fail; that tuple can.
 #
+# CR-115. The honest rows make a claim about ruff too, and it is the *other*
+# half of the same sentence: an `inert=False` row says the guard must wave the
+# line through, and its comment ("honoured, and E4 is selected", "the whitespace
+# separator, unchanged") says ruff really does silence something there. Only the
+# first half was checked, so the honest column was the last unmeasured prose in
+# this table — and its failure is the guard's own core failure mode. Should ruff
+# stop honouring a form recorded honest, the line would suppress nothing, the
+# guard would call it fine, and the repository-wide sweep at the foot of this
+# file would let a genuinely inert directive live, with nothing going red. Every
+# row is now measured, and one record says which side each belongs on:
+# `_HONOURED_BUT_FLAGGED` for the flagged rows ruff honours anyway, and
+# `_HONOURS_NOTHING` for the honest rows ruff honours *not* — of which there is
+# exactly one, the control, which carries no directive to honour.
+#
 # The directive text is dropped into a comment at run time rather than spelled
 # out, for the same reason the pattern is assembled from parts: a literal one in
 # this module would be read as real — by ruff, and by the repository-wide sweep
@@ -536,6 +550,25 @@ _HONOURED_BUT_FLAGGED = (
     ("ruff: noqa", _OWN_LINE),  # 0 of 3 — the file-level blanket takes the module
     ("ruff:noqa", _OWN_LINE),  # 0 of 3 — read with or without the space
     ("flake8: noqa", _OWN_LINE),  # 0 of 3 — the other spelling, identically
+)
+
+# CR-115. The mirror record: the honest rows ruff honours *nothing* for. Every
+# other honest row must silence something, or its `inert=False` is a live hole
+# in the guard — so this tuple is the only sanctioned way for an honest row to
+# measure as suppressing nothing, and putting a row here is a deliberate act
+# with a reason attached rather than a quiet exemption inside the test.
+#
+# One row qualifies, and it is the control: it is not a directive at all, so
+# there is nothing for ruff to honour or refuse. It exists to keep the guard
+# aimed at suppressions rather than at comments, and "every honest row is
+# honoured" is simply not a true statement to make about it. A second row
+# belongs here only if it is likewise not a suppression — an honest row that
+# *is* one and silences nothing is CR-115's defect, not an exemption.
+#
+# The rows here are measured like every other, and asserted *not* honoured, so
+# the exemption cannot itself go stale unnoticed.
+_HONOURS_NOTHING = (
+    ("a comment that carries no directive at all", _TRAILING),  # not a directive
 )
 
 # The module each row is measured against: an unused import, a statement, and a
@@ -650,7 +683,7 @@ def test_the_suppression_check_reads_every_spelling_ruff_honours(
         )
 
 
-def test_the_flagged_rows_ruff_honours_are_exactly_the_six_recorded(
+def test_every_row_ruff_honours_is_exactly_what_the_table_records(
     tmp_path: Path,
 ) -> None:
     """CR-113. The header above claims a property of the table — which flagged
@@ -661,12 +694,24 @@ def test_the_flagged_rows_ruff_honours_are_exactly_the_six_recorded(
     is why it did not block; the failure mode is a reader deciding a flagged
     directive is dead weight, deleting it, and turning a green tree red.
 
-    The fix is not a better sentence. Every flagged row is rebuilt here as a
-    real module and put to the pinned ruff, and the rows that silence something
-    have to be exactly `_HONOURED_BUT_FLAGGED` — so the claim is checked against
-    the linter rather than against a restatement of the same belief. A row added
-    tomorrow that ruff honours fails here until it is recorded, and a row that
-    stops being honoured fails too.
+    The fix is not a better sentence. Every row is rebuilt here as a real module
+    and put to the pinned ruff, and the rows that silence something have to be
+    exactly the two records — so the claim is checked against the linter rather
+    than against a restatement of the same belief. A row added tomorrow that
+    ruff honours fails here until it is recorded, and a row that stops being
+    honoured fails too.
+
+    CR-115 extends that from the flagged column to the whole table, which is
+    where it should have been: an honest row's comment is a claim about ruff of
+    exactly the same kind, and it was the last one in this module with nothing
+    behind it. It is also the more dangerous half. A flagged row that stops
+    being honoured is a stale note in a header; an *honest* row that stops being
+    honoured is a directive suppressing nothing that the guard is required to
+    wave through — the sweep's own failure mode, arriving silently. The one row
+    that cannot join the assertion is the control, which carries no directive
+    for ruff to honour, and it is excluded by the `_HONOURS_NOTHING` record
+    rather than by a special case here, so the reason is written down and the
+    exemption is measured too.
 
     Skipped when the dev extra is absent, matching the pin check above: without
     the pinned binary there is nothing to measure against, and the version that
@@ -693,27 +738,49 @@ def test_the_flagged_rows_ruff_honours_are_exactly_the_six_recorded(
     flagged = [
         (directive, position) for directive, position, inert, _ in _ROWS if inert
     ]
+    honest = [
+        (directive, position) for directive, position, inert, _ in _ROWS if not inert
+    ]
+    # Both records name a minority of their own column. If either stops doing
+    # so, the table has been rewritten around this guard rather than read by it,
+    # and the set comparison below would be comparing a record against itself.
     assert len(flagged) > len(_HONOURED_BUT_FLAGGED), (
         f"only {len(flagged)} flagged rows — the table has stopped being the thing "
         "this guard reads"
+    )
+    assert len(honest) > len(_HONOURS_NOTHING), (
+        f"only {len(honest)} honest rows — every one of them is exempt, so this "
+        "guard would measure nothing about the honest column at all"
     )
     for row in _HONOURED_BUT_FLAGGED:
         assert row in flagged, (
             f"{row} is recorded as honoured-but-flagged but is not a flagged row of "
             "the table — the two have drifted apart"
         )
+    for row in _HONOURS_NOTHING:
+        assert row in honest, (
+            f"{row} is recorded as honouring nothing but is not an honest row of the "
+            "table — a flagged row does not need the exemption, and cannot have it"
+        )
 
-    honoured = [
+    # CR-115. Every row, not only the flagged ones. An honest row is expected to
+    # be honoured — that is what makes it honest — unless it is one of the rows
+    # recorded as carrying nothing for ruff to honour.
+    expected = set(_HONOURED_BUT_FLAGGED) | (set(honest) - set(_HONOURS_NOTHING))
+    honoured = {
         row
-        for row in flagged
+        for row in flagged + honest
         if _ruff_diagnostics(_scratch_source(*row), module, selected) < baseline
-    ]
-    unrecorded = [row for row in honoured if row not in _HONOURED_BUT_FLAGGED]
-    stale = [row for row in _HONOURED_BUT_FLAGGED if row not in honoured]
-    assert not unrecorded and not stale, (
-        "the header's honoured-but-flagged claim no longer matches ruff.\n"
-        f"  honoured by ruff and not recorded: {unrecorded}\n"
-        f"  recorded but silencing nothing now: {stale}"
+    }
+    unrecorded = sorted(honoured - expected)
+    silent = sorted(expected - honoured)
+    assert not unrecorded and not silent, (
+        "the table's record of what ruff honours no longer matches ruff.\n"
+        f"  honoured by ruff, and not recorded as honoured: {unrecorded}\n"
+        f"  recorded as honoured, and silencing nothing now: {silent}\n"
+        "An honest row in the second list is the live defect: the guard is "
+        "required to call that line honest and ruff silences nothing for it, so "
+        "an inert directive of that spelling would survive the sweep."
     )
 
 
