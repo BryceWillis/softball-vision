@@ -162,7 +162,7 @@ def run_game(
             template_probe_result = probe_template(
                 video_path, candidate_overlay_templates(), ocr
             )
-        except Exception as exc:  # noqa: BLE001 - probe must never kill a run
+        except Exception as exc:  # probe must never kill a run
             _stage(stage_progress, f"warning template-probe-failed: {exc}")
         else:
             template = template_probe_result.template
@@ -435,7 +435,7 @@ def finalize_run_exports(
         _stage(stage_progress, "review-report")
         try:
             write_review_report(run_dir, roster=roster)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # a failed report must not fail the run
             _stage(stage_progress, f"warning review-report-failed: {exc}")
 
     return chapters_path, at_bats_path

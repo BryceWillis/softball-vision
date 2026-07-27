@@ -208,7 +208,7 @@ class JobRunner:
                 result=summarize_result(raw),
                 finished_at=_utcnow(),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # any pipeline failure becomes the job's error status
             self._store.update(
                 job_id,
                 status="error",

@@ -139,7 +139,7 @@ def score_template(
             crop = crop_frame(frame, template.regions[field_name])
             try:
                 result = ocr(crop, field_name)
-            except Exception:  # noqa: BLE001 - a failed read scores as invalid
+            except Exception:  # a failed read scores as invalid
                 continue
             text = result.normalized_text or result.text
             if field_read_is_valid(field_name, text):

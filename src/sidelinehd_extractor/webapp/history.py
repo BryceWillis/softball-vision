@@ -59,7 +59,7 @@ def rehydrate_jobs_from_runs(store: JobStore, runs_dir: Path = Path("runs")) -> 
             continue
         try:
             run = _recover_run(run_dir)
-        except Exception:  # noqa: BLE001 - a bad run dir must not break startup
+        except Exception:  # a bad run dir must not break startup
             continue
         if run is not None:
             recovered.append(run)
@@ -118,7 +118,7 @@ def _recover_run(run_dir: Path) -> Optional[RecoveredRun]:
     # as broken as a missing one; a 0-event run has nothing to show.
     try:
         events = load_events(events_path)
-    except Exception:  # noqa: BLE001 - any unloadable shape means "legacy"
+    except Exception:  # any unloadable shape means "legacy"
         return None
     if not events:
         return None

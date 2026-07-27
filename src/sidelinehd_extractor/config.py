@@ -157,7 +157,7 @@ def load_configured_roster(cwd: Optional[Path] = None) -> Optional[Roster]:
         if not roster_path:
             return None
         return load_roster(roster_path, team_name=config.team_name)
-    except Exception:  # noqa: BLE001 - callers must work without a config
+    except Exception:  # callers must work without a config
         return None
 
 

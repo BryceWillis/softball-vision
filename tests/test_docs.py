@@ -20,7 +20,9 @@ CR-106 adds the third half, which is the same drift seen from inside a source
 file: an in-file suppression naming a rule the declared set does not enable
 suppresses nothing, while reading to every future maintainer as though it does.
 That is a documentation defect rather than a lint one — nothing goes red either
-way — so it needs a text check too.
+way — so it needs a text check too. CR-107 made that check read every code in a
+directive rather than only the first, and CR-108 pointed it at the other place
+the defect had been sitting all along: seven broad-except sites in ``src/``.
 """
 
 from __future__ import annotations
@@ -160,12 +162,56 @@ _WIN32_STUB_METHODS = ("OpenProcess", "GetExitCodeProcess", "CloseHandle")
 
 # Assembled from parts rather than written out: ruff scans comments for its own
 # directive, so spelling it here would turn this line into one.
-_SUPPRESSION = re.compile(r"#\s*" + "noqa" + r"\s*:\s*(?P<code>[A-Z]+[0-9]+)")
+#
+# CR-107: the code list is matched whole and split afterwards, rather than
+# captured one code at a time. Capturing a single code inspected only the
+# *first* of a multi-code directive, so an inert code hiding behind an enabled
+# one — `E402, N802` — passed the guard while violating the property it claims.
+# The list is optional so the bare, code-less form matches too and can be
+# failed explicitly instead of falling through as "nothing to check".
+#
+# The separator is comma *or* whitespace because ruff honours both: measured
+# against 0.15.20, `E402 F401` spelled with a space suppresses each of them
+# exactly as the comma form does. A comma-only pattern would therefore reopen
+# the same hole in a different spelling.
+_SEPARATOR = r"[\s,]+"
+_SUPPRESSION = re.compile(
+    r"#\s*" + "noqa" + r"\b(?:\s*:\s*(?P<codes>[A-Z]+[0-9]+(?:" + _SEPARATOR + r"[A-Z]+[0-9]+)*))?"
+)
 
 
 def _selected_prefixes(text: str) -> list[str]:
     """The rule prefixes named in ``[tool.ruff.lint] select``."""
     return re.findall(r'"([A-Z]+[0-9]*)"', _select_array(text))
+
+
+def _inert_suppression(line: str, selected: list[str]) -> str | None:
+    """Why ``line``'s suppression is inert, or ``None`` if it carries none.
+
+    The shared form of the check (CR-108), so the rule lives in one place and
+    every file pointed at it is judged the same way.
+
+    A directive naming *no* code fails rather than being waved through: it can
+    never name an enabled rule, and unlike a misnamed code it would also
+    silence a real future violation — strictly the worse of the two.
+    """
+
+    found = _SUPPRESSION.search(line)
+    if found is None:
+        return None
+    codes = found.group("codes")
+    if codes is None:
+        return (
+            "a blanket suppression names no rule, so it cannot name an enabled "
+            f"one — and it would hide a real violation as well: {line.strip()}"
+        )
+    for code in re.split(_SEPARATOR, codes.strip()):
+        if not any(code.startswith(prefix) for prefix in selected):
+            return (
+                f"{code} is not enabled by select={selected}, so this suppression is "
+                f"inert and only reads as though it matters: {line.strip()}"
+            )
+    return None
 
 
 def test_the_win32_stub_keeps_its_reason_and_carries_no_inert_suppression() -> None:
@@ -180,7 +226,9 @@ def test_the_win32_stub_keeps_its_reason_and_carries_no_inert_suppression() -> N
 
     Written against the select array rather than against a hardcoded rule name,
     so widening the rule set re-permits the directive on its own instead of
-    leaving a stale assertion behind.
+    leaving a stale assertion behind. The check itself is shared with the
+    broad-except sites below, and since CR-107 it reads every code in a
+    directive rather than only the first.
     """
 
     selected = _selected_prefixes(_pyproject_text())
@@ -199,11 +247,55 @@ def test_the_win32_stub_keeps_its_reason_and_carries_no_inert_suppression() -> N
         assert "the Win32 name" in line, (
             f"the reason for the deliberate casing was dropped from: {line.strip()}"
         )
-        found = _SUPPRESSION.search(line)
-        if found is None:
-            continue
-        code = found.group("code")
-        assert any(code.startswith(prefix) for prefix in selected), (
-            f"{code} is not enabled by select={selected}, so this suppression is "
-            f"inert and only reads as though it matters: {line.strip()}"
-        )
+        inert = _inert_suppression(line, selected)
+        assert inert is None, inert
+
+
+# The files whose broad `except Exception` sites carried a suppression that was
+# inert for its whole life (CR-108) — it named a rule the declared select has
+# never enabled, so it silenced nothing while reading as load-bearing.
+#
+# Scoped to these files rather than to the whole repository deliberately. The
+# repository-wide form of the invariant — every suppression names a rule the
+# select enables — is the right guard only once nothing violates it; writing it
+# earlier would mean encoding named exceptions, which writes the debt into the
+# guard itself.
+_BROAD_EXCEPT_FILES = (
+    "src/sidelinehd_extractor/config.py",
+    "src/sidelinehd_extractor/template_probe.py",
+    "src/sidelinehd_extractor/webapp/history.py",
+    "src/sidelinehd_extractor/webapp/jobs.py",
+    "src/sidelinehd_extractor/workflow.py",
+)
+_BROAD_EXCEPT_SITES = 7
+
+
+def test_the_broad_except_sites_keep_their_reason_and_carry_no_inert_suppression() -> None:
+    """CR-108, and the same property as the Win32 guard above pointed at the
+    other place it was violated. Each of these `except Exception` clauses is
+    deliberately broad — a config read, a probe, a history scan and a job worker
+    that must all survive anything the layer beneath them raises — so what
+    matters on the line is the *reason*, not a suppression that suppresses
+    nothing. The count is asserted so the guard cannot quietly stop finding its
+    subjects and pass on an empty sweep."""
+
+    selected = _selected_prefixes(_pyproject_text())
+    assert selected, "the select array parsed to nothing — the guard would be vacuous"
+
+    sites = 0
+    for relative in _BROAD_EXCEPT_FILES:
+        text = (_REPO_ROOT / relative).read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), 1):
+            where = f"{relative}:{number}"
+            inert = _inert_suppression(line, selected)
+            assert inert is None, f"{where}: {inert}"
+            if not line.lstrip().startswith("except Exception"):
+                continue
+            sites += 1
+            assert line.partition("#")[2].strip(), (
+                f"{where}: the reason this except is deliberately broad was dropped, "
+                f"leaving nothing on the line to explain it: {line.strip()}"
+            )
+    assert sites == _BROAD_EXCEPT_SITES, (
+        f"expected {_BROAD_EXCEPT_SITES} broad-except sites across these files, found {sites}"
+    )
