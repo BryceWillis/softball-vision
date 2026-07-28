@@ -1993,6 +1993,97 @@ class EventDetectionTests(unittest.TestCase):
             "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Bottom 1 (3-1)",
         )
 
+    def test_detect_events_export_collapses_a_scorebug_gone_final_onto_its_half_inning(self):
+        # CR-117, the scorebug_gone route: the half flips on the very state
+        # that carries the last complete score read, so the inferred final and
+        # the half-inning chapter land on the same timestamp. YouTube renders
+        # no chapters at all for a list like that.
+        states = [
+            OverlayState(t, inning=1, half=HalfInning.TOP, away_score=2, home_score=1)
+            for t in range(600, 700, 5)
+        ]
+        states.append(
+            OverlayState(900, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1)
+        )
+        states += [
+            OverlayState(t, inning=1, half=HalfInning.BOTTOM) for t in range(905, 960, 5)
+        ]
+
+        events = detect_events(states)
+
+        # Both facts stay in events.jsonl — the half-inning did start and the
+        # game did end. Only the export collapses them.
+        half = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        final = next(event for event in events if event.event_type == EventType.GAME_FINAL)
+        self.assertEqual(half[-1].timestamp_seconds, 900)
+        self.assertEqual(final.timestamp_seconds, 900)
+        self.assertEqual(final.metadata["source"], "scorebug_gone")
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Final (3-1)",
+        )
+
+    def test_detect_events_export_collapses_a_banner_final_onto_its_half_inning(self):
+        # CR-117, the banner route. This one pre-dates CR-116: the FINAL banner
+        # run begins on the state where the half flips.
+        states = [
+            OverlayState(t, inning=1, half=HalfInning.TOP, away_score=2, home_score=1)
+            for t in range(600, 700, 5)
+        ]
+        states += [
+            OverlayState(
+                t,
+                inning=1,
+                half=HalfInning.BOTTOM,
+                away_score=3,
+                home_score=1,
+                metadata={"game_status": "final"},
+            )
+            for t in (900, 905, 910, 915)
+        ]
+
+        events = detect_events(states)
+
+        final = next(event for event in events if event.event_type == EventType.GAME_FINAL)
+        self.assertEqual(final.timestamp_seconds, 900)
+        self.assertEqual(final.metadata["source"], "game_status")
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Final (3-1)",
+        )
+
+    def test_detect_events_export_keeps_a_final_five_seconds_after_its_half_inning(self):
+        # The control for the two above: the banner starts one sample after the
+        # half flips, which is the 5.0s gap the local corpus already exports.
+        # Only exact collisions collapse.
+        states = [
+            OverlayState(t, inning=1, half=HalfInning.TOP, away_score=2, home_score=1)
+            for t in range(600, 700, 5)
+        ]
+        states.append(
+            OverlayState(900, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1)
+        )
+        states += [
+            OverlayState(
+                t,
+                inning=1,
+                half=HalfInning.BOTTOM,
+                away_score=3,
+                home_score=1,
+                metadata={"game_status": "final"},
+            )
+            for t in (905, 910, 915)
+        ]
+
+        events = detect_events(states)
+
+        final = next(event for event in events if event.event_type == EventType.GAME_FINAL)
+        self.assertEqual(final.timestamp_seconds, 905)
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Bottom 1 (3-1)\n15:05 Final (3-1)",
+        )
+
     def test_detect_events_keeps_empty_last_score_when_no_pair_was_ever_read(self):
         # The last resort survives the CR-116 fallback: with no complete pair
         # anywhere in the states there is nothing to recover, and the chapter

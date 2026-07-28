@@ -14,6 +14,21 @@ PROJECT_CREDIT = (
     f"(MIT License): {PROJECT_URL}"
 )
 
+_CHAPTER_EVENT_TYPES = (
+    EventType.INNING_START,
+    EventType.HALF_INNING_START,
+    EventType.GAME_FINAL,
+)
+
+# Which chapter survives when two render at the same timestamp: the most
+# terminal one. A half-inning a final lands on is a zero-length chapter and
+# carries nothing the Final line does not already carry, score included.
+_CHAPTER_TERMINALITY = {
+    EventType.INNING_START: 0,
+    EventType.HALF_INNING_START: 1,
+    EventType.GAME_FINAL: 2,
+}
+
 
 def format_timestamp(seconds: float) -> str:
     """Format seconds as a YouTube timestamp.
@@ -44,23 +59,50 @@ def export_youtube_chapters(
     """Render inning and half-inning events as YouTube description chapters."""
 
     lines = []
-    first_chapter_seconds = None
-    for event in events:
-        if event.event_type in {
-            EventType.INNING_START,
-            EventType.HALF_INNING_START,
-            EventType.GAME_FINAL,
-        }:
-            if first_chapter_seconds is None:
-                first_chapter_seconds = event.timestamp_seconds
-            lines.append(
-                f"{format_timestamp(event.timestamp_seconds)} "
-                f"{_chapter_label(event, include_score=include_score)}"
-            )
+    first_chapter_stamp = None
+    for stamp, event in _collapse_chapter_collisions(events):
+        if first_chapter_stamp is None:
+            first_chapter_stamp = stamp
+        lines.append(f"{stamp} {_chapter_label(event, include_score=include_score)}")
 
-    if include_intro and lines and first_chapter_seconds and first_chapter_seconds > 0:
-        lines.insert(0, f"0:00 {intro_label}")
+    intro_stamp = format_timestamp(0)
+    if include_intro and lines and first_chapter_stamp != intro_stamp:
+        lines.insert(0, f"{intro_stamp} {intro_label}")
     return _render_lines_with_credit(lines, include_credit=include_credit)
+
+
+def _collapse_chapter_collisions(events: Iterable[Event]) -> list[tuple[str, Event]]:
+    """Return one chapter event per rendered timestamp, most terminal wins.
+
+    YouTube requires chapter timestamps to be strictly increasing, and renders
+    **no chapters at all** — silently — when two lines share one. So a
+    ``GAME_FINAL`` landing on the same state as the last ``HALF_INNING_START``
+    costs the whole description rather than one line (CR-117).
+
+    Collisions are judged on the *rendered* stamp, not the raw float, because
+    ``format_timestamp`` truncates: two events 0.7s apart render identically
+    while comparing as different numbers.
+
+    The fix belongs here rather than in ``detect_events`` — ``events.jsonl``
+    should keep recording both facts, since the half-inning really did start
+    and the game really did end, and the constraint being violated is
+    YouTube's rather than the state machine's.
+    """
+
+    chosen: dict[str, Event] = {}
+    for event in events:
+        if event.event_type not in _CHAPTER_EVENT_TYPES:
+            continue
+        stamp = format_timestamp(event.timestamp_seconds)
+        previous = chosen.get(stamp)
+        if previous is None or (
+            _CHAPTER_TERMINALITY[event.event_type]
+            >= _CHAPTER_TERMINALITY[previous.event_type]
+        ):
+            # Ties on type keep the later event for the same reason the rule
+            # exists: the earlier one's chapter has no duration to offer.
+            chosen[stamp] = event
+    return list(chosen.items())
 
 
 def export_at_bat_comment(

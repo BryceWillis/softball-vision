@@ -155,6 +155,106 @@ class FormatTimestampTests(unittest.TestCase):
 
         self.assertEqual(text, "0:00 Pregame\n1:00:00 Final")
 
+    def test_export_youtube_chapters_collapses_a_final_onto_the_half_inning_it_lands_on(self):
+        # CR-117: YouTube renders no chapters at all when two share a
+        # timestamp, so the collision costs the whole list rather than a line.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 600, "Top 1"),
+                Event(
+                    EventType.HALF_INNING_START,
+                    900,
+                    "Bottom 1",
+                    metadata={"away_score": 3, "home_score": 1},
+                ),
+                Event(
+                    EventType.GAME_FINAL,
+                    900,
+                    "Final",
+                    metadata={"away_score": 3, "home_score": 1},
+                ),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n10:00 Top 1\n15:00 Final (3-1)")
+
+    def test_export_youtube_chapters_collapses_chapters_that_only_collide_once_formatted(self):
+        # format_timestamp truncates, so these differ as floats and collide as
+        # strings. The comparison has to be on the rendered stamp.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 900.2, "Bottom 1"),
+                Event(EventType.GAME_FINAL, 900.9, "Final"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n15:00 Final")
+
+    def test_export_youtube_chapters_prefers_the_terminal_chapter_whatever_the_order(self):
+        # Terminality decides, not position: the final wins even when it is
+        # the one that arrives first.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.GAME_FINAL, 900, "Final"),
+                Event(EventType.HALF_INNING_START, 900, "Bottom 1"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n15:00 Final")
+
+    def test_export_youtube_chapters_collapses_a_half_inning_onto_an_inning_start(self):
+        text = export_youtube_chapters(
+            [
+                Event(EventType.INNING_START, 900, "Inning 2"),
+                Event(EventType.HALF_INNING_START, 900, "Top 2"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n15:00 Top 2")
+
+    def test_export_youtube_chapters_keeps_the_later_of_two_equally_terminal_chapters(self):
+        # Same rule, same reason: the first chapter has no duration to offer.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 900.1, "Top 2"),
+                Event(EventType.HALF_INNING_START, 900.8, "Bottom 2"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n15:00 Bottom 2")
+
+    def test_export_youtube_chapters_keeps_chapters_five_seconds_apart(self):
+        # The control. One local run exports a legitimate 5.0s gap; only exact
+        # collisions collapse, and YouTube's 10s rule is left alone.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 900, "Bottom 1"),
+                Event(EventType.GAME_FINAL, 905, "Final"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Pregame\n15:00 Bottom 1\n15:05 Final")
+
+    def test_export_youtube_chapters_skips_the_intro_when_the_first_chapter_renders_at_zero(self):
+        # `--start 0.4` puts the first chapter under a second, where it renders
+        # as 0:00 and the intro would collide with it. The guard was a float
+        # comparison; the collision is on the rendered stamp.
+        text = export_youtube_chapters(
+            [
+                Event(EventType.HALF_INNING_START, 0.4, "Top 1"),
+                Event(EventType.HALF_INNING_START, 600, "Bottom 1"),
+            ],
+            include_credit=False,
+        )
+
+        self.assertEqual(text, "0:00 Top 1\n10:00 Bottom 1")
+
     def test_export_at_bat_comment_groups_by_inning(self):
         text = export_at_bat_comment([
             Event(EventType.HALF_INNING_START, 590, "Top 1", inning=1),
