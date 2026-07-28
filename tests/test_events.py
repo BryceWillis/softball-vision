@@ -432,6 +432,131 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(event.metadata["away_score"], 11)
         self.assertEqual(event.metadata["home_score"], 0)
 
+    def test_detect_game_final_infers_final_when_scorebug_vanishes_for_good(self):
+        # CR-116 live-fire: some broadcasts never show a FINAL banner — the
+        # operator ends the game and the scorebug simply disappears. Shape and
+        # values from the reproduction run: complete at 2580 reading 3-1, then
+        # absent on every sample to the end of the video, one unbroken run.
+        event = _detect_game_final(
+            [
+                OverlayState(2570, inning=3, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(2575, inning=3, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(2580, inning=3, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(2585, inning=3, half=HalfInning.BOTTOM),
+                OverlayState(2590),
+                OverlayState(2595),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.event_type, EventType.GAME_FINAL)
+        self.assertEqual(event.timestamp_seconds, 2580)
+        self.assertEqual(event.metadata["away_score"], 3)
+        self.assertEqual(event.metadata["home_score"], 1)
+
+    def test_detect_game_final_marks_inferred_final_as_scorebug_gone(self):
+        # The chapter label is deliberately identical to the banner-derived
+        # one; the source field is where an inferred final is distinguishable
+        # from one the broadcast asserted.
+        event = _detect_game_final(
+            [
+                OverlayState(2580, away_score=3, home_score=1),
+                OverlayState(2585),
+                OverlayState(2590),
+                OverlayState(2595),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.label, "Final")
+        self.assertEqual(event.metadata["source"], "scorebug_gone")
+
+    def test_detect_game_final_prefers_the_banner_over_the_vanished_scorebug(self):
+        # A banner run is a fact the broadcast asserted, so it wins outright —
+        # including its own timestamp — even though the scorebug is also gone
+        # for good after it.
+        event = _detect_game_final(
+            [
+                OverlayState(880, away_score=4, home_score=3),
+                OverlayState(900, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(905, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(910, away_score=4, home_score=3, metadata={"game_status": "final"}),
+                OverlayState(915),
+                OverlayState(920),
+                OverlayState(925),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.timestamp_seconds, 900)
+        self.assertEqual(event.metadata["source"], "game_status")
+
+    def test_detect_game_final_ignores_a_mid_game_scorebug_dropout(self):
+        # The discriminator: the Due Up card, replays and camera cuts blank the
+        # scorebug mid-game all the time. Only "gone and never came back" ends
+        # a broadcast, so a dropout the scorebug recovers from must not
+        # manufacture a final — here a 5-sample gap that then reads again.
+        event = _detect_game_final(
+            [
+                OverlayState(600, away_score=1, home_score=0),
+                OverlayState(605),
+                OverlayState(610),
+                OverlayState(615),
+                OverlayState(620),
+                OverlayState(625),
+                OverlayState(630, away_score=2, home_score=0),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNone(event)
+
+    def test_detect_game_final_requires_a_long_enough_absence(self):
+        # A video truncated a couple of samples after its last read must not
+        # manufacture a final; the banner run's floor is the precedent.
+        event = _detect_game_final(
+            [
+                OverlayState(600, away_score=1, home_score=0),
+                OverlayState(605),
+                OverlayState(610),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNone(event)
+
+    def test_detect_game_final_requires_an_absence_at_all(self):
+        # The scorebug is readable on the very last sample, so nothing has
+        # vanished and there is no end-of-broadcast signal to infer from.
+        event = _detect_game_final(
+            [
+                OverlayState(600, away_score=1, home_score=0),
+                OverlayState(605, away_score=1, home_score=0),
+                OverlayState(610, away_score=1, home_score=0),
+            ],
+            min_observations=0,
+        )
+
+        self.assertIsNone(event)
+
+    def test_detect_game_final_returns_none_when_no_score_was_ever_read(self):
+        # Nothing to recover: without a complete pair anywhere there is no
+        # score to put on a Final chapter, so none is invented.
+        event = _detect_game_final(
+            [
+                OverlayState(600, away_score=3, home_score=None),
+                OverlayState(605),
+                OverlayState(610),
+                OverlayState(615),
+            ],
+            min_observations=3,
+        )
+
+        self.assertIsNone(event)
+
     def test_detect_game_final_requires_stable_run(self):
         event = _detect_game_final(
             [
@@ -1760,8 +1885,12 @@ class EventDetectionTests(unittest.TestCase):
         chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
         self.assertEqual(chapters[0].metadata["away_score"], 3)
         self.assertEqual(chapters[0].metadata["home_score"], 0)
-        self.assertIsNone(chapters[1].metadata["away_score"])
-        self.assertIsNone(chapters[1].metadata["home_score"])
+        # The last half-inning has no next chapter to read, and these states
+        # carry no FINAL banner — so it falls back to the last complete
+        # scorebug read rather than exporting a scoreless chapter (CR-116).
+        # This assertion read None before that fix.
+        self.assertEqual(chapters[1].metadata["away_score"], 3)
+        self.assertEqual(chapters[1].metadata["home_score"], 0)
 
     def test_detect_events_stores_final_score_on_last_half_inning(self):
         events = detect_events(
@@ -1806,6 +1935,86 @@ class EventDetectionTests(unittest.TestCase):
         self.assertEqual(
             export_youtube_chapters(events, include_credit=False),
             "0:00 Pregame\n10:00 Top 1 (4-3)\n15:00 Final (4-3)",
+        )
+
+    def test_detect_events_recovers_last_score_and_final_without_a_banner(self):
+        # CR-116, end to end: the owner-reported export was the last chapter
+        # with no score and no Final line at all. Both come back from the last
+        # complete scorebug read.
+        states = [
+            OverlayState(600, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+            OverlayState(605, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+            OverlayState(610, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+            OverlayState(615, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+            OverlayState(900, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+            OverlayState(905, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+            OverlayState(910, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+            OverlayState(915, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+            OverlayState(920),
+            OverlayState(925),
+            OverlayState(930),
+        ]
+
+        events = detect_events(states)
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertEqual(chapters[-1].metadata["away_score"], 3)
+        self.assertEqual(chapters[-1].metadata["home_score"], 1)
+        final = next(event for event in events if event.event_type == EventType.GAME_FINAL)
+        self.assertEqual(final.timestamp_seconds, 915)
+        self.assertEqual(final.metadata["source"], "scorebug_gone")
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Bottom 1 (3-1)\n15:15 Final (3-1)",
+        )
+
+    def test_detect_events_scores_last_half_without_inventing_a_final(self):
+        # The video ends *on* a readable scorebug, so the last half-inning takes
+        # its score but nothing has vanished — no Final chapter is manufactured.
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+                OverlayState(605, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+                OverlayState(610, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+                OverlayState(615, inning=1, half=HalfInning.TOP, away_score=2, home_score=1),
+                OverlayState(900, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(905, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(910, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+                OverlayState(915, inning=1, half=HalfInning.BOTTOM, away_score=3, home_score=1),
+            ]
+        )
+
+        self.assertEqual(
+            [event for event in events if event.event_type == EventType.GAME_FINAL],
+            [],
+        )
+        self.assertEqual(
+            export_youtube_chapters(events, include_credit=False),
+            "0:00 Pregame\n10:00 Top 1 (3-1)\n15:00 Bottom 1 (3-1)",
+        )
+
+    def test_detect_events_keeps_empty_last_score_when_no_pair_was_ever_read(self):
+        # The last resort survives the CR-116 fallback: with no complete pair
+        # anywhere in the states there is nothing to recover, and the chapter
+        # goes out scoreless rather than with a half-read score.
+        events = detect_events(
+            [
+                OverlayState(600, inning=1, half=HalfInning.TOP, home_score=1),
+                OverlayState(605, inning=1, half=HalfInning.TOP, home_score=1),
+                OverlayState(610, inning=1, half=HalfInning.TOP, home_score=1),
+                OverlayState(615, inning=1, half=HalfInning.TOP, home_score=1),
+                OverlayState(920),
+                OverlayState(925),
+                OverlayState(930),
+            ]
+        )
+
+        chapters = [event for event in events if event.event_type == EventType.HALF_INNING_START]
+        self.assertIsNone(chapters[-1].metadata["away_score"])
+        self.assertIsNone(chapters[-1].metadata["home_score"])
+        self.assertEqual(
+            [event for event in events if event.event_type == EventType.GAME_FINAL],
+            [],
         )
 
     def test_detect_events_stores_empty_score_when_next_half_has_no_pair(self):

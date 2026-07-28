@@ -385,7 +385,7 @@ def detect_events(
     final_event = _detect_game_final(ordered_states, config.min_game_final_observations)
     if final_event is not None:
         events.append(final_event)
-    _apply_half_inning_end_scores(events)
+    _apply_half_inning_end_scores(events, ordered_states)
 
     return sorted(events, key=lambda item: item.timestamp_seconds)
 
@@ -801,6 +801,11 @@ def _last_complete_score_before(
     ``None`` during the banner run (CR-59). Scores are cumulative and the game
     has just ended, so the last complete pair before the banner *is* the final
     score — the nearest one wins, scanning backward.
+
+    The same reasoning covers a broadcast that ends with no banner at all and
+    the scorebug simply gone, which is CR-116's case: both the last
+    half-inning's end score and the no-banner ``GAME_FINAL`` read the score
+    back out of the states this way.
     """
 
     for state in reversed(states[:index]):
@@ -809,7 +814,9 @@ def _last_complete_score_before(
     return None, None
 
 
-def _apply_half_inning_end_scores(events: List[Event]) -> None:
+def _apply_half_inning_end_scores(
+    events: List[Event], states: List[OverlayState]
+) -> None:
     """Store each half-inning chapter's ending score in its export metadata."""
 
     half_events = sorted(
@@ -837,7 +844,11 @@ def _apply_half_inning_end_scores(events: List[Event]) -> None:
         elif final_event is not None:
             away_score, home_score = _event_score(final_event)
         else:
-            away_score, home_score = None, None
+            # No next half-inning and no final marker: the broadcast ended
+            # without a FINAL banner, so the last half-inning has nowhere to
+            # look. The score is not missing from the video — it is the last
+            # complete scorebug read (CR-116).
+            away_score, home_score = _last_complete_score_before(states, len(states))
         if away_score is None or home_score is None:
             event.metadata["away_score"] = None
             event.metadata["home_score"] = None
@@ -859,7 +870,12 @@ def _detect_game_final(
     states: List[OverlayState],
     min_observations: int = 3,
 ) -> Optional[Event]:
-    """Return a final marker after a stable run of FINAL scorebug reads."""
+    """Return a final marker after a stable run of FINAL scorebug reads.
+
+    The banner is what the broadcast asserted, so it wins outright. Failing
+    one, ``_detect_game_final_without_banner`` infers the final from the
+    scorebug vanishing for good (CR-116).
+    """
 
     run_start_index = None
     run_length = 0
@@ -890,7 +906,60 @@ def _detect_game_final(
         else:
             run_start_index = None
             run_length = 0
-    return None
+    return _detect_game_final_without_banner(states, min_observations)
+
+
+def _detect_game_final_without_banner(
+    states: List[OverlayState],
+    min_observations: int,
+) -> Optional[Event]:
+    """Return a final marker when the scorebug vanishes and never comes back.
+
+    Some SidelineHD broadcasts never show a FINAL banner: the operator ends the
+    game and the scorebug simply disappears, so ``_detect_game_final`` finds no
+    banner run and the Final chapter goes missing along with the last
+    half-inning's score (CR-116).
+
+    The gate is that the absence runs **to the end of the states**, not that it
+    is long. Mid-game dropouts are ordinary — the Due Up card, replays, camera
+    cuts — and only "gone and never came back" tells the end of a broadcast
+    from a gap. Scanning backward for the last complete read gives both halves
+    of that at once: everything after it is, by construction, one unbroken run
+    with no complete pair in it.
+
+    ``min_observations`` then keeps a video truncated a few seconds after its
+    last read from manufacturing a final, mirroring the banner run's own floor.
+
+    The event is deliberately labelled exactly like the banner-derived one, so
+    the exported chapter reads the same; ``metadata["source"]`` carries
+    ``"scorebug_gone"`` rather than ``"game_status"``, which is where the
+    difference between an asserted final and an inferred one is recorded.
+    """
+
+    last_complete_index = None
+    for index in reversed(range(len(states))):
+        state = states[index]
+        if state.away_score is not None and state.home_score is not None:
+            last_complete_index = index
+            break
+    if last_complete_index is None:
+        return None
+
+    absent = states[last_complete_index + 1 :]
+    if not absent or len(absent) < min_observations:
+        return None
+
+    last_complete = states[last_complete_index]
+    return Event(
+        event_type=EventType.GAME_FINAL,
+        timestamp_seconds=last_complete.timestamp_seconds,
+        label="Final",
+        metadata={
+            "source": "scorebug_gone",
+            "away_score": last_complete.away_score,
+            "home_score": last_complete.home_score,
+        },
+    )
 
 
 def _is_valid_half_inning_progression(
